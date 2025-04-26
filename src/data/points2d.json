@@ -1,0 +1,59 @@
+{
+    "points": [
+        {
+            "id": "p0",
+            "x": 3.0525097846984863,
+            "y": 2.4107680320739746,
+            "z": -2.763768196105957,
+            "phenotype": "oligomycin",
+            "color": {
+                "r": 0.0,
+                "g": 0.5019607843137255,
+                "b": 0.0
+            },
+            "color_phenotypic": {
+                "r": 0.30252365930599323,
+                "b": 0.5100946372239749
+            },
+            "treatment": {
+                "drug": "oligomycin",
+                "dose": "10 nM",
+                "time": "1h"
+            },
+            "images": [
+                "https://mitospace2d.s3.us-east-2.amazonaws.com/000000.jpeg"
+            ],
+            "metadata": {
+                "cellLine": "Cal27"
+            }
+        },
+        {
+            "id": "p1",
+            "x": 0.3803611099720001,
+            "y": 2.4050323963165283,
+            "z": 0.4548490643501282,
+            "phenotype": "h2o2",
+            "color": {
+                "r": 0.4392156862745098,
+                "g": 0.5019607843137255,
+                "b": 0.5647058823529412
+            },
+            "color_phenotypic": {
+                "r": 0.388958990536277,
+                "g": 0.2441640378548895,
+                "b": 0.6558359621451105
+            },
+            "treatment": {
+                "drug": "h2o2",
+                "dose": "10 nM",
+                "time": "1h"
+            },
+            "images": [
+                "https://mitospace2d.s3.us-east-2.amazonaws.com/000001.jpeg"
+            ],
+            "metadata": {
+                "cellLine": "Cal27"
+            }
+        }
+    ]
+}

@@ -1,0 +1,63 @@
+{
+  "points": [
+    {
+      "id": "p1",
+      "x": -5.2,
+      "y": 2.1,
+      "z": 0.5,
+      "t": 0,
+      "phenotype": "Normal",
+      "color": {
+        "r": 0.2,
+        "g": 0.5,
+        "b": 0.8
+      },
+      "color_phenotypic": {
+        "r": 0.23,
+        "g": 0.51,
+        "b": 0.96
+      },
+      "treatment": {
+        "drug": "Oligomycin",
+        "dose": "10 nM",
+        "time": "1h"
+      },
+      "videos": [
+        "https://mitospace-samples.s3.amazonaws.com/4d/sample1-t0.mp4",
+        "https://mitospace-samples.s3.amazonaws.com/4d/sample1-t1.mp4"
+      ],
+      "metadata": {
+        "cellLine": "Cal27"
+      }
+    },
+    {
+      "id": "p2",
+      "x": 3.1,
+      "y": -1.8,
+      "z": 2.0,
+      "t": 1,
+      "phenotype": "Fragmented",
+      "color": {
+        "r": 0.8,
+        "g": 0.2,
+        "b": 0.2
+      },
+      "color_phenotypic": {
+        "r": 0.94,
+        "g": 0.27,
+        "b": 0.27
+      },
+      "treatment": {
+        "drug": "CCCP",
+        "dose": "100 nM",
+        "time": "3h"
+      },
+      "videos": [
+        "https://mitospace-samples.s3.amazonaws.com/4d/sample2-t0.mp4"
+      ],
+      "metadata": {
+        "cellLine": "U2OS"
+      }
+    }
+  ]
+}
