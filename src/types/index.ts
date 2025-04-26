@@ -12,7 +12,7 @@ export interface Sample {
   };
   color_phenotypic: {
     r: number;
-    g: number;
+    g?: number;
     b: number;
   };
   treatment: {
@@ -31,9 +31,19 @@ export interface VisualizerProps {
 }
 
 export type ColoringMode = 'treatment' | 'phenotype';
+export type RenderingMode = 'points' | 'instanced';
+export type LabelVisibility = 'none' | 'selected' | 'all';
 
 export interface VisualizerOptions {
   coloringMode: ColoringMode;
   pointSize: number;
   backgroundColor: string;
+  renderingMode?: RenderingMode;
+  labelVisibility?: LabelVisibility;
+  showAxes?: boolean;
+  showGrid?: boolean;
+  highlightSelected?: boolean;
+  performance?: PerformanceMode;
 }
+
+export type PerformanceMode = 'quality' | 'balanced' | 'performance';

@@ -13,17 +13,19 @@ function Explorer() {
   const [activeTab, setActiveTab] = useState<'2d' | '4d'>('2d');
 
   return (
-    <div className="flex flex-col min-h-screen bg-gray-50">
+    <div className="flex flex-col min-h-screen bg-white">
       <Header />
       
-      <main className="flex-grow flex">
-        <div className="flex-grow">
-          <div className="container mx-auto px-4 py-6">
-            <TabNavigation activeTab={activeTab} setActiveTab={setActiveTab} />
-            
-            <div className="mt-6">
-              {activeTab === '2d' ? <Visualizer2D /> : <Visualizer4D />}
+      <main className="flex-grow flex h-full">
+        <div className="flex-grow flex flex-col">
+          <div className="bg-white border-b border-gray-200">
+            <div className="container mx-auto px-4 py-2">
+              <TabNavigation activeTab={activeTab} setActiveTab={setActiveTab} />
             </div>
+          </div>
+          
+          <div className="flex-grow h-full">
+            {activeTab === '2d' ? <Visualizer2D /> : <Visualizer4D />}
           </div>
         </div>
         

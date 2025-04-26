@@ -4,7 +4,6 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { useSample } from '../context/SampleContext';
 import VisualizerControls from './VisualizerControls';
 import { groupSamplesByTime } from '../data/sampleData';
-import { getPhenotypeColor } from '../utils/colorUtils';
 
 const Visualizer4D: React.FC = () => {
   const { 
@@ -50,9 +49,13 @@ const Visualizer4D: React.FC = () => {
     camera.lookAt(new THREE.Vector3(0, 0, 0));
     cameraRef.current = camera;
     
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const renderer = new THREE.WebGLRenderer({ 
+      antialias: true,
+      alpha: true,
+      powerPreference: 'high-performance'
+    });
     renderer.setSize(containerRef.current.clientWidth, containerRef.current.clientHeight);
-    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Limit pixel ratio for performance
     containerRef.current.appendChild(renderer.domElement);
     rendererRef.current = renderer;
     
@@ -60,8 +63,16 @@ const Visualizer4D: React.FC = () => {
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
     controls.screenSpacePanning = true;
-    controls.minDistance = 10;
-    controls.maxDistance = 100;
+    controls.minDistance = 1; // Reduced for closer zoom
+    controls.maxDistance = 300; // Increased for further zooming out
+    controls.rotateSpeed = 0.8;
+    controls.zoomSpeed = 1.5; // Increased zoom speed
+    controls.panSpeed = 0.8;
+    controls.mouseButtons = {
+      LEFT: THREE.MOUSE.ROTATE,
+      MIDDLE: THREE.MOUSE.DOLLY,
+      RIGHT: THREE.MOUSE.PAN
+    };
     controlsRef.current = controls;
     
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
@@ -136,7 +147,11 @@ const Visualizer4D: React.FC = () => {
         
         let color;
         if (visualizerOptions.coloringMode === 'phenotype') {
-          color = getPhenotypeColor(sample.phenotype);
+          color = new THREE.Color(
+            sample.color_phenotypic.r,
+            sample.color_phenotypic.g,
+            sample.color_phenotypic.b
+          );
         } else {
           color = new THREE.Color(
             sample.color.r,
@@ -209,21 +224,99 @@ const Visualizer4D: React.FC = () => {
   };
   
   return (
-    <div className="bg-white rounded-lg shadow-md overflow-hidden">
-      <div className="p-4 bg-gray-50 border-b">
+    <div className="bg-white shadow-md overflow-hidden h-full border border-gray-200">
+      <div className="p-3 bg-white border-b border-gray-200">
         <VisualizerControls type="4d" />
       </div>
       
       <div 
         ref={containerRef} 
-        className="w-full h-[500px] relative"
+        className="w-full h-[calc(100vh-120px)] relative"
         onClick={handleClick}
       >
         {isLoading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-gray-100 bg-opacity-75">
+          <div className="absolute inset-0 flex items-center justify-center bg-gray-800 bg-opacity-75">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
           </div>
         )}
+        
+        {/* Zoom Controls */}
+        <div className="absolute top-4 right-4 flex flex-col space-y-2">
+          <button 
+            onClick={() => {
+              if (cameraRef.current) {
+                cameraRef.current.position.set(25, 25, 25);
+                cameraRef.current.lookAt(new THREE.Vector3(0, 0, 0));
+                if (controlsRef.current) {
+                  controlsRef.current.target.set(0, 0, 0);
+                  controlsRef.current.update();
+                }
+              }
+            }}
+            className="bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-lg shadow-lg w-10 h-10 flex items-center justify-center transition-all"
+            title="Reset Camera"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+              <polyline points="9 22 9 12 15 12 15 22"></polyline>
+            </svg>
+          </button>
+          
+          {/* Zoom In Button */}
+          <button 
+            onClick={() => {
+              if (cameraRef.current) {
+                const currentPos = cameraRef.current.position.clone();
+                const direction = new THREE.Vector3(0, 0, 0).sub(currentPos).normalize();
+                cameraRef.current.position.addScaledVector(direction, 5);
+                if (controlsRef.current) controlsRef.current.update();
+              }
+            }}
+            className="bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-lg shadow-lg w-10 h-10 flex items-center justify-center transition-all"
+            title="Zoom In"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+              <line x1="11" y1="8" x2="11" y2="14"></line>
+              <line x1="8" y1="11" x2="14" y2="11"></line>
+            </svg>
+          </button>
+          
+          {/* Zoom Out Button */}
+          <button 
+            onClick={() => {
+              if (cameraRef.current) {
+                const currentPos = cameraRef.current.position.clone();
+                const direction = new THREE.Vector3(0, 0, 0).sub(currentPos).normalize();
+                cameraRef.current.position.addScaledVector(direction, -5);
+                if (controlsRef.current) controlsRef.current.update();
+              }
+            }}
+            className="bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-lg shadow-lg w-10 h-10 flex items-center justify-center transition-all"
+            title="Zoom Out"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+              <line x1="8" y1="11" x2="14" y2="11"></line>
+            </svg>
+          </button>
+          
+          <button 
+            onClick={() => {
+              // Toggle help or additional info in future
+            }}
+            className="bg-gray-600 hover:bg-gray-700 text-white p-2 rounded-lg shadow-lg w-10 h-10 flex items-center justify-center transition-all"
+            title="Navigation Help"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+          </button>
+        </div>
       </div>
     </div>
   );
