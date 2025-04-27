@@ -10,22 +10,15 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type }) => {
   const { visualizerOptions, setPointSize, setColoringMode } = useSample();
   
   return (
-    <div className="flex flex-col space-y-2 bg-blue-50 p-4 rounded-lg">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center">
-          {/* Title removed to avoid duplication with tab navigation */}
-        </div>
-        
-        <div className="text-xs text-gray-600">
-          {type === '2d' ? 
-            'Click on any point to view detailed sample information.' : 
-            'Click on any point to view detailed sample information.'
-          }
+    <div className="flex flex-col space-y-3 bg-blue-50 p-4 rounded-lg">
+      <div className="flex items-center">
+        <div className="text-xs text-gray-600 font-medium">
+          Click on any point to view detailed sample information.
         </div>
       </div>
       
       <div className="flex items-center space-x-3">
-        <label htmlFor="pointSize" className="text-sm font-medium text-gray-700">
+        <label htmlFor="pointSize" className="text-sm font-medium text-gray-700 w-24">
           Point Size:
         </label>
         <input
@@ -41,19 +34,40 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type }) => {
         <span className="text-xs text-gray-600">{visualizerOptions.pointSize.toFixed(1)}</span>
       </div>
 
-      <div className="flex items-center space-x-3">
-        <label htmlFor="coloringMode" className="text-sm font-medium text-gray-700">
+      <div className="flex items-center">
+        <label className="text-sm font-medium text-gray-700 w-24">
           Color Mode:
         </label>
-        <select
-          id="coloringMode"
-          value={visualizerOptions.coloringMode}
-          onChange={(e) => setColoringMode(e.target.value as 'treatment' | 'phenotype')}
-          className="w-48 h-8 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-        >
-          <option value="treatment">Drug Coloring</option>
-          <option value="phenotype">Phenotypic Category Coloring</option>
-        </select>
+        <div className="flex space-x-4">
+          <div className="flex items-center">
+            <input
+              id="treatment"
+              type="radio"
+              name="coloringMode"
+              value="treatment"
+              checked={visualizerOptions.coloringMode === 'treatment'}
+              onChange={() => setColoringMode('treatment')}
+              className="w-4 h-4 text-blue-600 focus:ring-blue-500"
+            />
+            <label htmlFor="treatment" className="ml-2 text-sm text-gray-700">
+              Drug Coloring
+            </label>
+          </div>
+          <div className="flex items-center">
+            <input
+              id="phenotype"
+              type="radio"
+              name="coloringMode"
+              value="phenotype"
+              checked={visualizerOptions.coloringMode === 'phenotype'}
+              onChange={() => setColoringMode('phenotype')}
+              className="w-4 h-4 text-blue-600 focus:ring-blue-500"
+            />
+            <label htmlFor="phenotype" className="ml-2 text-sm text-gray-700">
+              Phenotypic Category
+            </label>
+          </div>
+        </div>
       </div>
     </div>
   );
