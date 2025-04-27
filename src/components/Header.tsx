@@ -18,19 +18,21 @@ const Header: React.FC = () => {
             <ul className="flex space-x-6">
               <li>
                 <Link
-                  to="/"
-                  className="text-gray-300 hover:text-blue-400 transition duration-300 text-sm font-medium"
-                >
-                  Dashboard
-                </Link>
-              </li>
-              <li>
-                <Link
                   to="/about"
                   className="text-gray-300 hover:text-blue-400 transition duration-300 text-sm font-medium"
                 >
                   About
                 </Link>
+              </li>
+              <li>
+                <a
+                  href="https://www.schoeneberglab.org/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-gray-300 hover:text-blue-400 transition duration-300 text-sm font-medium"
+                >
+                  Contact
+                </a>
               </li>
             </ul>
           </nav>

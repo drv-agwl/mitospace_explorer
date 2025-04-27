@@ -19,6 +19,8 @@ export interface Sample {
     drug: string;
     dose: string;
     time: string;
+    smiles?: string;
+    pubchem?: string;
   };
   images?: string[]; // Optional for 2D samples
   videos?: string[]; // Optional for 4D samples

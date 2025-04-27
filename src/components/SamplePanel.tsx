@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { X, Microscope, Pill, Clock, Dna, Video, Play, Pause, Info, MapPin, Cpu } from 'lucide-react';
+import { X, Microscope, Pill, Clock, Dna, Video, Play, Pause, Info, MapPin, Cpu, Database } from 'lucide-react';
 import { useSample } from '../context/SampleContext';
 
 const SamplePanel: React.FC = () => {
@@ -160,6 +160,34 @@ const SamplePanel: React.FC = () => {
                     <div className="text-gray-800">{selectedSample.treatment.dose}</div>
                   </div>
                 </div>
+                <div className="grid grid-cols-2 divide-x divide-gray-200 border-t border-gray-200">
+                  <div className="p-4 flex flex-col items-center text-center">
+                    <div className="text-purple-600 mb-1">
+                      <Dna size={24} />
+                    </div>
+                    <h5 className="text-xs uppercase font-semibold text-gray-500 mb-1">SMILES</h5>
+                    <div className="text-gray-800 text-sm break-all">{selectedSample.treatment.smiles || 'N/A'}</div>
+                  </div>
+                  
+                  <div className="p-4 flex flex-col items-center text-center">
+                    <div className="text-blue-600 mb-1">
+                      <Database size={24} />
+                    </div>
+                    <h5 className="text-xs uppercase font-semibold text-gray-500 mb-1">PubChem</h5>
+                    {selectedSample.treatment.pubchem ? (
+                      <a 
+                        href={`https://pubchem.ncbi.nlm.nih.gov/compound/${selectedSample.treatment.pubchem}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-600 hover:text-blue-800 text-sm"
+                      >
+                        View in PubChem
+                      </a>
+                    ) : (
+                      <div className="text-gray-800 text-sm">N/A</div>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -251,7 +279,7 @@ const SamplePanel: React.FC = () => {
                     {/* Videos */}
                     {selectedSample.videos.map((video, index) => (
                       <div key={index} className="bg-white rounded-lg overflow-hidden shadow-sm border border-gray-200">
-                        <div className="relative pb-[56.25%] h-0">
+                        <div className="relative pb-[75%] h-0">
                           {videoLoadError[index] ? (
                             <div className="absolute inset-0 flex items-center justify-center bg-gray-50 rounded-md">
                               <div className="text-center text-gray-500">
@@ -265,7 +293,7 @@ const SamplePanel: React.FC = () => {
                                 ref={el => videoRefs.current[index] = el}
                                 key={video}
                                 preload="metadata"
-                                className="absolute top-0 left-0 w-full h-full rounded-md"
+                                className="absolute top-0 left-0 w-full h-full rounded-md object-cover"
                                 onError={() => handleVideoError(index)}
                                 onLoadStart={() => handleVideoLoadStart(index)}
                                 onCanPlay={() => handleVideoCanPlay(index)}
