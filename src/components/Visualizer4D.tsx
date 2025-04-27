@@ -25,10 +25,11 @@ const Visualizer4D: React.FC = () => {
   const [currentTimepoint] = useState<number>(0);
   const [isLoading, setIsLoading] = useState(true);
   const [timeGroupedSamples, setTimeGroupedSamples] = useState<Record<number, THREE.Points>>({});
-  const [zoomLevel, setZoomLevel] = useState(1);
+  const [zoomLevel, setZoomLevel] = useState(34);
   const [showHelp, setShowHelp] = useState(false);
   const [fps, setFps] = useState(0);
   const [pointCount, setPointCount] = useState(0);
+  const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
   
   const currentSamples = filteredSamples4D.filter(
     sample => sample.t === currentTimepoint
@@ -51,9 +52,9 @@ const Visualizer4D: React.FC = () => {
       0.1,
       1000
     );
-    camera.position.z = 25;
-    camera.position.y = 25;
-    camera.position.x = 25;
+    camera.position.z = 73.5;
+    camera.position.y = 73.5;
+    camera.position.x = 73.5;
     camera.lookAt(new THREE.Vector3(0, 0, 0));
     cameraRef.current = camera;
     
@@ -74,13 +75,21 @@ const Visualizer4D: React.FC = () => {
     controls.minDistance = 1; // Reduced for closer zoom
     controls.maxDistance = 300; // Increased for further zooming out
     controls.rotateSpeed = 0.8;
-    controls.zoomSpeed = 1.5; // Increased zoom speed
+    controls.zoomSpeed = 2.0; // Enhanced zoom speed for wheel/pinch
     controls.panSpeed = 0.8;
+    controls.enableZoom = true; // Ensure zoom is enabled
     controls.mouseButtons = {
       LEFT: THREE.MOUSE.ROTATE,
       MIDDLE: THREE.MOUSE.DOLLY,
       RIGHT: THREE.MOUSE.PAN
     };
+    
+    // Additional touch controls configuration for pinch-to-zoom
+    controls.touches = {
+      ONE: THREE.TOUCH.ROTATE,
+      TWO: THREE.TOUCH.DOLLY_PAN
+    };
+    
     controlsRef.current = controls;
     
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
@@ -89,6 +98,20 @@ const Visualizer4D: React.FC = () => {
     const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
     directionalLight.position.set(1, 1, 1);
     scene.add(directionalLight);
+    
+    // FPS counter setup
+    let frameCount = 0;
+    let lastTime = performance.now();
+    
+    const updateFPS = () => {
+      const now = performance.now();
+      frameCount++;
+      if (now - lastTime >= 1000) {
+        setFps(Math.round(frameCount * 1000 / (now - lastTime)));
+        frameCount = 0;
+        lastTime = now;
+      }
+    };
     
     const animate = () => {
       requestAnimationFrame(animate);
@@ -100,6 +123,8 @@ const Visualizer4D: React.FC = () => {
       if (rendererRef.current && cameraRef.current && sceneRef.current) {
         rendererRef.current.render(sceneRef.current, cameraRef.current);
       }
+      
+      updateFPS();
     };
     
     animate();
@@ -115,8 +140,40 @@ const Visualizer4D: React.FC = () => {
     
     window.addEventListener('resize', handleResize);
     
+    // Add specific wheel event handler for better trackpad pinch-to-zoom support
+    const handleWheel = (event: WheelEvent) => {
+      // If ctrlKey is pressed, it's likely a pinch gesture on trackpad
+      if (event.ctrlKey || event.metaKey) {
+        event.preventDefault();
+        
+        // Convert pinch delta to zoom action
+        const delta = -event.deltaY;
+        const zoomSpeed = 0.1; // Adjust this for sensitivity
+        
+        if (cameraRef.current && controlsRef.current) {
+          const currentPos = cameraRef.current.position.clone();
+          const direction = new THREE.Vector3(0, 0, 0).sub(currentPos).normalize();
+          const zoomAmount = delta * zoomSpeed;
+          
+          // Apply zoom
+          cameraRef.current.position.addScaledVector(direction, zoomAmount);
+          controlsRef.current.update();
+          
+          // Update zoom level UI
+          const distance = cameraRef.current.position.distanceTo(new THREE.Vector3(0, 0, 0));
+          setZoomLevel(100 - Math.min(Math.round((distance / 200) * 100), 95));
+        }
+      }
+    };
+    
+    // Add the wheel event listener to the container with passive: false to allow preventDefault
+    containerRef.current.addEventListener('wheel', handleWheel, { passive: false });
+    
     return () => {
       window.removeEventListener('resize', handleResize);
+      if (containerRef.current) {
+        containerRef.current.removeEventListener('wheel', handleWheel);
+      }
       
       if (rendererRef.current && containerRef.current) {
         containerRef.current.removeChild(rendererRef.current.domElement);
@@ -142,11 +199,13 @@ const Visualizer4D: React.FC = () => {
     
     Object.entries(groupedSamples).forEach(([timeStr, samples]) => {
       const time = parseInt(timeStr);
+      setPointCount(samples.length); // Update point count for current timepoint
       
       const geometry = new THREE.BufferGeometry();
       
       const positions = new Float32Array(samples.length * 3);
       const colors = new Float32Array(samples.length * 3);
+      const sizes = new Float32Array(samples.length);
       
       samples.forEach((sample, i) => {
         positions[i * 3] = sample.x * scaleFactor;
@@ -171,10 +230,13 @@ const Visualizer4D: React.FC = () => {
         colors[i * 3] = color.r;
         colors[i * 3 + 1] = color.g;
         colors[i * 3 + 2] = color.b;
+        
+        sizes[i] = visualizerOptions.pointSize;
       });
       
       geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
       geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
       
       const material = new THREE.PointsMaterial({
         size: visualizerOptions.pointSize,
@@ -182,7 +244,8 @@ const Visualizer4D: React.FC = () => {
         sizeAttenuation: true,
         transparent: true,
         opacity: 0.9,
-        alphaTest: 0.5
+        alphaTest: 0.5,
+        map: generatePointTexture()
       });
       
       const points = new THREE.Points(geometry, material);
@@ -212,7 +275,7 @@ const Visualizer4D: React.FC = () => {
   }, [currentTimepoint, timeGroupedSamples]);
   
   const handleClick = (event: React.MouseEvent) => {
-    if (!containerRef.current || !cameraRef.current || !pointsRef.current || !currentSamples) return;
+    if (!containerRef.current || !cameraRef.current || !pointsRef.current) return;
     
     const rect = containerRef.current.getBoundingClientRect();
     mouseRef.current.x = ((event.clientX - rect.left) / containerRef.current.clientWidth) * 2 - 1;
@@ -224,11 +287,56 @@ const Visualizer4D: React.FC = () => {
     
     if (intersects.length > 0) {
       const index = intersects[0].index;
-      if (index !== undefined && index < currentSamples.length) {
-        const selectedSample = currentSamples[index];
-        setSelectedSample(selectedSample);
+      if (index !== undefined) {
+        // Get the samples for the current timepoint using the grouped samples
+        const groupedSamples = groupSamplesByTime(filteredSamples4D);
+        const currentTimeSamples = groupedSamples[currentTimepoint] || [];
+        
+        if (index < currentTimeSamples.length) {
+          setLastSelectedIndex(index);
+          const selectedSample = currentTimeSamples[index];
+          console.log('Selecting sample:', { index, sample: selectedSample, timepoint: currentTimepoint }); // Debug log
+          setSelectedSample(selectedSample);
+        }
       }
     }
+  };
+  
+  // Generate circular point texture for better-looking points
+  const generatePointTexture = () => {
+    const canvas = document.createElement('canvas');
+    const size = 64;
+    canvas.width = size;
+    canvas.height = size;
+    const context = canvas.getContext('2d');
+    
+    if (!context) return null;
+    
+    const centerX = size / 2;
+    const centerY = size / 2;
+    const radius = size / 2 - 2;
+    
+    // Draw circular point
+    context.beginPath();
+    context.arc(centerX, centerY, radius, 0, 2 * Math.PI, false);
+    
+    // Create gradient
+    const gradient = context.createRadialGradient(
+      centerX, centerY, 0,
+      centerX, centerY, radius
+    );
+    gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+    gradient.addColorStop(0.2, 'rgba(255, 255, 255, 0.9)');
+    gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.8)');
+    gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    
+    context.fillStyle = gradient;
+    context.fill();
+    
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    
+    return texture;
   };
   
   return (

@@ -212,42 +212,42 @@ const SamplePanel: React.FC = () => {
             {/* Images/Videos Section */}
             {(selectedSample.videos || selectedSample.images) && (
               <div>
-                <h4 className="text-xl font-medium text-gray-800 mb-3 border-b border-gray-200 pb-2 flex items-center">
-                  {selectedSample.videos ? (
-                    <>
-                      <Video size={18} className="mr-2 text-red-600" />
-                      Videos
-                    </>
-                  ) : (
-                    <>
-                      <Microscope size={18} className="mr-2 text-indigo-600" />
-                      Images
-                    </>
+                <h4 className="text-xl font-medium text-gray-800 mb-3 border-b border-gray-200 pb-2 flex items-center justify-between">
+                  <div className="flex items-center">
+                    {selectedSample.videos ? (
+                      <>
+                        <Video size={18} className="mr-2 text-red-600" />
+                        4D Movie
+                      </>
+                    ) : (
+                      <>
+                        <Microscope size={18} className="mr-2 text-indigo-600" />
+                        Images
+                      </>
+                    )}
+                  </div>
+                  {selectedSample.videos && (
+                    <button
+                      onClick={togglePlayPause}
+                      className="flex items-center space-x-2 px-4 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-md hover:from-blue-700 hover:to-blue-800 transition-colors shadow"
+                    >
+                      {isPlaying ? (
+                        <>
+                          <Pause size={16} />
+                          <span>Pause</span>
+                        </>
+                      ) : (
+                        <>
+                          <Play size={16} />
+                          <span>Play</span>
+                        </>
+                      )}
+                    </button>
                   )}
                 </h4>
                 
                 {selectedSample.videos ? (
                   <div className="space-y-6">
-                    {/* Video controls */}
-                    <div className="bg-white p-3 rounded-lg flex justify-center border border-gray-200 shadow-sm">
-                      <button
-                        onClick={togglePlayPause}
-                        className="flex items-center space-x-2 px-4 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-md hover:from-blue-700 hover:to-blue-800 transition-colors shadow"
-                      >
-                        {isPlaying ? (
-                          <>
-                            <Pause size={16} />
-                            <span>Pause</span>
-                          </>
-                        ) : (
-                          <>
-                            <Play size={16} />
-                            <span>Play</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-                    
                     {/* Videos */}
                     {selectedSample.videos.map((video, index) => (
                       <div key={index} className="bg-white rounded-lg overflow-hidden shadow-sm border border-gray-200">
@@ -283,11 +283,6 @@ const SamplePanel: React.FC = () => {
                               )}
                             </>
                           )}
-                        </div>
-                        <div className="p-3 bg-white border-t border-gray-200">
-                          <p className="text-sm text-center text-gray-600">
-                            Video {index + 1}
-                          </p>
                         </div>
                       </div>
                     ))}

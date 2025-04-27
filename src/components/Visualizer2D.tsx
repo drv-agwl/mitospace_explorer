@@ -25,16 +25,15 @@ const Visualizer2D: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [showHelp, setShowHelp] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
-  const [zoomLevel, setZoomLevel] = useState(1);
+  const [zoomLevel, setZoomLevel] = useState(44);
+  const [fps, setFps] = useState(0);
+  const [pointCount, setPointCount] = useState(0);
+  const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
 
   // For controls tracking
   const [isPanning, setIsPanning] = useState(false);
   const [isRotating, setIsRotating] = useState(false);
 
-  // Performance metrics
-  const [fps, setFps] = useState(0);
-  const [pointCount, setPointCount] = useState(0);
-  
   // Initialize scene and renderer
   useEffect(() => {
     if (!containerRef.current) return;
@@ -49,10 +48,9 @@ const Visualizer2D: React.FC = () => {
       0.1,
       1000
     );
-
-    camera.position.z = 25;
-    camera.position.y = 25;
-    camera.position.x = 25;
+    camera.position.z = 56.8; // Adjusted for 44% zoom level
+    camera.position.y = 56.8;
+    camera.position.x = 56.8;
     camera.lookAt(new THREE.Vector3(0, 0, 0));
     cameraRef.current = camera;
     
