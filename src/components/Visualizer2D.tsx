@@ -26,7 +26,6 @@ const Visualizer2D: React.FC = () => {
   const [showHelp, setShowHelp] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(1);
-  const [useInstancing, setUseInstancing] = useState(true);
 
   // For controls tracking
   const [isPanning, setIsPanning] = useState(false);
@@ -288,76 +287,62 @@ const Visualizer2D: React.FC = () => {
       pointsRef.current = null;
     }
     
-    if (instancedMeshRef.current && sceneRef.current) {
-      sceneRef.current.remove(instancedMeshRef.current);
-      instancedMeshRef.current = null;
-    }
-    
     const scaleFactor = 4;
     
-    // Choose rendering method based on sample count
-    if (useInstancing && filteredSamples2D.length > 1000) {
-      // For large datasets, use instanced mesh
-      const mesh = createInstancedMesh(filteredSamples2D, scaleFactor);
-      if (mesh && sceneRef.current) {
-        sceneRef.current.add(mesh);
-        instancedMeshRef.current = mesh;
-      }
-    } else {
-      // For smaller datasets or if instancing is disabled, use points
-      const geometry = new THREE.BufferGeometry();
-      
-      const positions = new Float32Array(filteredSamples2D.length * 3);
-      const colors = new Float32Array(filteredSamples2D.length * 3);
-      const sizes = new Float32Array(filteredSamples2D.length);
-      
-      filteredSamples2D.forEach((sample, i) => {
-        positions[i * 3] = sample.x * scaleFactor;
-        positions[i * 3 + 1] = sample.y * scaleFactor;
-        positions[i * 3 + 2] = sample.z * scaleFactor;
-        
-        let color;
-        if (visualizerOptions.coloringMode === 'phenotype') {
-          color = new THREE.Color(
-            sample.color_phenotypic.r,
-            sample.color_phenotypic.g,
-            sample.color_phenotypic.b
-          );
-        } else {
-          color = new THREE.Color(
-            sample.color.r,
-            sample.color.g,
-            sample.color.b
-          );
-        }
-        
-        colors[i * 3] = color.r;
-        colors[i * 3 + 1] = color.g;
-        colors[i * 3 + 2] = color.b;
-        
-        sizes[i] = visualizerOptions.pointSize;
-      });
-      
-      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-      geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
-      
-      const material = new THREE.PointsMaterial({
-        size: visualizerOptions.pointSize,
-        vertexColors: true,
-        sizeAttenuation: true,
-        transparent: true,
-        opacity: 0.9,
-        alphaTest: 0.5,
-        map: generatePointTexture()
-      });
-      
-      const points = new THREE.Points(geometry, material);
-      sceneRef.current.add(points);
-      pointsRef.current = points;
-    }
+    // Always use points for rendering
+    const geometry = new THREE.BufferGeometry();
     
-  }, [filteredSamples2D, visualizerOptions, useInstancing, createInstancedMesh]);
+    const positions = new Float32Array(filteredSamples2D.length * 3);
+    const colors = new Float32Array(filteredSamples2D.length * 3);
+    const sizes = new Float32Array(filteredSamples2D.length);
+    
+    filteredSamples2D.forEach((sample, i) => {
+      positions[i * 3] = sample.x * scaleFactor;
+      positions[i * 3 + 1] = sample.y * scaleFactor;
+      positions[i * 3 + 2] = sample.z * scaleFactor;
+      
+      // Use color based on the selected coloring mode
+      let color;
+      if (visualizerOptions.coloringMode === 'phenotype') {
+        color = new THREE.Color(
+          sample.color_phenotypic.r,
+          sample.color_phenotypic.g,
+          sample.color_phenotypic.b
+        );
+      } else {
+        color = new THREE.Color(
+          sample.color.r,
+          sample.color.g,
+          sample.color.b
+        );
+      }
+      
+      colors[i * 3] = color.r;
+      colors[i * 3 + 1] = color.g;
+      colors[i * 3 + 2] = color.b;
+      
+      sizes[i] = visualizerOptions.pointSize;
+    });
+    
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+    
+    const material = new THREE.PointsMaterial({
+      size: visualizerOptions.pointSize,
+      vertexColors: true,
+      sizeAttenuation: true,
+      transparent: true,
+      opacity: 0.9,
+      alphaTest: 0.5,
+      map: generatePointTexture()
+    });
+    
+    const points = new THREE.Points(geometry, material);
+    sceneRef.current.add(points);
+    pointsRef.current = points;
+    
+  }, [filteredSamples2D, visualizerOptions]);
   
   // Generate circular point texture for better-looking points
   const generatePointTexture = () => {
@@ -473,11 +458,6 @@ const Visualizer2D: React.FC = () => {
     setShowHelp(!showHelp);
   };
   
-  // Toggle rendering method
-  const toggleInstancing = () => {
-    setUseInstancing(!useInstancing);
-  };
-  
   return (
     <div className="bg-white shadow-md overflow-hidden h-full border border-gray-200">
       <div className="p-3 bg-white border-b border-gray-200">
@@ -563,16 +543,6 @@ const Visualizer2D: React.FC = () => {
               <circle cx="12" cy="12" r="10"></circle>
               <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
               <line x1="12" y1="17" x2="12.01" y2="17"></line>
-            </svg>
-          </button>
-          
-          <button 
-            onClick={toggleInstancing}
-            className={`${useInstancing ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-600 hover:bg-gray-700'} text-white p-2 rounded-lg shadow-lg w-10 h-10 flex items-center justify-center transition-all`}
-            title={useInstancing ? 'Using Instanced Rendering (Good for large datasets)' : 'Using Point Rendering'}
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7m0-18H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h7m0-18v18"></path>
             </svg>
           </button>
         </div>

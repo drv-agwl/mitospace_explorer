@@ -140,31 +140,6 @@ const SamplePanel: React.FC = () => {
       {selectedSample ? (
         <div className="flex-1 overflow-y-auto">
           <div className="p-4 space-y-6">
-            {/* Color Legend */}
-            <div>
-              <h4 className="text-xl font-medium text-gray-800 mb-3 border-b border-gray-200 pb-2 flex items-center">
-                <span className="text-purple-600 mr-2">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z" fill="currentColor" fillOpacity="0.2" />
-                    <path d="M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                </span>
-                Color Legend
-              </h4>
-              <div className="bg-white rounded-lg overflow-hidden shadow-sm border border-gray-200 p-3">
-                <div className="space-y-2">
-                  <div className="flex items-center">
-                    <div className="w-6 h-6 rounded-md mr-3" style={{ backgroundColor: 'rgb(0, 255, 0)' }}></div>
-                    <span className="text-sm">MitoTracker</span>
-                  </div>
-                  <div className="flex items-center">
-                    <div className="w-6 h-6 rounded-md mr-3" style={{ backgroundColor: 'rgb(255, 0, 255)' }}></div>
-                    <span className="text-sm">TMRM</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
             {/* Treatment Info */}
             <div>
               <h4 className="text-xl font-medium text-gray-800 mb-3 border-b border-gray-200 pb-2 flex items-center">
@@ -172,13 +147,13 @@ const SamplePanel: React.FC = () => {
                 Treatment Data
               </h4>
               <div className="bg-white rounded-lg overflow-hidden shadow-sm border border-gray-200">
-                <div className="grid grid-cols-3 divide-x divide-gray-200">
+                <div className="grid grid-cols-2 divide-x divide-gray-200">
                   <div className="p-4 flex flex-col items-center text-center">
                     <div className="text-blue-600 mb-1">
                       <Pill size={24} />
                     </div>
                     <h5 className="text-xs uppercase font-semibold text-gray-500 mb-1">Drug</h5>
-                    <div className="text-gray-800">{selectedSample.treatment.drug.toUpperCase()}</div>
+                    <div className="text-gray-800 text-sm">{selectedSample.treatment.drug.toUpperCase()}</div>
                   </div>
                   
                   <div className="p-4 flex flex-col items-center text-center">
@@ -186,18 +161,10 @@ const SamplePanel: React.FC = () => {
                     <h5 className="text-xs uppercase font-semibold text-gray-500 mb-1">Dose</h5>
                     <div className="text-gray-800">{selectedSample.treatment.dose}</div>
                   </div>
-                  
-                  <div className="p-4 flex flex-col items-center text-center">
-                    <div className="text-amber-600 mb-1">
-                      <Clock size={24} />
-                    </div>
-                    <h5 className="text-xs uppercase font-semibold text-gray-500 mb-1">Time</h5>
-                    <div className="text-gray-800">{selectedSample.treatment.time}</div>
-                  </div>
                 </div>
               </div>
             </div>
-            
+
             {/* Color Info */}
             <div>
               <h4 className="text-xl font-medium text-gray-800 mb-3 border-b border-gray-200 pb-2 flex items-center">
@@ -212,7 +179,7 @@ const SamplePanel: React.FC = () => {
               <div className="bg-white rounded-lg overflow-hidden shadow-sm border border-gray-200">
                 <div className="grid grid-cols-2 divide-x divide-gray-200">
                   <div className="p-4">
-                    <h5 className="text-xs uppercase font-semibold text-gray-500 mb-2">Treatment Color</h5>
+                    <h5 className="text-[10px] uppercase font-semibold text-gray-500 mb-2">Treatment Color</h5>
                     <div className="flex items-center">
                       <div 
                         className="w-10 h-10 rounded-md shadow-inner border border-gray-300"
@@ -220,14 +187,14 @@ const SamplePanel: React.FC = () => {
                           backgroundColor: `rgb(${selectedSample.color.r * 255}, ${selectedSample.color.g * 255}, ${selectedSample.color.b * 255})` 
                         }}
                       ></div>
-                      <div className="ml-3 text-sm">
+                      <div className="ml-3 text-[10px] leading-tight">
                         RGB({Math.round(selectedSample.color.r * 255)}, {Math.round(selectedSample.color.g * 255)}, {Math.round(selectedSample.color.b * 255)})
                       </div>
                     </div>
                   </div>
                   
                   <div className="p-4">
-                    <h5 className="text-xs uppercase font-semibold text-gray-500 mb-2">Phenotype Color</h5>
+                    <h5 className="text-[10px] uppercase font-semibold text-gray-500 mb-2">Phenotypic Color</h5>
                     <div className="flex items-center">
                       <div 
                         className="w-10 h-10 rounded-md shadow-inner border border-gray-300"
@@ -235,23 +202,12 @@ const SamplePanel: React.FC = () => {
                           backgroundColor: `rgb(${selectedSample.color_phenotypic.r * 255}, ${selectedSample.color_phenotypic.g * 255}, ${selectedSample.color_phenotypic.b * 255})` 
                         }}
                       ></div>
-                      <div className="ml-3 text-sm">
+                      <div className="ml-3 text-[10px] leading-tight">
                         RGB({Math.round(selectedSample.color_phenotypic.r * 255)}, {Math.round(selectedSample.color_phenotypic.g * 255)}, {Math.round(selectedSample.color_phenotypic.b * 255)})
                       </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            </div>
-            
-            {/* Phenotype Info */}
-            <div>
-              <h4 className="text-xl font-medium text-gray-800 mb-3 border-b border-gray-200 pb-2 flex items-center">
-                <Dna size={18} className="mr-2 text-green-600" />
-                Phenotype
-              </h4>
-              <div className="bg-white rounded-lg p-4 shadow-sm border border-gray-200">
-                <p className="text-gray-800">{selectedSample.phenotype}</p>
               </div>
             </div>
 
@@ -351,11 +307,6 @@ const SamplePanel: React.FC = () => {
                             loading="lazy"
                           />
                         </div>
-                        <div className="p-3 bg-white border-t border-gray-200">
-                          <p className="text-sm text-center text-gray-600">
-                            Image {index + 1}
-                          </p>
-                        </div>
                       </div>
                     ))}
                   </div>
@@ -363,6 +314,31 @@ const SamplePanel: React.FC = () => {
               </div>
             )}
 
+            {/* Color Legend */}
+            <div>
+              <h4 className="text-xl font-medium text-gray-800 mb-3 border-b border-gray-200 pb-2 flex items-center">
+                <span className="text-purple-600 mr-2">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z" fill="currentColor" fillOpacity="0.2" />
+                    <path d="M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </span>
+                Color Legend
+              </h4>
+              <div className="bg-white rounded-lg overflow-hidden shadow-sm border border-gray-200 p-3">
+                <div className="flex items-center space-x-6">
+                  <div className="flex items-center">
+                    <div className="w-6 h-6 rounded-md mr-3" style={{ backgroundColor: 'rgb(0, 255, 0)' }}></div>
+                    <span className="text-sm">MitoTracker</span>
+                  </div>
+                  <div className="flex items-center">
+                    <div className="w-6 h-6 rounded-md mr-3" style={{ backgroundColor: 'rgb(255, 0, 255)' }}></div>
+                    <span className="text-sm">TMRM</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
             {/* Metadata */}
             <div>
               <h4 className="text-xl font-medium text-gray-800 mb-3 border-b border-gray-200 pb-2 flex items-center">
@@ -379,16 +355,10 @@ const SamplePanel: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
-                    {Object.entries(selectedSample.metadata).map(([key, value]) => (
-                      <tr key={key} className="hover:bg-gray-50">
-                        <td className="py-3 px-4 text-sm font-medium text-gray-600">
-                          {key.charAt(0).toUpperCase() + key.slice(1)}
-                        </td>
-                        <td className="py-3 px-4 text-sm text-gray-800">
-                          {value}
-                        </td>
-                      </tr>
-                    ))}
+                    <tr className="hover:bg-gray-50">
+                      <td className="py-3 px-4 text-sm font-medium text-gray-600">Cell Line</td>
+                      <td className="py-3 px-4 text-sm text-gray-800">{selectedSample.metadata.cellLine}</td>
+                    </tr>
                   </tbody>
                 </table>
               </div>
