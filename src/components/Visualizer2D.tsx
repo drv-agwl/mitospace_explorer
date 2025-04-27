@@ -75,12 +75,19 @@ const Visualizer2D: React.FC = () => {
     controls.minDistance = 1; // Reduced for closer zoom
     controls.maxDistance = 300; // Increased for further zooming out
     controls.rotateSpeed = 0.8;
-    controls.zoomSpeed = 1.5; // Increased zoom speed
+    controls.zoomSpeed = 2.0; // Enhanced zoom speed for wheel/pinch
     controls.panSpeed = 0.8;
+    controls.enableZoom = true; // Ensure zoom is enabled
     controls.mouseButtons = {
       LEFT: THREE.MOUSE.ROTATE,
       MIDDLE: THREE.MOUSE.DOLLY,
       RIGHT: THREE.MOUSE.PAN
+    };
+    
+    // Additional touch controls configuration for pinch-to-zoom
+    controls.touches = {
+      ONE: THREE.TOUCH.ROTATE,
+      TWO: THREE.TOUCH.DOLLY_PAN
     };
     
     // Add control state monitors
@@ -158,8 +165,40 @@ const Visualizer2D: React.FC = () => {
     
     window.addEventListener('resize', handleResize);
     
+    // Add specific wheel event handler for better trackpad pinch-to-zoom support
+    const handleWheel = (event: WheelEvent) => {
+      // If ctrlKey is pressed, it's likely a pinch gesture on trackpad
+      if (event.ctrlKey || event.metaKey) {
+        event.preventDefault();
+        
+        // Convert pinch delta to zoom action
+        const delta = -event.deltaY;
+        const zoomSpeed = 0.1; // Adjust this for sensitivity
+        
+        if (cameraRef.current && controlsRef.current) {
+          const currentPos = cameraRef.current.position.clone();
+          const direction = new THREE.Vector3(0, 0, 0).sub(currentPos).normalize();
+          const zoomAmount = delta * zoomSpeed;
+          
+          // Apply zoom
+          cameraRef.current.position.addScaledVector(direction, zoomAmount);
+          controlsRef.current.update();
+          
+          // Update zoom level UI
+          const distance = cameraRef.current.position.distanceTo(new THREE.Vector3(0, 0, 0));
+          setZoomLevel(100 - Math.min(Math.round((distance / 200) * 100), 95));
+        }
+      }
+    };
+    
+    // Add the wheel event listener to the container with passive: false to allow preventDefault
+    containerRef.current.addEventListener('wheel', handleWheel, { passive: false });
+    
     return () => {
       window.removeEventListener('resize', handleResize);
+      if (containerRef.current) {
+        containerRef.current.removeEventListener('wheel', handleWheel);
+      }
       
       if (rendererRef.current && containerRef.current) {
         containerRef.current.removeChild(rendererRef.current.domElement);
@@ -510,6 +549,11 @@ const Visualizer2D: React.FC = () => {
             </svg>
           </button>
           
+          {/* Zoom Level Indicator */}
+          <div className="bg-white bg-opacity-80 p-2 rounded-lg shadow-lg text-center text-xs text-gray-700 font-medium">
+            <span>Zoom: {zoomLevel}%</span>
+          </div>
+          
           <button 
             onClick={toggleHelp}
             className="bg-gray-600 hover:bg-gray-700 text-white p-2 rounded-lg shadow-lg w-10 h-10 flex items-center justify-center transition-all"
@@ -563,8 +607,8 @@ const Visualizer2D: React.FC = () => {
                 </div>
                 
                 <div className="flex items-start">
-                  <div className="w-24 font-medium">Wheel</div>
-                  <div>Zoom in/out</div>
+                  <div className="w-24 font-medium">Wheel/Pinch</div>
+                  <div>Zoom in/out (use two fingers on trackpad)</div>
                 </div>
                 
                 <div className="flex items-start">

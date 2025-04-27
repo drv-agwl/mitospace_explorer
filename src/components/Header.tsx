@@ -5,11 +5,11 @@ import { Link } from 'react-router-dom';
 const Header: React.FC = () => {
   return (
     <header className="bg-white border-b border-gray-200 text-gray-800 shadow-sm">
-      <div className="container mx-auto px-4 py-3">
+      <div className="container mx-auto py-3 pl-1">
         <div className="flex items-center justify-between">
-          <Link to="/" className="flex items-center space-x-2">
+          <Link to="/" className="flex items-center gap-3">
             <Microscope size={24} className="text-blue-600" />
-            <h1 className="text-lg font-bold">MitoSpace Explorer</h1>
+            <h1 className="text-2xl font-bold">MitoSpace Explorer</h1>
           </Link>
           
           <nav>

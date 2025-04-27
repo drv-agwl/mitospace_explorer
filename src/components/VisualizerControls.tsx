@@ -12,9 +12,8 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type }) => {
   return (
     <div className="flex flex-col space-y-2">
       <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-2">
-          <Microscope size={18} className="text-blue-600" />
-          <h3 className="text-lg font-semibold">{type === '2d' ? '2D MitoSpace' : '4D MitoSpace'}</h3>
+        <div className="flex items-center">
+          {/* Title removed to avoid duplication with tab navigation */}
         </div>
         
         <div className="text-xs text-gray-600">
