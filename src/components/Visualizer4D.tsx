@@ -25,10 +25,18 @@ const Visualizer4D: React.FC = () => {
   const [currentTimepoint] = useState<number>(0);
   const [isLoading, setIsLoading] = useState(true);
   const [timeGroupedSamples, setTimeGroupedSamples] = useState<Record<number, THREE.Points>>({});
+  const [zoomLevel, setZoomLevel] = useState(1);
+  const [showHelp, setShowHelp] = useState(false);
+  const [fps, setFps] = useState(0);
+  const [pointCount, setPointCount] = useState(0);
   
   const currentSamples = filteredSamples4D.filter(
     sample => sample.t === currentTimepoint
   );
+
+  const toggleHelp = () => {
+    setShowHelp(!showHelp);
+  };
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -303,10 +311,13 @@ const Visualizer4D: React.FC = () => {
             </svg>
           </button>
           
+          {/* Zoom Level Indicator */}
+          <div className="bg-white bg-opacity-80 p-2 rounded-lg shadow-lg text-center text-xs text-gray-700 font-medium">
+            <span>Zoom: {zoomLevel}%</span>
+          </div>
+          
           <button 
-            onClick={() => {
-              // Toggle help or additional info in future
-            }}
+            onClick={toggleHelp}
             className="bg-gray-600 hover:bg-gray-700 text-white p-2 rounded-lg shadow-lg w-10 h-10 flex items-center justify-center transition-all"
             title="Navigation Help"
           >
@@ -317,6 +328,61 @@ const Visualizer4D: React.FC = () => {
             </svg>
           </button>
         </div>
+        
+        {/* Status Panel */}
+        <div className="absolute bottom-20 left-4 bg-white bg-opacity-90 text-gray-800 text-xs p-2 border border-gray-300 rounded shadow">
+          <div className="flex items-center space-x-2">
+            <div className={`h-2 w-2 rounded-full ${fps > 30 ? 'bg-green-500' : fps > 15 ? 'bg-yellow-500' : 'bg-red-500'}`}></div>
+            <span>{fps} FPS</span>
+          </div>
+          
+          <div className="mt-1">
+            {pointCount.toLocaleString()} points
+          </div>
+        </div>
+        
+        {/* Help Overlay */}
+        {showHelp && (
+          <div className="absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center" onClick={toggleHelp}>
+            <div className="bg-gray-800 p-6 rounded-xl shadow-2xl max-w-md" onClick={e => e.stopPropagation()}>
+              <h3 className="text-xl font-bold text-white mb-4">Navigation Controls</h3>
+              
+              <div className="text-gray-300 space-y-3">
+                <div className="flex items-start">
+                  <div className="w-24 font-medium">Left Mouse</div>
+                  <div>Rotate the view</div>
+                </div>
+                
+                <div className="flex items-start">
+                  <div className="w-24 font-medium">Middle Mouse</div>
+                  <div>Pan the view</div>
+                </div>
+                
+                <div className="flex items-start">
+                  <div className="w-24 font-medium">Wheel/Pinch</div>
+                  <div>Zoom in/out (use two fingers on trackpad)</div>
+                </div>
+                
+                <div className="flex items-start">
+                  <div className="w-24 font-medium">Click</div>
+                  <div>Select a point</div>
+                </div>
+                
+                <div className="flex items-start">
+                  <div className="w-24 font-medium">Home Button</div>
+                  <div>Reset camera to home position</div>
+                </div>
+              </div>
+              
+              <button 
+                className="mt-6 bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded transition-colors w-full"
+                onClick={toggleHelp}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

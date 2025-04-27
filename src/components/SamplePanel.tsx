@@ -124,8 +124,6 @@ const SamplePanel: React.FC = () => {
               </span>
             )}
           </div>
-          
-          {/* No tabs - everything will be shown on one panel */}
         </div>
       ) : (
         <div className="bg-white p-4 text-gray-800 sticky top-0 z-10 border-b border-gray-200">

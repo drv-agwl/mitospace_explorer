@@ -10,7 +10,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type }) => {
   const { visualizerOptions, setPointSize, setColoringMode } = useSample();
   
   return (
-    <div className="flex flex-col space-y-2">
+    <div className="flex flex-col space-y-2 bg-blue-50 p-4 rounded-lg">
       <div className="flex items-center justify-between">
         <div className="flex items-center">
           {/* Title removed to avoid duplication with tab navigation */}
@@ -19,7 +19,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type }) => {
         <div className="text-xs text-gray-600">
           {type === '2d' ? 
             'Click on any point to view detailed sample information.' : 
-            'Use the time slider to explore temporal changes.'
+            'Click on any point to view detailed sample information.'
           }
         </div>
       </div>
