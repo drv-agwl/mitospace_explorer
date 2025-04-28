@@ -29,10 +29,39 @@ const Visualizer2D: React.FC = () => {
   const [fps, setFps] = useState(0);
   const [pointCount, setPointCount] = useState(0);
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
+  const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
+  const [selectedPointMesh, setSelectedPointMesh] = useState<THREE.Mesh | null>(null);
 
   // For controls tracking
   const [isPanning, setIsPanning] = useState(false);
   const [isRotating, setIsRotating] = useState(false);
+
+  // Add this function to create a highlight mesh
+  const createHighlightMesh = (position: THREE.Vector3, color: THREE.Color) => {
+    if (!sceneRef.current) return null;
+    
+    // Remove previous highlight if it exists
+    if (selectedPointMesh && sceneRef.current) {
+      sceneRef.current.remove(selectedPointMesh);
+    }
+    
+    // Create a larger sphere for the highlight
+    const geometry = new THREE.SphereGeometry(1.0, 32, 32);
+    const material = new THREE.MeshBasicMaterial({
+      color: color,
+      transparent: true,
+      opacity: 0.8,
+      wireframe: true,
+      wireframeLinewidth: 2
+    });
+    
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.copy(position);
+    sceneRef.current.add(mesh);
+    setSelectedPointMesh(mesh);
+    
+    return mesh;
+  };
 
   // Initialize scene and renderer
   useEffect(() => {
@@ -48,10 +77,8 @@ const Visualizer2D: React.FC = () => {
       0.1,
       1000
     );
-    camera.position.z = 56.8; // Adjusted for 44% zoom level
-    camera.position.y = 56.8;
-    camera.position.x = 56.8;
-    camera.lookAt(new THREE.Vector3(0, 0, 0));
+    
+    // Initial camera position will be set when points are loaded
     cameraRef.current = camera;
     
     const renderer = new THREE.WebGLRenderer({ 
@@ -61,7 +88,7 @@ const Visualizer2D: React.FC = () => {
     });
     
     renderer.setSize(containerRef.current.clientWidth, containerRef.current.clientHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Limit pixel ratio for performance
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     containerRef.current.appendChild(renderer.domElement);
     rendererRef.current = renderer;
     
@@ -69,19 +96,18 @@ const Visualizer2D: React.FC = () => {
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
     controls.screenSpacePanning = true;
-    controls.minDistance = 1; // Reduced for closer zoom
-    controls.maxDistance = 300; // Increased for further zooming out
+    controls.minDistance = 1;
+    controls.maxDistance = 300;
     controls.rotateSpeed = 0.8;
-    controls.zoomSpeed = 2.0; // Enhanced zoom speed for wheel/pinch
+    controls.zoomSpeed = 2.0;
     controls.panSpeed = 0.8;
-    controls.enableZoom = true; // Ensure zoom is enabled
+    controls.enableZoom = true;
     controls.mouseButtons = {
       LEFT: THREE.MOUSE.ROTATE,
       MIDDLE: THREE.MOUSE.DOLLY,
       RIGHT: THREE.MOUSE.PAN
     };
     
-    // Additional touch controls configuration for pinch-to-zoom
     controls.touches = {
       ONE: THREE.TOUCH.ROTATE,
       TWO: THREE.TOUCH.DOLLY_PAN
@@ -284,6 +310,13 @@ const Visualizer2D: React.FC = () => {
     
     const scaleFactor = 4;
     
+    // Calculate center of the point cloud
+    const center = new THREE.Vector3();
+    filteredSamples2D.forEach(sample => {
+      center.add(new THREE.Vector3(sample.x, sample.y, sample.z));
+    });
+    center.divideScalar(filteredSamples2D.length);
+    
     // Always use points for rendering
     const geometry = new THREE.BufferGeometry();
     
@@ -292,9 +325,10 @@ const Visualizer2D: React.FC = () => {
     const sizes = new Float32Array(filteredSamples2D.length);
     
     filteredSamples2D.forEach((sample, i) => {
-      positions[i * 3] = sample.x * scaleFactor;
-      positions[i * 3 + 1] = sample.y * scaleFactor;
-      positions[i * 3 + 2] = sample.z * scaleFactor;
+      // Position relative to center
+      positions[i * 3] = (sample.x - center.x) * scaleFactor;
+      positions[i * 3 + 1] = (sample.y - center.y) * scaleFactor;
+      positions[i * 3 + 2] = (sample.z - center.z) * scaleFactor;
       
       // Use color based on the selected coloring mode
       let color;
@@ -337,7 +371,46 @@ const Visualizer2D: React.FC = () => {
     sceneRef.current.add(points);
     pointsRef.current = points;
     
-  }, [filteredSamples2D, visualizerOptions]);
+    // Update camera and controls target to match the new center
+    if (cameraRef.current && controlsRef.current) {
+      // Update camera position relative to new center
+      const cameraOffset = new THREE.Vector3(56.8, 56.8, 56.8);
+      cameraRef.current.position.copy(center).add(cameraOffset);
+      cameraRef.current.lookAt(center);
+      
+      // Update controls target
+      controlsRef.current.target.copy(center);
+      controlsRef.current.update();
+    }
+    
+    // Update highlight position if there's a selected point
+    if (selectedPointIndex !== null && selectedSample) {
+      const position = new THREE.Vector3(
+        (selectedSample.x - center.x) * scaleFactor,
+        (selectedSample.y - center.y) * scaleFactor,
+        (selectedSample.z - center.z) * scaleFactor
+      );
+
+      // Get the color based on the current coloring mode
+      let color;
+      if (visualizerOptions.coloringMode === 'phenotype') {
+        color = new THREE.Color(
+          selectedSample.color_phenotypic.r,
+          selectedSample.color_phenotypic.g,
+          selectedSample.color_phenotypic.b
+        );
+      } else {
+        color = new THREE.Color(
+          selectedSample.color.r,
+          selectedSample.color.g,
+          selectedSample.color.b
+        );
+      }
+      
+      createHighlightMesh(position, color);
+    }
+    
+  }, [filteredSamples2D, visualizerOptions, selectedPointIndex, selectedSample]);
   
   // Generate circular point texture for better-looking points
   const generatePointTexture = () => {
@@ -397,12 +470,43 @@ const Visualizer2D: React.FC = () => {
         const index = pointIntersects[0].index;
         if (index !== undefined && index < filteredSamples2D.length) {
           const selectedSample = filteredSamples2D[index];
-          console.log('Selected sample:', selectedSample); // Debug log
           
           // Ensure the sample has all required properties
           if (selectedSample && selectedSample.treatment && selectedSample.color && selectedSample.color_phenotypic) {
             setSelectedSample(selectedSample);
             selected = true;
+            
+            // Create highlight at the selected point's position
+            const center = new THREE.Vector3();
+            filteredSamples2D.forEach(sample => {
+              center.add(new THREE.Vector3(sample.x, sample.y, sample.z));
+            });
+            center.divideScalar(filteredSamples2D.length);
+            
+            const position = new THREE.Vector3(
+              (selectedSample.x - center.x) * 4,
+              (selectedSample.y - center.y) * 4,
+              (selectedSample.z - center.z) * 4
+            );
+
+            // Get the color based on the current coloring mode
+            let color;
+            if (visualizerOptions.coloringMode === 'phenotype') {
+              color = new THREE.Color(
+                selectedSample.color_phenotypic.r,
+                selectedSample.color_phenotypic.g,
+                selectedSample.color_phenotypic.b
+              );
+            } else {
+              color = new THREE.Color(
+                selectedSample.color.r,
+                selectedSample.color.g,
+                selectedSample.color.b
+              );
+            }
+            
+            createHighlightMesh(position, color);
+            setSelectedPointIndex(index);
           } else {
             console.error('Invalid sample data:', selectedSample);
           }
@@ -413,6 +517,11 @@ const Visualizer2D: React.FC = () => {
     // If no point was selected, clear the selection
     if (!selected) {
       setSelectedSample(null);
+      if (selectedPointMesh && sceneRef.current) {
+        sceneRef.current.remove(selectedPointMesh);
+        setSelectedPointMesh(null);
+      }
+      setSelectedPointIndex(null);
     }
   };
   
@@ -451,6 +560,15 @@ const Visualizer2D: React.FC = () => {
   const toggleHelp = () => {
     setShowHelp(!showHelp);
   };
+  
+  // Clean up highlight when component unmounts
+  useEffect(() => {
+    return () => {
+      if (selectedPointMesh && sceneRef.current) {
+        sceneRef.current.remove(selectedPointMesh);
+      }
+    };
+  }, [selectedPointMesh]);
   
   return (
     <div className="bg-white shadow-md overflow-hidden h-full border border-gray-200">

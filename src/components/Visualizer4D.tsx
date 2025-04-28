@@ -31,6 +31,7 @@ const Visualizer4D: React.FC = () => {
   const [pointCount, setPointCount] = useState(0);
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [selectedPointMesh, setSelectedPointMesh] = useState<THREE.Mesh | null>(null);
   
   const currentSamples = filteredSamples4D.filter(
     sample => sample.t === currentTimepoint
@@ -53,10 +54,8 @@ const Visualizer4D: React.FC = () => {
       0.1,
       1000
     );
-    camera.position.z = 73.5;
-    camera.position.y = 73.5;
-    camera.position.x = 73.5;
-    camera.lookAt(new THREE.Vector3(0, 0, 0));
+    
+    // Initial camera position will be set when points are loaded
     cameraRef.current = camera;
     
     const renderer = new THREE.WebGLRenderer({ 
@@ -65,7 +64,7 @@ const Visualizer4D: React.FC = () => {
       powerPreference: 'high-performance'
     });
     renderer.setSize(containerRef.current.clientWidth, containerRef.current.clientHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Limit pixel ratio for performance
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     containerRef.current.appendChild(renderer.domElement);
     rendererRef.current = renderer;
     
@@ -73,19 +72,18 @@ const Visualizer4D: React.FC = () => {
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
     controls.screenSpacePanning = true;
-    controls.minDistance = 1; // Reduced for closer zoom
-    controls.maxDistance = 300; // Increased for further zooming out
+    controls.minDistance = 1;
+    controls.maxDistance = 300;
     controls.rotateSpeed = 0.8;
-    controls.zoomSpeed = 2.0; // Enhanced zoom speed for wheel/pinch
+    controls.zoomSpeed = 2.0;
     controls.panSpeed = 0.8;
-    controls.enableZoom = true; // Ensure zoom is enabled
+    controls.enableZoom = true;
     controls.mouseButtons = {
       LEFT: THREE.MOUSE.ROTATE,
       MIDDLE: THREE.MOUSE.DOLLY,
       RIGHT: THREE.MOUSE.PAN
     };
     
-    // Additional touch controls configuration for pinch-to-zoom
     controls.touches = {
       ONE: THREE.TOUCH.ROTATE,
       TWO: THREE.TOUCH.DOLLY_PAN
@@ -233,10 +231,18 @@ const Visualizer4D: React.FC = () => {
       const colors = new Float32Array(samples.length * 3);
       const sizes = new Float32Array(samples.length);
       
+      // Calculate center of the point cloud
+      const center = new THREE.Vector3();
       samples.forEach((sample, i) => {
-        positions[i * 3] = sample.x * scaleFactor;
-        positions[i * 3 + 1] = sample.y * scaleFactor;
-        positions[i * 3 + 2] = sample.z * scaleFactor;
+        center.add(new THREE.Vector3(sample.x, sample.y, sample.z));
+      });
+      center.divideScalar(samples.length);
+      
+      samples.forEach((sample, i) => {
+        // Position relative to center
+        positions[i * 3] = (sample.x - center.x) * scaleFactor;
+        positions[i * 3 + 1] = (sample.y - center.y) * scaleFactor;
+        positions[i * 3 + 2] = (sample.z - center.z) * scaleFactor;
         
         let color;
         if (visualizerOptions.coloringMode === 'phenotype') {
@@ -285,6 +291,27 @@ const Visualizer4D: React.FC = () => {
     
     if (pointsGroups[currentTimepoint]) {
       pointsRef.current = pointsGroups[currentTimepoint];
+      
+      // Update camera and controls target to match the new center
+      if (cameraRef.current && controlsRef.current) {
+        const currentTimeSamples = groupedSamples[currentTimepoint] || [];
+        if (currentTimeSamples.length > 0) {
+          const center = new THREE.Vector3();
+          currentTimeSamples.forEach(sample => {
+            center.add(new THREE.Vector3(sample.x, sample.y, sample.z));
+          });
+          center.divideScalar(currentTimeSamples.length);
+          
+          // Update camera position relative to new center
+          const cameraOffset = new THREE.Vector3(73.5, 73.5, 73.5);
+          cameraRef.current.position.copy(center).add(cameraOffset);
+          cameraRef.current.lookAt(center);
+          
+          // Update controls target
+          controlsRef.current.target.copy(center);
+          controlsRef.current.update();
+        }
+      }
     }
     
   }, [filteredSamples4D, visualizerOptions, currentTimepoint]);
@@ -300,6 +327,34 @@ const Visualizer4D: React.FC = () => {
     }
   }, [currentTimepoint, timeGroupedSamples]);
   
+  // Add this function to create a highlight mesh
+  const createHighlightMesh = (position: THREE.Vector3, color: THREE.Color) => {
+    if (!sceneRef.current) return null;
+    
+    // Remove previous highlight if it exists
+    if (selectedPointMesh && sceneRef.current) {
+      sceneRef.current.remove(selectedPointMesh);
+    }
+    
+    // Create a larger sphere for the highlight
+    const geometry = new THREE.SphereGeometry(1.0, 32, 32);
+    const material = new THREE.MeshBasicMaterial({
+      color: color,
+      transparent: true,
+      opacity: 0.8,
+      wireframe: true,
+      wireframeLinewidth: 2
+    });
+    
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.copy(position);
+    sceneRef.current.add(mesh);
+    setSelectedPointMesh(mesh);
+    
+    return mesh;
+  };
+  
+  // Update the handleClick function
   const handleClick = (event: React.MouseEvent) => {
     if (!containerRef.current || !cameraRef.current || !pointsRef.current) return;
     
@@ -313,7 +368,7 @@ const Visualizer4D: React.FC = () => {
     
     if (intersects.length > 0) {
       const index = intersects[0].index;
-      if (index !== undefined) {
+      if (typeof index === 'number') {
         // Get the samples for the current timepoint using the grouped samples
         const groupedSamples = groupSamplesByTime(filteredSamples4D);
         const currentTimeSamples = groupedSamples[currentTimepoint] || [];
@@ -321,9 +376,46 @@ const Visualizer4D: React.FC = () => {
         if (index < currentTimeSamples.length) {
           setLastSelectedIndex(index);
           const selectedSample = currentTimeSamples[index];
-          console.log('Selecting sample:', { index, sample: selectedSample, timepoint: currentTimepoint }); // Debug log
           setSelectedSample(selectedSample);
+
+          // Create highlight at the selected point's position
+          const center = new THREE.Vector3();
+          currentTimeSamples.forEach(sample => {
+            center.add(new THREE.Vector3(sample.x, sample.y, sample.z));
+          });
+          center.divideScalar(currentTimeSamples.length);
+          
+          const position = new THREE.Vector3(
+            (selectedSample.x - center.x) * 4,
+            (selectedSample.y - center.y) * 4,
+            (selectedSample.z - center.z) * 4
+          );
+
+          // Get the color based on the current coloring mode
+          let color;
+          if (visualizerOptions.coloringMode === 'phenotype') {
+            color = new THREE.Color(
+              selectedSample.color_phenotypic.r,
+              selectedSample.color_phenotypic.g,
+              selectedSample.color_phenotypic.b
+            );
+          } else {
+            color = new THREE.Color(
+              selectedSample.color.r,
+              selectedSample.color.g,
+              selectedSample.color.b
+            );
+          }
+          
+          createHighlightMesh(position, color);
         }
+      }
+    } else {
+      // Clear selection if clicking on empty space
+      setSelectedSample(null);
+      if (selectedPointMesh && sceneRef.current) {
+        sceneRef.current.remove(selectedPointMesh);
+        setSelectedPointMesh(null);
       }
     }
   };
