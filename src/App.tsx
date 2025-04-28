@@ -10,7 +10,7 @@ import About from './components/About';
 import { SampleProvider } from './context/SampleContext';
 
 function Explorer() {
-  const [activeTab, setActiveTab] = useState<'2d' | '4d'>('2d');
+  const [activeTab, setActiveTab] = useState<'2d' | '4d'>('4d');
 
   return (
     <div className="flex flex-col min-h-screen bg-white">

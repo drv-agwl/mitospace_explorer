@@ -471,7 +471,7 @@ const Visualizer2D: React.FC = () => {
         )}
         
         {/* Control Panel */}
-        <div className="absolute top-4 right-4 flex flex-col space-y-2">
+        <div className="absolute top-4 right-4 flex flex-col space-y-2 group">
           <button 
             onClick={handleResetCamera}
             className="bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-lg shadow-lg w-10 h-10 flex items-center justify-center transition-all"
@@ -525,7 +525,7 @@ const Visualizer2D: React.FC = () => {
           </button>
           
           {/* Zoom Level Indicator */}
-          <div className="bg-white bg-opacity-80 p-2 rounded-lg shadow-lg text-center text-xs text-gray-700 font-medium">
+          <div className="bg-white bg-opacity-80 p-2 rounded-lg shadow-lg text-center text-xs text-gray-700 font-medium opacity-0 group-hover:opacity-100 transition-opacity duration-200">
             <span>Zoom: {zoomLevel}%</span>
           </div>
           

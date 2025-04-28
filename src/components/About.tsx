@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, Microscope, Code, Zap, Rocket, Award, Users } from 'lucide-react';
+import { ArrowLeft, Microscope, Code, Users } from 'lucide-react';
 
 const About: React.FC = () => {
   return (
@@ -24,7 +24,7 @@ const About: React.FC = () => {
                 <h2 className="text-2xl font-semibold text-gray-800">Overview</h2>
               </div>
               <p className="text-gray-600 leading-relaxed">
-                MitoSpace Explorer is an interactive platform for visualizing mitochondrial morphology and its response to drug treatments. It allows users to explore both 2D MitoSpace, trained on confocal microscopy images, and 4D MitoSpace, trained on time-resolved light sheet microscopy (LLSM) movies, offering a unique view into mitochondrial structure and dynamics.
+                MitoSpace Explorer is an interactive platform for visualizing mitochondrial morphology and its dynamic response to drug treatments. It enables users to explore both 2D MitoSpace, trained on confocal microscopy images, and 4D MitoSpace, trained on time-resolved Lattice Light-Sheet Microscopy (LLSM) movies. Together, they offer a unique window into mitochondrial structure and behavior across space and time.
               </p>
             </section>
             
@@ -33,39 +33,31 @@ const About: React.FC = () => {
                 <Code size={24} className="text-blue-500 mr-3" />
                 <h2 className="text-2xl font-semibold text-gray-800">Technology</h2>
               </div>
-              <p className="text-gray-600 leading-relaxed">
-                The explorer is powered by self-supervised learning models trained on Cal27 cell lines under 25 different drug conditions, capturing a wide range of mitochondrial behaviors. By combining advanced data analysis with rich biological datasets, MitoSpace reveals the subtle and dramatic phenotypic changes within cells.
-              </p>
-            </section>
-            
-            <section className="bg-white rounded-xl shadow-sm p-8 border border-gray-100 hover:shadow-md transition-shadow duration-200">
-              <div className="flex items-center mb-4">
-                <Zap size={24} className="text-blue-500 mr-3" />
-                <h2 className="text-2xl font-semibold text-gray-800">Features</h2>
+              <div className="space-y-4 text-gray-600 leading-relaxed">
+                <p>
+                  MitoSpace Explorer is built on the fusion of two cutting-edge technologies: advanced microscopy and self-supervised deep learning.
+                </p>
+                <div className="pl-4 border-l-2 border-blue-100 space-y-3">
+                  <p>
+                    <span className="font-medium text-gray-700">2D MitoSpace</span> was developed using high-resolution confocal microscopy images combined with deep learning models to map mitochondrial morphologies.
+                  </p>
+                  <p>
+                    <span className="font-medium text-gray-700">4D MitoSpace</span> leverages Lattice Light-Sheet Microscopy (LLSM) to capture mitochondrial dynamics in four dimensions, combined with state-of-the-art AI to create a time-resolved atlas of mitochondrial phenotypes.
+                  </p>
+                </div>
+                <p>
+                  Both spaces were trained on data collected from Cal27 cell lines treated across 25 different drug conditions, enabling the model to capture a wide spectrum of mitochondrial behaviors under various perturbations.
+                </p>
+                <p>
+                  To ensure smooth and fast performance on the website, the data you see here has been downsampled and compressed compared to the original high-quality datasets used for training. If you are interested in accessing the full-resolution data, please feel free to contact us.
+                </p>
+                <p>
+                  The MitoSpace Explorer's integrated 3D visualizer lets you navigate through this phenotypic space, exploring how mitochondrial structures cluster and change based on different treatments. Whether you're a researcher, student, or simply curious, MitoSpace offers an accessible yet powerful way to interact with complex biological data.
+                </p>
+                <p>
+                  We are actively working to expand MitoSpace by adding more cell lines, drug conditions, and extending the atlas to organoid models in the future.
+                </p>
               </div>
-              <p className="text-gray-600 leading-relaxed">
-                3D Visualizer: Explore mitochondrial space in three dimensions and discover how different phenotypes cluster based on morphology and treatment.
-              </p>
-            </section>
-            
-            <section className="bg-white rounded-xl shadow-sm p-8 border border-gray-100 hover:shadow-md transition-shadow duration-200">
-              <div className="flex items-center mb-4">
-                <Award size={24} className="text-blue-500 mr-3" />
-                <h2 className="text-2xl font-semibold text-gray-800">Scientific Impact</h2>
-              </div>
-              <p className="text-gray-600 leading-relaxed">
-                MitoSpace Explorer provides a new way to study mitochondrial biology, offering insights into drug responses, disease mechanisms, and cell behavior across time and space.
-              </p>
-            </section>
-            
-            <section className="bg-white rounded-xl shadow-sm p-8 border border-gray-100 hover:shadow-md transition-shadow duration-200">
-              <div className="flex items-center mb-4">
-                <Rocket size={24} className="text-blue-500 mr-3" />
-                <h2 className="text-2xl font-semibold text-gray-800">Future Plans</h2>
-              </div>
-              <p className="text-gray-600 leading-relaxed">
-                We are working to scale up MitoSpace by adding more cell lines, drug treatments, and expanding into organoid models.
-              </p>
             </section>
             
             <section className="bg-white rounded-xl shadow-sm p-8 border border-gray-100 hover:shadow-md transition-shadow duration-200">
@@ -74,16 +66,15 @@ const About: React.FC = () => {
                 <h2 className="text-2xl font-semibold text-gray-800">Acknowledgments</h2>
               </div>
               <p className="text-gray-600 leading-relaxed">
-                Special thanks to the{' '}
+                This work was done by Dhruv Agarwal*, Zichen Wang*, Parth Natekar*, Hiroyuki Hakozaki, Andre Modolo, Mehul Arora, Siddharth Nahar, Manav Doshi, Gillian McMahon, and Johannes Schoeneberg from the{' '}
                 <a 
                   href="https://www.schoeneberglab.org/team" 
                   target="_blank" 
                   rel="noopener noreferrer"
                   className="text-blue-600 hover:text-blue-700 underline transition-colors duration-200"
                 >
-                  Schöneberg Lab Team
-                </a>
-                {' '}for their contributions to the development of MitoSpace Explorer.
+                  Schöneberg Lab
+                </a>.
               </p>
             </section>
           </div>

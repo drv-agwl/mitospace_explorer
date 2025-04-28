@@ -357,7 +357,7 @@ const Visualizer4D: React.FC = () => {
         )}
         
         {/* Zoom Controls */}
-        <div className="absolute top-4 right-4 flex flex-col space-y-2">
+        <div className="absolute top-4 right-4 flex flex-col space-y-2 group">
           <button 
             onClick={() => {
               if (cameraRef.current) {
@@ -420,7 +420,7 @@ const Visualizer4D: React.FC = () => {
           </button>
           
           {/* Zoom Level Indicator */}
-          <div className="bg-white bg-opacity-80 p-2 rounded-lg shadow-lg text-center text-xs text-gray-700 font-medium">
+          <div className="bg-white bg-opacity-80 p-2 rounded-lg shadow-lg text-center text-xs text-gray-700 font-medium opacity-0 group-hover:opacity-100 transition-opacity duration-200">
             <span>Zoom: {zoomLevel}%</span>
           </div>
           

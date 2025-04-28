@@ -25,7 +25,7 @@ interface SampleContextType {
 
 const defaultOptions: VisualizerOptions = {
   coloringMode: 'treatment',
-  pointSize: 1,
+  pointSize: 1.5,
   backgroundColor: '#ffffff', // White background as requested
   renderingMode: 'instanced',
   labelVisibility: 'selected',
