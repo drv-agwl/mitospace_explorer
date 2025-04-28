@@ -66,7 +66,7 @@ const About: React.FC = () => {
                 <h2 className="text-2xl font-semibold text-gray-800">Acknowledgments</h2>
               </div>
               <p className="text-gray-600 leading-relaxed">
-                This work was done by Dhruv Agarwal*, Zichen Wang*, Parth Natekar*, Hiroyuki Hakozaki, Andre Modolo, Mehul Arora, Siddharth Nahar, Manav Doshi, Gillian McMahon, and Johannes Schoeneberg from the{' '}
+                This work was done by Dhruv Agarwal*, Zichen Wang*, Parth Natekar*, Hiroyuki Hakozaki, Andre Modolo, Mehul Arora, Siddharth Nahar, Manav Doshi, Gillian McMahon, and Johannes Schöneberg from the{' '}
                 <a 
                   href="https://www.schoeneberglab.org/team" 
                   target="_blank" 
