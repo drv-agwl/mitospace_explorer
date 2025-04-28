@@ -164,27 +164,24 @@ const Visualizer2D: React.FC = () => {
     
     // Add specific wheel event handler for better trackpad pinch-to-zoom support
     const handleWheel = (event: WheelEvent) => {
-      // If ctrlKey is pressed, it's likely a pinch gesture on trackpad
-      if (event.ctrlKey || event.metaKey) {
-        event.preventDefault();
+      event.preventDefault();
+      
+      // Convert delta to zoom action
+      const delta = -event.deltaY;
+      const zoomSpeed = event.ctrlKey || event.metaKey ? 0.1 : 0.5; // Slower for trackpad, faster for mouse wheel
+      
+      if (cameraRef.current && controlsRef.current) {
+        const currentPos = cameraRef.current.position.clone();
+        const direction = new THREE.Vector3(0, 0, 0).sub(currentPos).normalize();
+        const zoomAmount = delta * zoomSpeed;
         
-        // Convert pinch delta to zoom action
-        const delta = -event.deltaY;
-        const zoomSpeed = 0.1; // Adjust this for sensitivity
+        // Apply zoom
+        cameraRef.current.position.addScaledVector(direction, zoomAmount);
+        controlsRef.current.update();
         
-        if (cameraRef.current && controlsRef.current) {
-          const currentPos = cameraRef.current.position.clone();
-          const direction = new THREE.Vector3(0, 0, 0).sub(currentPos).normalize();
-          const zoomAmount = delta * zoomSpeed;
-          
-          // Apply zoom
-          cameraRef.current.position.addScaledVector(direction, zoomAmount);
-          controlsRef.current.update();
-          
-          // Update zoom level UI
-          const distance = cameraRef.current.position.distanceTo(new THREE.Vector3(0, 0, 0));
-          setZoomLevel(100 - Math.min(Math.round((distance / 200) * 100), 95));
-        }
+        // Update zoom level UI
+        const distance = cameraRef.current.position.distanceTo(new THREE.Vector3(0, 0, 0));
+        setZoomLevel(100 - Math.min(Math.round((distance / 200) * 100), 95));
       }
     };
     
