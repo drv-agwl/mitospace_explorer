@@ -30,6 +30,7 @@ const Visualizer4D: React.FC = () => {
   const [fps, setFps] = useState(0);
   const [pointCount, setPointCount] = useState(0);
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   
   const currentSamples = filteredSamples4D.filter(
     sample => sample.t === currentTimepoint
@@ -91,6 +92,27 @@ const Visualizer4D: React.FC = () => {
     };
     
     controlsRef.current = controls;
+    
+    // Add control state monitors
+    controls.addEventListener('start', () => {
+      setIsDragging(true);
+    });
+    
+    controls.addEventListener('end', () => {
+      setIsDragging(false);
+    });
+    
+    controls.addEventListener('change', () => {
+      // Update zoom level for UI
+      if (cameraRef.current) {
+        const distance = camera.position.distanceTo(new THREE.Vector3(0, 0, 0));
+        const maxDistance = 300; // Match maxDistance from controls
+        const minDistance = 1; // Match minDistance from controls
+        const normalizedDistance = (distance - minDistance) / (maxDistance - minDistance);
+        const zoomPercentage = 100 - Math.min(Math.round(normalizedDistance * 100), 95);
+        setZoomLevel(zoomPercentage);
+      }
+    });
     
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
     scene.add(ambientLight);
@@ -161,7 +183,11 @@ const Visualizer4D: React.FC = () => {
           
           // Update zoom level UI
           const distance = cameraRef.current.position.distanceTo(new THREE.Vector3(0, 0, 0));
-          setZoomLevel(100 - Math.min(Math.round((distance / 200) * 100), 95));
+          const maxDistance = 300; // Match maxDistance from controls
+          const minDistance = 1; // Match minDistance from controls
+          const normalizedDistance = (distance - minDistance) / (maxDistance - minDistance);
+          const zoomPercentage = 100 - Math.min(Math.round(normalizedDistance * 100), 95);
+          setZoomLevel(zoomPercentage);
         }
       }
     };
