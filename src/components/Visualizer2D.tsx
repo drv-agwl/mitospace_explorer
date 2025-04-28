@@ -389,31 +389,30 @@ const Visualizer2D: React.FC = () => {
     
     let selected = false;
     
-    // Check instanced mesh
-    if (instancedMeshRef.current) {
-      const instanceIntersects = raycasterRef.current.intersectObject(instancedMeshRef.current);
-      
-      if (instanceIntersects.length > 0) {
-        const instanceId = instanceIntersects[0].instanceId;
-        if (instanceId !== undefined && instanceId < filteredSamples2D.length) {
-          const selectedSample = filteredSamples2D[instanceId];
-          setSelectedSample(selectedSample);
-          selected = true;
-        }
-      }
-    }
-    
-    // Check points (if instanced mesh not hit)
-    if (!selected && pointsRef.current) {
+    // Check points
+    if (pointsRef.current) {
       const pointIntersects = raycasterRef.current.intersectObject(pointsRef.current);
       
       if (pointIntersects.length > 0) {
         const index = pointIntersects[0].index;
         if (index !== undefined && index < filteredSamples2D.length) {
           const selectedSample = filteredSamples2D[index];
-          setSelectedSample(selectedSample);
+          console.log('Selected sample:', selectedSample); // Debug log
+          
+          // Ensure the sample has all required properties
+          if (selectedSample && selectedSample.treatment && selectedSample.color && selectedSample.color_phenotypic) {
+            setSelectedSample(selectedSample);
+            selected = true;
+          } else {
+            console.error('Invalid sample data:', selectedSample);
+          }
         }
       }
+    }
+    
+    // If no point was selected, clear the selection
+    if (!selected) {
+      setSelectedSample(null);
     }
   };
   

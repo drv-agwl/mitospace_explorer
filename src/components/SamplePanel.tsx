@@ -7,6 +7,8 @@ const SamplePanel: React.FC = () => {
   const [videoLoadError, setVideoLoadError] = useState<Record<number, boolean>>({});
   const [videoLoading, setVideoLoading] = useState<Record<number, boolean>>({});
   const [isPlaying, setIsPlaying] = useState(false);
+  const [imageLoadError, setImageLoadError] = useState<Record<number, boolean>>({});
+  const [imageLoading, setImageLoading] = useState<Record<number, boolean>>({});
   // No longer using tabs as per requirement
   const videoRefs = useRef<(HTMLVideoElement | null)[]>([]);
   
@@ -56,6 +58,19 @@ const SamplePanel: React.FC = () => {
     });
   };
 
+  const handleImageError = (index: number) => {
+    setImageLoadError(prev => ({ ...prev, [index]: true }));
+    setImageLoading(prev => ({ ...prev, [index]: false }));
+  };
+
+  const handleImageLoadStart = (index: number) => {
+    setImageLoading(prev => ({ ...prev, [index]: true }));
+  };
+
+  const handleImageLoad = (index: number) => {
+    setImageLoading(prev => ({ ...prev, [index]: false }));
+  };
+
   const getColorStyle = () => {
     if (!selectedSample) return {};
     
@@ -83,7 +98,7 @@ const SamplePanel: React.FC = () => {
   };
   
   return (
-    <div className="w-96 bg-white h-screen border-l border-gray-200 overflow-y-auto flex flex-col text-gray-800 sticky top-0 right-0 shadow-md">
+    <div className="w-[500px] bg-white h-screen border-l border-gray-200 overflow-y-auto flex flex-col text-gray-800 sticky top-0 right-0 shadow-md">
       {/* Header */}
       {selectedSample ? (
         <div 
@@ -320,13 +335,32 @@ const SamplePanel: React.FC = () => {
                   <div className="grid grid-cols-1 gap-4">
                     {selectedSample.images?.map((image, index) => (
                       <div key={index} className="bg-white rounded-lg overflow-hidden shadow-sm border border-gray-200">
-                        <div className="aspect-w-16 aspect-h-9 overflow-hidden">
-                          <img 
-                            src={image} 
-                            alt={`Sample image ${index + 1}`} 
-                            className="w-full h-auto object-cover transform transition-transform hover:scale-105"
-                            loading="lazy"
-                          />
+                        <div className="aspect-w-16 aspect-h-9 overflow-hidden relative">
+                          {imageLoadError[index] ? (
+                            <div className="absolute inset-0 flex items-center justify-center bg-gray-50 rounded-md">
+                              <div className="text-center text-gray-500">
+                                <Microscope size={24} className="mx-auto mb-2" />
+                                <p className="text-sm">Image unavailable</p>
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              <img 
+                                src={image} 
+                                alt={`Sample image ${index + 1}`} 
+                                className="w-full h-auto object-cover transform transition-transform hover:scale-105"
+                                loading="lazy"
+                                onError={() => handleImageError(index)}
+                                onLoadStart={() => handleImageLoadStart(index)}
+                                onLoad={() => handleImageLoad(index)}
+                              />
+                              {imageLoading[index] && (
+                                <div className="absolute inset-0 flex items-center justify-center bg-gray-50 bg-opacity-75 rounded-md">
+                                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                                </div>
+                              )}
+                            </>
+                          )}
                         </div>
                       </div>
                     ))}
