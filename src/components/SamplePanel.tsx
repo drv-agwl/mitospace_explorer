@@ -102,14 +102,14 @@ const SamplePanel: React.FC = () => {
       {/* Header */}
       {selectedSample ? (
         <div 
-          className="p-4 flex flex-col sticky top-0 z-10"
+          className="p-2 flex flex-col sticky top-0 z-10"
           style={{
             ...getColorStyle(),
             boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)'
           }}
         >
           <div className="flex justify-between items-start">
-            <h3 className={`text-xl font-bold ${getContrastColor()}`}>
+            <h3 className={`text-lg font-bold ${getContrastColor()}`}>
               {selectedSample.treatment.drug}
             </h3>
             <button 
@@ -117,33 +117,33 @@ const SamplePanel: React.FC = () => {
               className={`${getContrastColor()} opacity-80 hover:opacity-100 transition-opacity rounded-full p-1`}
               title="Close panel"
             >
-              <X size={18} />
+              <X size={16} />
             </button>
           </div>
           
           <div className={`mt-1 flex items-center ${getContrastColor()} opacity-90`}>
-            <MapPin size={14} className="mr-1" />
-            <span className="text-sm">
+            <MapPin size={12} className="mr-1" />
+            <span className="text-xs">
               Position: ({selectedSample.x.toFixed(2)}, {selectedSample.y.toFixed(2)}, {selectedSample.z.toFixed(2)})
             </span>
           </div>
           
-          <div className={`mt-3 flex ${getContrastColor()}`}>
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-opacity-25 bg-white">
+          <div className={`mt-2 flex ${getContrastColor()}`}>
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-opacity-25 bg-white">
               {selectedSample.phenotype}
             </span>
             {selectedSample.t !== undefined && (
-              <span className="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-opacity-25 bg-white">
-                <Clock size={12} className="mr-1" />
+              <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-opacity-25 bg-white">
+                <Clock size={10} className="mr-1" />
                 T{selectedSample.t}
               </span>
             )}
           </div>
         </div>
       ) : (
-        <div className="bg-white p-4 text-gray-800 sticky top-0 z-10 border-b border-gray-200">
-          <h3 className="text-lg font-semibold flex items-center">
-            <Microscope size={20} className="mr-2 text-blue-600" />
+        <div className="bg-white p-2 text-gray-800 sticky top-0 z-10 border-b border-gray-200">
+          <h3 className="text-base font-semibold flex items-center">
+            <Microscope size={16} className="mr-2 text-blue-600" />
             Sample Details
           </h3>
         </div>
@@ -152,11 +152,128 @@ const SamplePanel: React.FC = () => {
       {/* Content - All combined in one panel without tabs */}
       {selectedSample ? (
         <div className="flex-1 overflow-y-auto">
-          <div className="p-4 space-y-6">
+          <div className="p-2 space-y-4">
+            {/* Images/Videos Section - Moved to top */}
+            {(selectedSample.videos || selectedSample.images) && (
+              <div>
+                <h4 className="text-base font-medium text-gray-800 mb-2 border-b border-gray-200 pb-1 flex items-center justify-between">
+                  <div className="flex items-center">
+                    {selectedSample.videos ? (
+                      <>
+                        <Video size={16} className="mr-2 text-red-600" />
+                        4D Movie
+                      </>
+                    ) : (
+                      <>
+                        <Microscope size={16} className="mr-2 text-indigo-600" />
+                        Images
+                      </>
+                    )}
+                  </div>
+                  {selectedSample.videos && (
+                    <button
+                      onClick={togglePlayPause}
+                      className="flex items-center space-x-2 px-3 py-1 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-md hover:from-blue-700 hover:to-blue-800 transition-colors shadow text-sm"
+                    >
+                      {isPlaying ? (
+                        <>
+                          <Pause size={14} />
+                          <span>Pause</span>
+                        </>
+                      ) : (
+                        <>
+                          <Play size={14} />
+                          <span>Play</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                </h4>
+                
+                {selectedSample.videos ? (
+                  <div className="space-y-3">
+                    {/* Videos */}
+                    {selectedSample.videos.map((video, index) => (
+                      <div key={index} className="bg-white rounded-lg overflow-hidden shadow-sm border border-gray-200">
+                        <div className="relative pb-[75%] h-0">
+                          {videoLoadError[index] ? (
+                            <div className="absolute inset-0 flex items-center justify-center bg-gray-50 rounded-md">
+                              <div className="text-center text-gray-500">
+                                <Video size={20} className="mx-auto mb-1" />
+                                <p className="text-xs">Video unavailable</p>
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              <video
+                                ref={el => videoRefs.current[index] = el}
+                                key={video}
+                                preload="metadata"
+                                className="absolute top-0 left-0 w-full h-full rounded-md object-cover"
+                                onError={() => handleVideoError(index)}
+                                onLoadStart={() => handleVideoLoadStart(index)}
+                                onCanPlay={() => handleVideoCanPlay(index)}
+                                onTimeUpdate={handleTimeUpdate}
+                                onEnded={handleVideoEnded}
+                                controls={false}
+                              >
+                                <source src={video} type="video/mp4" />
+                                Your browser does not support the video tag.
+                              </video>
+                              {videoLoading[index] && (
+                                <div className="absolute inset-0 flex items-center justify-center bg-gray-50 bg-opacity-75 rounded-md">
+                                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  // Render images for 2D samples
+                  <div className="grid grid-cols-1 gap-3">
+                    {selectedSample.images?.map((image, index) => (
+                      <div key={index} className="bg-white rounded-lg overflow-hidden shadow-sm border border-gray-200">
+                        <div className="aspect-w-16 aspect-h-9 overflow-hidden relative">
+                          {imageLoadError[index] ? (
+                            <div className="absolute inset-0 flex items-center justify-center bg-gray-50 rounded-md">
+                              <div className="text-center text-gray-500">
+                                <Microscope size={20} className="mx-auto mb-1" />
+                                <p className="text-xs">Image unavailable</p>
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              <img 
+                                src={image} 
+                                alt={`Sample image ${index + 1}`} 
+                                className="w-full h-auto object-cover transform transition-transform hover:scale-105"
+                                loading="lazy"
+                                onError={() => handleImageError(index)}
+                                onLoadStart={() => handleImageLoadStart(index)}
+                                onLoad={() => handleImageLoad(index)}
+                              />
+                              {imageLoading[index] && (
+                                <div className="absolute inset-0 flex items-center justify-center bg-gray-50 bg-opacity-75 rounded-md">
+                                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Treatment Info */}
             <div>
-              <h4 className="text-xl font-medium text-gray-800 mb-3 border-b border-gray-200 pb-2 flex items-center">
-                <Pill size={18} className="mr-2 text-blue-600" />
+              <h4 className="text-base font-medium text-gray-800 mb-2 border-b border-gray-200 pb-1 flex items-center">
+                <Pill size={16} className="mr-2 text-blue-600" />
                 Treatment Data
               </h4>
               <div className="bg-white rounded-lg overflow-hidden shadow-sm border border-gray-200">
@@ -208,9 +325,9 @@ const SamplePanel: React.FC = () => {
 
             {/* Color Info */}
             <div>
-              <h4 className="text-xl font-medium text-gray-800 mb-3 border-b border-gray-200 pb-2 flex items-center">
+              <h4 className="text-base font-medium text-gray-800 mb-2 border-b border-gray-200 pb-1 flex items-center">
                 <span className="text-purple-600 mr-2">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                     <path d="M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z" fill="currentColor" fillOpacity="0.2" />
                     <path d="M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
@@ -252,128 +369,11 @@ const SamplePanel: React.FC = () => {
               </div>
             </div>
 
-            {/* Images/Videos Section */}
-            {(selectedSample.videos || selectedSample.images) && (
-              <div>
-                <h4 className="text-xl font-medium text-gray-800 mb-3 border-b border-gray-200 pb-2 flex items-center justify-between">
-                  <div className="flex items-center">
-                    {selectedSample.videos ? (
-                      <>
-                        <Video size={18} className="mr-2 text-red-600" />
-                        4D Movie
-                      </>
-                    ) : (
-                      <>
-                        <Microscope size={18} className="mr-2 text-indigo-600" />
-                        Images
-                      </>
-                    )}
-                  </div>
-                  {selectedSample.videos && (
-                    <button
-                      onClick={togglePlayPause}
-                      className="flex items-center space-x-2 px-4 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-md hover:from-blue-700 hover:to-blue-800 transition-colors shadow"
-                    >
-                      {isPlaying ? (
-                        <>
-                          <Pause size={16} />
-                          <span>Pause</span>
-                        </>
-                      ) : (
-                        <>
-                          <Play size={16} />
-                          <span>Play</span>
-                        </>
-                      )}
-                    </button>
-                  )}
-                </h4>
-                
-                {selectedSample.videos ? (
-                  <div className="space-y-6">
-                    {/* Videos */}
-                    {selectedSample.videos.map((video, index) => (
-                      <div key={index} className="bg-white rounded-lg overflow-hidden shadow-sm border border-gray-200">
-                        <div className="relative pb-[75%] h-0">
-                          {videoLoadError[index] ? (
-                            <div className="absolute inset-0 flex items-center justify-center bg-gray-50 rounded-md">
-                              <div className="text-center text-gray-500">
-                                <Video size={24} className="mx-auto mb-2" />
-                                <p className="text-sm">Video unavailable</p>
-                              </div>
-                            </div>
-                          ) : (
-                            <>
-                              <video
-                                ref={el => videoRefs.current[index] = el}
-                                key={video}
-                                preload="metadata"
-                                className="absolute top-0 left-0 w-full h-full rounded-md object-cover"
-                                onError={() => handleVideoError(index)}
-                                onLoadStart={() => handleVideoLoadStart(index)}
-                                onCanPlay={() => handleVideoCanPlay(index)}
-                                onTimeUpdate={handleTimeUpdate}
-                                onEnded={handleVideoEnded}
-                                controls={false}
-                              >
-                                <source src={video} type="video/mp4" />
-                                Your browser does not support the video tag.
-                              </video>
-                              {videoLoading[index] && (
-                                <div className="absolute inset-0 flex items-center justify-center bg-gray-50 bg-opacity-75 rounded-md">
-                                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-                                </div>
-                              )}
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  // Render images for 2D samples
-                  <div className="grid grid-cols-1 gap-4">
-                    {selectedSample.images?.map((image, index) => (
-                      <div key={index} className="bg-white rounded-lg overflow-hidden shadow-sm border border-gray-200">
-                        <div className="aspect-w-16 aspect-h-9 overflow-hidden relative">
-                          {imageLoadError[index] ? (
-                            <div className="absolute inset-0 flex items-center justify-center bg-gray-50 rounded-md">
-                              <div className="text-center text-gray-500">
-                                <Microscope size={24} className="mx-auto mb-2" />
-                                <p className="text-sm">Image unavailable</p>
-                              </div>
-                            </div>
-                          ) : (
-                            <>
-                              <img 
-                                src={image} 
-                                alt={`Sample image ${index + 1}`} 
-                                className="w-full h-auto object-cover transform transition-transform hover:scale-105"
-                                loading="lazy"
-                                onError={() => handleImageError(index)}
-                                onLoadStart={() => handleImageLoadStart(index)}
-                                onLoad={() => handleImageLoad(index)}
-                              />
-                              {imageLoading[index] && (
-                                <div className="absolute inset-0 flex items-center justify-center bg-gray-50 bg-opacity-75 rounded-md">
-                                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-                                </div>
-                              )}
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
             {/* Color Legend */}
             <div>
-              <h4 className="text-xl font-medium text-gray-800 mb-3 border-b border-gray-200 pb-2 flex items-center">
+              <h4 className="text-base font-medium text-gray-800 mb-2 border-b border-gray-200 pb-1 flex items-center">
                 <span className="text-purple-600 mr-2">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                     <path d="M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z" fill="currentColor" fillOpacity="0.2" />
                     <path d="M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
@@ -396,8 +396,8 @@ const SamplePanel: React.FC = () => {
             
             {/* Metadata */}
             <div>
-              <h4 className="text-xl font-medium text-gray-800 mb-3 border-b border-gray-200 pb-2 flex items-center">
-                <Cpu size={18} className="mr-2 text-orange-600" />
+              <h4 className="text-base font-medium text-gray-800 mb-2 border-b border-gray-200 pb-1 flex items-center">
+                <Cpu size={16} className="mr-2 text-orange-600" />
                 Metadata
               </h4>
               

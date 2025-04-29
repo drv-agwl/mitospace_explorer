@@ -25,7 +25,7 @@ const Visualizer2D: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [showHelp, setShowHelp] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
-  const [zoomLevel, setZoomLevel] = useState(44);
+  const [zoomLevel, setZoomLevel] = useState(54);
   const [fps, setFps] = useState(0);
   const [pointCount, setPointCount] = useState(0);
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
@@ -234,6 +234,16 @@ const Visualizer2D: React.FC = () => {
     };
   }, [visualizerOptions.backgroundColor]);
   
+  // Set default selected sample with "control" when the component mounts
+  useEffect(() => {
+    if (filteredSamples2D.length > 0 && !selectedSample) {
+      const defaultSample = filteredSamples2D.find(sample => sample.phenotype === 'control');
+      if (defaultSample) {
+        setSelectedSample(defaultSample);
+      }
+    }
+  }, [filteredSamples2D, selectedSample, setSelectedSample]);
+  
   // Generate instanced mesh for large datasets
   const createInstancedMesh = useMemo(() => {
     return (samples: any[], scaleFactor: number) => {
@@ -374,7 +384,7 @@ const Visualizer2D: React.FC = () => {
     // Update camera and controls target to match the new center
     if (cameraRef.current && controlsRef.current) {
       // Update camera position relative to new center
-      const cameraOffset = new THREE.Vector3(56.8, 56.8, 56.8);
+      const cameraOffset = new THREE.Vector3(46.8, 46.8, 46.8);
       cameraRef.current.position.copy(center).add(cameraOffset);
       cameraRef.current.lookAt(center);
       
@@ -468,7 +478,7 @@ const Visualizer2D: React.FC = () => {
       
       if (pointIntersects.length > 0) {
         const index = pointIntersects[0].index;
-        if (index !== undefined && index < filteredSamples2D.length) {
+        if (typeof index === 'number' && index < filteredSamples2D.length) {
           const selectedSample = filteredSamples2D[index];
           
           // Ensure the sample has all required properties
@@ -531,7 +541,7 @@ const Visualizer2D: React.FC = () => {
     
     // Animate to home position
     const startPosition = cameraRef.current.position.clone();
-    const endPosition = new THREE.Vector3(25, 25, 25);
+    const endPosition = new THREE.Vector3(56.8, 56.8, 56.8);
     const duration = 1000;
     const startTime = Date.now();
     

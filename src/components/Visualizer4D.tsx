@@ -457,6 +457,16 @@ const Visualizer4D: React.FC = () => {
     return texture;
   };
   
+  // Set default selected sample with "control" when the component mounts
+  useEffect(() => {
+    if (filteredSamples4D.length > 0 && !selectedSample) {
+      const defaultSample = filteredSamples4D.find(sample => sample.phenotype === 'control');
+      if (defaultSample) {
+        setSelectedSample(defaultSample);
+      }
+    }
+  }, [filteredSamples4D, selectedSample, setSelectedSample]);
+  
   return (
     <div className="bg-white shadow-md overflow-hidden h-full border border-gray-200">
       <div className="p-3 bg-white border-b border-gray-200">
