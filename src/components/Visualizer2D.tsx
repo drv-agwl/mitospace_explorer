@@ -25,12 +25,13 @@ const Visualizer2D: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [showHelp, setShowHelp] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
-  const [zoomLevel, setZoomLevel] = useState(54);
+  const [zoomLevel, setZoomLevel] = useState(44);
   const [fps, setFps] = useState(0);
   const [pointCount, setPointCount] = useState(0);
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
   const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
   const [selectedPointMesh, setSelectedPointMesh] = useState<THREE.Mesh | null>(null);
+  const isFirstLoad = useRef(true);
 
   // For controls tracking
   const [isPanning, setIsPanning] = useState(false);
@@ -383,10 +384,12 @@ const Visualizer2D: React.FC = () => {
     
     // Update camera and controls target to match the new center
     if (cameraRef.current && controlsRef.current) {
-      // Update camera position relative to new center
-      const cameraOffset = new THREE.Vector3(46.8, 46.8, 46.8);
-      cameraRef.current.position.copy(center).add(cameraOffset);
-      cameraRef.current.lookAt(center);
+      // Only update camera position if it hasn't been set yet
+      if (!cameraRef.current.position.length()) {
+        const cameraOffset = new THREE.Vector3(56.8, 56.8, 56.8);
+        cameraRef.current.position.copy(center).add(cameraOffset);
+        cameraRef.current.lookAt(center);
+      }
       
       // Update controls target
       controlsRef.current.target.copy(center);
