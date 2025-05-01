@@ -452,9 +452,9 @@ const Visualizer2D: React.FC = () => {
   return (
     <div className="bg-white shadow-md overflow-hidden h-full border border-gray-200">
       {/* Mobile Warning Message */}
-      <div className="md:hidden bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4" role="alert">
-        <p className="font-bold">Desktop Recommended</p>
-        <p>For the best experience, please view this visualization on a desktop device.</p>
+      <div className="lg:hidden bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 sticky top-0 z-50" role="alert">
+        <p className="font-bold text-base">Desktop Recommended</p>
+        <p className="text-sm">For the best experience, please view this visualization on a desktop device.</p>
       </div>
 
       <div className="p-3 bg-white border-b border-gray-200">
