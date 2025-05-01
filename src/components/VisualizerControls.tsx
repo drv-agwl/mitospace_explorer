@@ -50,7 +50,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type }) => {
               className="w-4 h-4 text-blue-600 focus:ring-blue-500"
             />
             <label htmlFor="treatment" className="ml-2 text-sm text-gray-700">
-              Drug Coloring
+              Drug
             </label>
           </div>
           <div className="flex items-center">
@@ -64,7 +64,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type }) => {
               className="w-4 h-4 text-blue-600 focus:ring-blue-500"
             />
             <label htmlFor="phenotype" className="ml-2 text-sm text-gray-700">
-              Phenotypic Category
+              Phenotype
             </label>
           </div>
         </div>

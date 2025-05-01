@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { useSample } from '../context/SampleContext';
@@ -18,24 +18,21 @@ const Visualizer2D: React.FC = () => {
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
   const pointsRef = useRef<THREE.Points | null>(null);
-  const instancedMeshRef = useRef<THREE.InstancedMesh | null>(null);
   const raycasterRef = useRef<THREE.Raycaster>(new THREE.Raycaster());
   const mouseRef = useRef<THREE.Vector2>(new THREE.Vector2());
   
   const [isLoading, setIsLoading] = useState(true);
   const [showHelp, setShowHelp] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
-  const [zoomLevel, setZoomLevel] = useState(44);
+  const [zoomLevel, setZoomLevel] = useState(46);
   const [fps, setFps] = useState(0);
   const [pointCount, setPointCount] = useState(0);
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
-  const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
   const [selectedPointMesh, setSelectedPointMesh] = useState<THREE.Mesh | null>(null);
-  const isFirstLoad = useRef(true);
 
-  // For controls tracking
-  const [isPanning, setIsPanning] = useState(false);
-  const [isRotating, setIsRotating] = useState(false);
+  const toggleHelp = () => {
+    setShowHelp(!showHelp);
+  };
 
   // Add this function to create a highlight mesh
   const createHighlightMesh = (position: THREE.Vector3, color: THREE.Color) => {
@@ -87,7 +84,6 @@ const Visualizer2D: React.FC = () => {
       alpha: true,
       powerPreference: 'high-performance'
     });
-    
     renderer.setSize(containerRef.current.clientWidth, containerRef.current.clientHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     containerRef.current.appendChild(renderer.domElement);
@@ -114,39 +110,41 @@ const Visualizer2D: React.FC = () => {
       TWO: THREE.TOUCH.DOLLY_PAN
     };
     
+    controlsRef.current = controls;
+    
+    // Set initial camera position
+    camera.position.set(73.5, 73.5, 73.5);
+    camera.lookAt(0, 0, 0);
+    controls.target.set(0, 0, 0);
+    controls.update();
+    
     // Add control state monitors
     controls.addEventListener('start', () => {
-      const state = controls.getState();
-      if (state === 'ROTATE') setIsRotating(true);
-      if (state === 'PAN') setIsPanning(true);
       setIsDragging(true);
     });
     
     controls.addEventListener('end', () => {
       setIsDragging(false);
-      setIsRotating(false);
-      setIsPanning(false);
     });
     
     controls.addEventListener('change', () => {
       // Update zoom level for UI
       if (cameraRef.current) {
         const distance = camera.position.distanceTo(new THREE.Vector3(0, 0, 0));
-        setZoomLevel(100 - Math.min(Math.round((distance / 200) * 100), 95));
+        const maxDistance = 300; // Match maxDistance from controls
+        const minDistance = 1; // Match minDistance from controls
+        const normalizedDistance = (distance - minDistance) / (maxDistance - minDistance);
+        const zoomPercentage = 100 - Math.min(Math.round(normalizedDistance * 100), 95);
+        setZoomLevel(zoomPercentage);
       }
     });
     
-    controlsRef.current = controls;
-    
-    // Lighting setup
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
     scene.add(ambientLight);
     
     const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
     directionalLight.position.set(1, 1, 1);
     scene.add(directionalLight);
-    
-    // Grid and axes helpers removed as requested
     
     // FPS counter setup
     let frameCount = 0;
@@ -191,24 +189,31 @@ const Visualizer2D: React.FC = () => {
     
     // Add specific wheel event handler for better trackpad pinch-to-zoom support
     const handleWheel = (event: WheelEvent) => {
-      event.preventDefault();
-      
-      // Convert delta to zoom action
-      const delta = -event.deltaY;
-      const zoomSpeed = event.ctrlKey || event.metaKey ? 0.1 : 0.5; // Slower for trackpad, faster for mouse wheel
-      
-      if (cameraRef.current && controlsRef.current) {
-        const currentPos = cameraRef.current.position.clone();
-        const direction = new THREE.Vector3(0, 0, 0).sub(currentPos).normalize();
-        const zoomAmount = delta * zoomSpeed;
+      // If ctrlKey is pressed, it's likely a pinch gesture on trackpad
+      if (event.ctrlKey || event.metaKey) {
+        event.preventDefault();
         
-        // Apply zoom
-        cameraRef.current.position.addScaledVector(direction, zoomAmount);
-        controlsRef.current.update();
+        // Convert pinch delta to zoom action
+        const delta = -event.deltaY;
+        const zoomSpeed = 0.1; // Adjust this for sensitivity
         
-        // Update zoom level UI
-        const distance = cameraRef.current.position.distanceTo(new THREE.Vector3(0, 0, 0));
-        setZoomLevel(100 - Math.min(Math.round((distance / 200) * 100), 95));
+        if (cameraRef.current && controlsRef.current) {
+          const currentPos = cameraRef.current.position.clone();
+          const direction = new THREE.Vector3(0, 0, 0).sub(currentPos).normalize();
+          const zoomAmount = delta * zoomSpeed;
+          
+          // Apply zoom
+          cameraRef.current.position.addScaledVector(direction, zoomAmount);
+          controlsRef.current.update();
+          
+          // Update zoom level UI
+          const distance = cameraRef.current.position.distanceTo(new THREE.Vector3(0, 0, 0));
+          const maxDistance = 300; // Match maxDistance from controls
+          const minDistance = 1; // Match minDistance from controls
+          const normalizedDistance = (distance - minDistance) / (maxDistance - minDistance);
+          const zoomPercentage = 100 - Math.min(Math.round(normalizedDistance * 100), 95);
+          setZoomLevel(zoomPercentage);
+        }
       }
     };
     
@@ -228,85 +233,9 @@ const Visualizer2D: React.FC = () => {
       if (pointsRef.current && sceneRef.current) {
         sceneRef.current.remove(pointsRef.current);
       }
-      
-      if (instancedMeshRef.current && sceneRef.current) {
-        sceneRef.current.remove(instancedMeshRef.current);
-      }
     };
   }, [visualizerOptions.backgroundColor]);
-  
-  // Set default selected sample with "control" when the component mounts
-  useEffect(() => {
-    if (filteredSamples2D.length > 0 && !selectedSample) {
-      const defaultSample = filteredSamples2D.find(sample => sample.phenotype === 'control');
-      if (defaultSample) {
-        setSelectedSample(defaultSample);
-      }
-    }
-  }, [filteredSamples2D, selectedSample, setSelectedSample]);
-  
-  // Generate instanced mesh for large datasets
-  const createInstancedMesh = useMemo(() => {
-    return (samples: any[], scaleFactor: number) => {
-      if (!sceneRef.current) return null;
-      
-      // Use sphere geometry for better quality points
-      const sphereGeometry = new THREE.SphereGeometry(0.2, 8, 6);
-      const material = new THREE.MeshPhongMaterial({
-        vertexColors: true,
-        emissive: new THREE.Color(0x111111),
-        shininess: 60
-      });
-      
-      const instancedMesh = new THREE.InstancedMesh(
-        sphereGeometry,
-        material,
-        samples.length
-      );
-      
-      const dummy = new THREE.Object3D();
-      const color = new THREE.Color();
-      
-      samples.forEach((sample, i) => {
-        // Position
-        dummy.position.set(
-          sample.x * scaleFactor,
-          sample.y * scaleFactor,
-          sample.z * scaleFactor
-        );
-        
-        // Scale based on point size
-        const scale = visualizerOptions.pointSize / 5;
-        dummy.scale.set(scale, scale, scale);
-        
-        dummy.updateMatrix();
-        instancedMesh.setMatrixAt(i, dummy.matrix);
-        
-        // Color
-        if (visualizerOptions.coloringMode === 'phenotype') {
-          color.set(
-            sample.color_phenotypic.r,
-            sample.color_phenotypic.g,
-            sample.color_phenotypic.b
-          );
-        } else {
-          color.set(
-            sample.color.r,
-            sample.color.g,
-            sample.color.b
-          );
-        }
-        
-        instancedMesh.setColorAt(i, color);
-      });
-      
-      instancedMesh.instanceMatrix.needsUpdate = true;
-      if (instancedMesh.instanceColor) instancedMesh.instanceColor.needsUpdate = true;
-      
-      return instancedMesh;
-    };
-  }, [visualizerOptions.pointSize, visualizerOptions.coloringMode]);
-  
+
   // Update visualization when samples or options change
   useEffect(() => {
     if (!sceneRef.current || !filteredSamples2D || !Array.isArray(filteredSamples2D) || filteredSamples2D.length === 0) return;
@@ -345,15 +274,15 @@ const Visualizer2D: React.FC = () => {
       let color;
       if (visualizerOptions.coloringMode === 'phenotype') {
         color = new THREE.Color(
-          sample.color_phenotypic.r,
-          sample.color_phenotypic.g,
-          sample.color_phenotypic.b
+          sample.color_phenotypic?.r ?? 0,
+          sample.color_phenotypic?.g ?? 0,
+          sample.color_phenotypic?.b ?? 0
         );
       } else {
         color = new THREE.Color(
-          sample.color.r,
-          sample.color.g,
-          sample.color.b
+          sample.color?.r ?? 0,
+          sample.color?.g ?? 0,
+          sample.color?.b ?? 0
         );
       }
       
@@ -384,20 +313,14 @@ const Visualizer2D: React.FC = () => {
     
     // Update camera and controls target to match the new center
     if (cameraRef.current && controlsRef.current) {
-      // Only update camera position if it hasn't been set yet
-      if (!cameraRef.current.position.length()) {
-        const cameraOffset = new THREE.Vector3(56.8, 56.8, 56.8);
-        cameraRef.current.position.copy(center).add(cameraOffset);
-        cameraRef.current.lookAt(center);
+      const currentSamples = filteredSamples2D;
+      if (currentSamples.length > 0) {
+        // No camera or controls updates here to prevent resets
       }
-      
-      // Update controls target
-      controlsRef.current.target.copy(center);
-      controlsRef.current.update();
     }
     
     // Update highlight position if there's a selected point
-    if (selectedPointIndex !== null && selectedSample) {
+    if (selectedSample) {
       const position = new THREE.Vector3(
         (selectedSample.x - center.x) * scaleFactor,
         (selectedSample.y - center.y) * scaleFactor,
@@ -408,23 +331,87 @@ const Visualizer2D: React.FC = () => {
       let color;
       if (visualizerOptions.coloringMode === 'phenotype') {
         color = new THREE.Color(
-          selectedSample.color_phenotypic.r,
-          selectedSample.color_phenotypic.g,
-          selectedSample.color_phenotypic.b
+          selectedSample.color_phenotypic?.r ?? 0,
+          selectedSample.color_phenotypic?.g ?? 0,
+          selectedSample.color_phenotypic?.b ?? 0
         );
       } else {
         color = new THREE.Color(
-          selectedSample.color.r,
-          selectedSample.color.g,
-          selectedSample.color.b
+          selectedSample.color?.r ?? 0,
+          selectedSample.color?.g ?? 0,
+          selectedSample.color?.b ?? 0
         );
       }
       
       createHighlightMesh(position, color);
     }
     
-  }, [filteredSamples2D, visualizerOptions, selectedPointIndex, selectedSample]);
-  
+  }, [filteredSamples2D, visualizerOptions, selectedSample]);
+
+  // Set default selected sample with "control" when the component mounts
+  useEffect(() => {
+    if (filteredSamples2D.length > 0 && !selectedSample) {
+      const defaultSample = filteredSamples2D.find(sample => sample.phenotype === 'control');
+      if (defaultSample) {
+        setSelectedSample(defaultSample);
+      }
+    }
+  }, [filteredSamples2D]); // Only depend on filteredSamples2D to prevent reset on empty space click
+
+  // Handle point selection with raycaster
+  const handleClick = (event: React.MouseEvent) => {
+    if (!containerRef.current || !cameraRef.current || !pointsRef.current) return;
+    if (isDragging) return; // Don't select when dragging
+    
+    const rect = containerRef.current.getBoundingClientRect();
+    mouseRef.current.x = ((event.clientX - rect.left) / containerRef.current.clientWidth) * 2 - 1;
+    mouseRef.current.y = -((event.clientY - rect.top) / containerRef.current.clientHeight) * 2 + 1;
+    
+    raycasterRef.current.setFromCamera(mouseRef.current, cameraRef.current);
+    
+    const intersects = raycasterRef.current.intersectObject(pointsRef.current);
+    
+    if (intersects.length > 0) {
+      const index = intersects[0].index;
+      if (typeof index === 'number' && index < filteredSamples2D.length) {
+        setLastSelectedIndex(index);
+        const selectedSample = filteredSamples2D[index];
+        setSelectedSample(selectedSample);
+
+        // Create highlight at the selected point's position
+        const center = new THREE.Vector3();
+        filteredSamples2D.forEach(sample => {
+          center.add(new THREE.Vector3(sample.x, sample.y, sample.z));
+        });
+        center.divideScalar(filteredSamples2D.length);
+        
+        const position = new THREE.Vector3(
+          (selectedSample.x - center.x) * 4,
+          (selectedSample.y - center.y) * 4,
+          (selectedSample.z - center.z) * 4
+        );
+
+        // Get the color based on the current coloring mode
+        let color;
+        if (visualizerOptions.coloringMode === 'phenotype') {
+          color = new THREE.Color(
+            selectedSample.color_phenotypic?.r ?? 0,
+            selectedSample.color_phenotypic?.g ?? 0,
+            selectedSample.color_phenotypic?.b ?? 0
+          );
+        } else {
+          color = new THREE.Color(
+            selectedSample.color?.r ?? 0,
+            selectedSample.color?.g ?? 0,
+            selectedSample.color?.b ?? 0
+          );
+        }
+        
+        createHighlightMesh(position, color);
+      }
+    }
+  };
+
   // Generate circular point texture for better-looking points
   const generatePointTexture = () => {
     const canvas = document.createElement('canvas');
@@ -461,130 +448,15 @@ const Visualizer2D: React.FC = () => {
     
     return texture;
   };
-  
-  // Handle point selection with raycaster
-  const handleClick = (event: React.MouseEvent) => {
-    if (!containerRef.current || !cameraRef.current || !sceneRef.current || !filteredSamples2D) return;
-    if (isDragging) return; // Don't select when dragging
-    
-    const rect = containerRef.current.getBoundingClientRect();
-    mouseRef.current.x = ((event.clientX - rect.left) / containerRef.current.clientWidth) * 2 - 1;
-    mouseRef.current.y = -((event.clientY - rect.top) / containerRef.current.clientHeight) * 2 + 1;
-    
-    raycasterRef.current.setFromCamera(mouseRef.current, cameraRef.current);
-    
-    let selected = false;
-    
-    // Check points
-    if (pointsRef.current) {
-      const pointIntersects = raycasterRef.current.intersectObject(pointsRef.current);
-      
-      if (pointIntersects.length > 0) {
-        const index = pointIntersects[0].index;
-        if (typeof index === 'number' && index < filteredSamples2D.length) {
-          const selectedSample = filteredSamples2D[index];
-          
-          // Ensure the sample has all required properties
-          if (selectedSample && selectedSample.treatment && selectedSample.color && selectedSample.color_phenotypic) {
-            setSelectedSample(selectedSample);
-            selected = true;
-            
-            // Create highlight at the selected point's position
-            const center = new THREE.Vector3();
-            filteredSamples2D.forEach(sample => {
-              center.add(new THREE.Vector3(sample.x, sample.y, sample.z));
-            });
-            center.divideScalar(filteredSamples2D.length);
-            
-            const position = new THREE.Vector3(
-              (selectedSample.x - center.x) * 4,
-              (selectedSample.y - center.y) * 4,
-              (selectedSample.z - center.z) * 4
-            );
 
-            // Get the color based on the current coloring mode
-            let color;
-            if (visualizerOptions.coloringMode === 'phenotype') {
-              color = new THREE.Color(
-                selectedSample.color_phenotypic.r,
-                selectedSample.color_phenotypic.g,
-                selectedSample.color_phenotypic.b
-              );
-            } else {
-              color = new THREE.Color(
-                selectedSample.color.r,
-                selectedSample.color.g,
-                selectedSample.color.b
-              );
-            }
-            
-            createHighlightMesh(position, color);
-            setSelectedPointIndex(index);
-          } else {
-            console.error('Invalid sample data:', selectedSample);
-          }
-        }
-      }
-    }
-    
-    // If no point was selected, clear the selection
-    if (!selected) {
-      setSelectedSample(null);
-      if (selectedPointMesh && sceneRef.current) {
-        sceneRef.current.remove(selectedPointMesh);
-        setSelectedPointMesh(null);
-      }
-      setSelectedPointIndex(null);
-    }
-  };
-  
-  // Handle control buttons
-  const handleResetCamera = () => {
-    if (!cameraRef.current || !controlsRef.current) return;
-    
-    // Animate to home position
-    const startPosition = cameraRef.current.position.clone();
-    const endPosition = new THREE.Vector3(56.8, 56.8, 56.8);
-    const duration = 1000;
-    const startTime = Date.now();
-    
-    const animate = () => {
-      const now = Date.now();
-      const elapsed = now - startTime;
-      const t = Math.min(elapsed / duration, 1);
-      const easeT = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; // Ease in-out
-      
-      cameraRef.current!.position.lerpVectors(startPosition, endPosition, easeT);
-      cameraRef.current!.lookAt(new THREE.Vector3(0, 0, 0));
-      
-      if (t < 1) {
-        requestAnimationFrame(animate);
-      } else {
-        // Reset controls target to origin
-        controlsRef.current!.target.set(0, 0, 0);
-        controlsRef.current!.update();
-      }
-    };
-    
-    animate();
-  };
-  
-  // Toggle help overlay
-  const toggleHelp = () => {
-    setShowHelp(!showHelp);
-  };
-  
-  // Clean up highlight when component unmounts
-  useEffect(() => {
-    return () => {
-      if (selectedPointMesh && sceneRef.current) {
-        sceneRef.current.remove(selectedPointMesh);
-      }
-    };
-  }, [selectedPointMesh]);
-  
   return (
     <div className="bg-white shadow-md overflow-hidden h-full border border-gray-200">
+      {/* Mobile Warning Message */}
+      <div className="md:hidden bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4" role="alert">
+        <p className="font-bold">Desktop Recommended</p>
+        <p>For the best experience, please view this visualization on a desktop device.</p>
+      </div>
+
       <div className="p-3 bg-white border-b border-gray-200">
         <VisualizerControls type="2d" />
       </div>
@@ -600,10 +472,19 @@ const Visualizer2D: React.FC = () => {
           </div>
         )}
         
-        {/* Control Panel */}
+        {/* Zoom Controls */}
         <div className="absolute top-4 right-4 flex flex-col space-y-2 group">
           <button 
-            onClick={handleResetCamera}
+            onClick={() => {
+              if (cameraRef.current) {
+                cameraRef.current.position.set(25, 25, 25);
+                cameraRef.current.lookAt(new THREE.Vector3(0, 0, 0));
+                if (controlsRef.current) {
+                  controlsRef.current.target.set(0, 0, 0);
+                  controlsRef.current.update();
+                }
+              }
+            }}
             className="bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-lg shadow-lg w-10 h-10 flex items-center justify-center transition-all"
             title="Reset Camera"
           >
@@ -673,7 +554,7 @@ const Visualizer2D: React.FC = () => {
         </div>
         
         {/* Status Panel */}
-        <div className="absolute bottom-20 left-4 bg-white bg-opacity-90 text-gray-800 text-xs p-2 border border-gray-300 rounded shadow">
+        <div className="absolute bottom-4 left-4 bg-white bg-opacity-90 text-gray-800 text-xs p-2 border border-gray-300 rounded shadow">
           <div className="flex items-center space-x-2">
             <div className={`h-2 w-2 rounded-full ${fps > 30 ? 'bg-green-500' : fps > 15 ? 'bg-yellow-500' : 'bg-red-500'}`}></div>
             <span>{fps} FPS</span>
@@ -686,9 +567,9 @@ const Visualizer2D: React.FC = () => {
         
         {/* Help Overlay */}
         {showHelp && (
-          <div className="absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center" onClick={toggleHelp}>
-            <div className="bg-gray-800 p-6 rounded-xl shadow-2xl max-w-md" onClick={e => e.stopPropagation()}>
-              <h3 className="text-xl font-bold text-white mb-4">Navigation Controls</h3>
+          <div className="absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4" onClick={toggleHelp}>
+            <div className="bg-gray-800 p-4 md:p-6 rounded-xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+              <h3 className="text-lg md:text-xl font-bold text-white mb-4">Navigation Controls</h3>
               
               <div className="text-gray-300 space-y-3">
                 <div className="flex items-start">
