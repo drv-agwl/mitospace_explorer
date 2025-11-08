@@ -32,6 +32,7 @@ const Visualizer4D: React.FC = () => {
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [selectedPointMesh, setSelectedPointMesh] = useState<THREE.Mesh | null>(null);
+  const [isDarkMode, setIsDarkMode] = useState(false);
   
   const currentSamples = filteredSamples4D.filter(
     sample => sample.t === currentTimepoint
@@ -39,6 +40,92 @@ const Visualizer4D: React.FC = () => {
 
   const toggleHelp = () => {
     setShowHelp(!showHelp);
+  };
+
+  const toggleDarkMode = () => {
+    setIsDarkMode(!isDarkMode);
+  };
+
+  // Helper function to clamp color values
+  const clampColor = (color: THREE.Color) => {
+    color.r = Math.max(0, Math.min(1, color.r));
+    color.g = Math.max(0, Math.min(1, color.g));
+    color.b = Math.max(0, Math.min(1, color.b));
+    return color;
+  };
+
+  // Add this function to create a highlight mesh
+  const createHighlightMesh = (position: THREE.Vector3, color: THREE.Color) => {
+    if (!sceneRef.current) return null;
+    
+    // Remove previous highlight if it exists
+    if (selectedPointMesh && sceneRef.current) {
+      sceneRef.current.remove(selectedPointMesh);
+    }
+    
+    // Create a larger sphere for the highlight
+    const geometry = new THREE.SphereGeometry(1.0, 32, 32);
+    const material = new THREE.MeshBasicMaterial({
+      color: color,
+      transparent: true,
+      opacity: 0.8,
+      wireframe: true,
+      wireframeLinewidth: 2
+    });
+    
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.copy(position);
+    sceneRef.current.add(mesh);
+    setSelectedPointMesh(mesh);
+    
+    return mesh;
+  };
+
+  // Generate circular point texture for better-looking points
+  const generatePointTexture = (darkMode: boolean) => {
+    const canvas = document.createElement('canvas');
+    const size = 64;
+    canvas.width = size;
+    canvas.height = size;
+    const context = canvas.getContext('2d');
+    
+    if (!context) return null;
+    
+    const centerX = size / 2;
+    const centerY = size / 2;
+    const radius = size / 2 - 2;
+    
+    // Draw circular point
+    context.beginPath();
+    context.arc(centerX, centerY, radius, 0, 2 * Math.PI, false);
+    
+    // Create gradient - adjust for dark mode
+    const gradient = context.createRadialGradient(
+      centerX, centerY, 0,
+      centerX, centerY, radius
+    );
+    
+    if (darkMode) {
+      // Brighter gradient for dark mode
+      gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+      gradient.addColorStop(0.2, 'rgba(255, 255, 255, 0.95)');
+      gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.9)');
+      gradient.addColorStop(1, 'rgba(255, 255, 255, 0.3)');
+    } else {
+      // Original gradient for light mode
+      gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+      gradient.addColorStop(0.2, 'rgba(255, 255, 255, 0.9)');
+      gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.8)');
+      gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    }
+    
+    context.fillStyle = gradient;
+    context.fill();
+    
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    
+    return texture;
   };
 
   useEffect(() => {
@@ -55,7 +142,6 @@ const Visualizer4D: React.FC = () => {
       1000
     );
     
-    // Initial camera position will be set when points are loaded
     cameraRef.current = camera;
     
     const renderer = new THREE.WebGLRenderer({ 
@@ -91,6 +177,12 @@ const Visualizer4D: React.FC = () => {
     
     controlsRef.current = controls;
     
+    // Set initial camera position
+    camera.position.set(73.5, 73.5, 73.5);
+    camera.lookAt(0, 0, 0);
+    controls.target.set(0, 0, 0);
+    controls.update();
+    
     // Add control state monitors
     controls.addEventListener('start', () => {
       setIsDragging(true);
@@ -104,8 +196,8 @@ const Visualizer4D: React.FC = () => {
       // Update zoom level for UI
       if (cameraRef.current) {
         const distance = camera.position.distanceTo(new THREE.Vector3(0, 0, 0));
-        const maxDistance = 300; // Match maxDistance from controls
-        const minDistance = 1; // Match minDistance from controls
+        const maxDistance = 300;
+        const minDistance = 1;
         const normalizedDistance = (distance - minDistance) / (maxDistance - minDistance);
         const zoomPercentage = 100 - Math.min(Math.round(normalizedDistance * 100), 95);
         setZoomLevel(zoomPercentage);
@@ -162,27 +254,23 @@ const Visualizer4D: React.FC = () => {
     
     // Add specific wheel event handler for better trackpad pinch-to-zoom support
     const handleWheel = (event: WheelEvent) => {
-      // If ctrlKey is pressed, it's likely a pinch gesture on trackpad
       if (event.ctrlKey || event.metaKey) {
         event.preventDefault();
         
-        // Convert pinch delta to zoom action
         const delta = -event.deltaY;
-        const zoomSpeed = 0.1; // Adjust this for sensitivity
+        const zoomSpeed = 0.1;
         
         if (cameraRef.current && controlsRef.current) {
           const currentPos = cameraRef.current.position.clone();
           const direction = new THREE.Vector3(0, 0, 0).sub(currentPos).normalize();
           const zoomAmount = delta * zoomSpeed;
           
-          // Apply zoom
           cameraRef.current.position.addScaledVector(direction, zoomAmount);
           controlsRef.current.update();
           
-          // Update zoom level UI
           const distance = cameraRef.current.position.distanceTo(new THREE.Vector3(0, 0, 0));
-          const maxDistance = 300; // Match maxDistance from controls
-          const minDistance = 1; // Match minDistance from controls
+          const maxDistance = 300;
+          const minDistance = 1;
           const normalizedDistance = (distance - minDistance) / (maxDistance - minDistance);
           const zoomPercentage = 100 - Math.min(Math.round(normalizedDistance * 100), 95);
           setZoomLevel(zoomPercentage);
@@ -190,7 +278,6 @@ const Visualizer4D: React.FC = () => {
       }
     };
     
-    // Add the wheel event listener to the container with passive: false to allow preventDefault
     containerRef.current.addEventListener('wheel', handleWheel, { passive: false });
     
     return () => {
@@ -207,156 +294,154 @@ const Visualizer4D: React.FC = () => {
         sceneRef.current.remove(pointsRef.current);
       }
     };
-  }, [visualizerOptions.backgroundColor]);
-  
+  }, []);
+
+  // Update scene background and lighting when dark mode changes
+  useEffect(() => {
+    if (sceneRef.current) {
+      sceneRef.current.background = new THREE.Color(isDarkMode ? '#1a1a1a' : visualizerOptions.backgroundColor);
+      
+      const lights = sceneRef.current.children.filter(child => child instanceof THREE.Light);
+      lights.forEach(light => {
+        if (light instanceof THREE.AmbientLight) {
+          light.intensity = isDarkMode ? 0.6 : 0.7;
+        } else if (light instanceof THREE.DirectionalLight) {
+          light.intensity = isDarkMode ? 0.8 : 0.8;
+        }
+      });
+    }
+  }, [isDarkMode, visualizerOptions.backgroundColor]);
+
+  // Update visualization when samples or options change
   useEffect(() => {
     if (!sceneRef.current) return;
     
+    if (!filteredSamples4D || !Array.isArray(filteredSamples4D) || filteredSamples4D.length === 0) return;
+    
+    setPointCount(filteredSamples4D.length);
+    
+    // Remove previous visualizations
     if (pointsRef.current && sceneRef.current) {
       sceneRef.current.remove(pointsRef.current);
+      pointsRef.current = null;
     }
-    
-    const groupedSamples = groupSamplesByTime(filteredSamples4D);
-    const pointsGroups: Record<number, THREE.Points> = {};
     
     const scaleFactor = 4;
     
-    Object.entries(groupedSamples).forEach(([timeStr, samples]) => {
-      const time = parseInt(timeStr);
-      setPointCount(samples.length); // Update point count for current timepoint
+    // Calculate center of the point cloud
+    const center = new THREE.Vector3();
+    filteredSamples4D.forEach(sample => {
+      center.add(new THREE.Vector3(sample.x, sample.y, sample.z));
+    });
+    center.divideScalar(filteredSamples4D.length);
+    
+    // Always use points for rendering
+    const geometry = new THREE.BufferGeometry();
+    
+    const positions = new Float32Array(filteredSamples4D.length * 3);
+    const colors = new Float32Array(filteredSamples4D.length * 3);
+    const sizes = new Float32Array(filteredSamples4D.length);
+    
+    filteredSamples4D.forEach((sample, i) => {
+      // Position relative to center
+      positions[i * 3] = (sample.x - center.x) * scaleFactor;
+      positions[i * 3 + 1] = (sample.y - center.y) * scaleFactor;
+      positions[i * 3 + 2] = (sample.z - center.z) * scaleFactor;
       
-      const geometry = new THREE.BufferGeometry();
+      // Use color based on the selected coloring mode
+      let color;
+      if (visualizerOptions.coloringMode === 'phenotype') {
+        color = new THREE.Color(
+          sample.color_phenotypic?.r ?? 0,
+          sample.color_phenotypic?.g ?? 0,
+          sample.color_phenotypic?.b ?? 0
+        );
+      } else {
+        color = new THREE.Color(
+          sample.color?.r ?? 0,
+          sample.color?.g ?? 0,
+          sample.color?.b ?? 0
+        );
+      }
       
-      const positions = new Float32Array(samples.length * 3);
-      const colors = new Float32Array(samples.length * 3);
-      const sizes = new Float32Array(samples.length);
+      // Enhance colors for dark mode
+      if (isDarkMode) {
+        color.multiplyScalar(1.5);
+        clampColor(color);
+      }
       
-      // Calculate center of the point cloud
-      const center = new THREE.Vector3();
-      samples.forEach((sample, i) => {
-        center.add(new THREE.Vector3(sample.x, sample.y, sample.z));
-      });
-      center.divideScalar(samples.length);
+      colors[i * 3] = color.r;
+      colors[i * 3 + 1] = color.g;
+      colors[i * 3 + 2] = color.b;
       
-      samples.forEach((sample, i) => {
-        // Position relative to center
-        positions[i * 3] = (sample.x - center.x) * scaleFactor;
-        positions[i * 3 + 1] = (sample.y - center.y) * scaleFactor;
-        positions[i * 3 + 2] = (sample.z - center.z) * scaleFactor;
-        
-        let color;
-        if (visualizerOptions.coloringMode === 'phenotype') {
-          color = new THREE.Color(
-            sample.color_phenotypic.r,
-            sample.color_phenotypic.g,
-            sample.color_phenotypic.b
-          );
-        } else {
-          color = new THREE.Color(
-            sample.color.r,
-            sample.color.g,
-            sample.color.b
-          );
-        }
-        
-        colors[i * 3] = color.r;
-        colors[i * 3 + 1] = color.g;
-        colors[i * 3 + 2] = color.b;
-        
-        sizes[i] = visualizerOptions.pointSize;
-      });
-      
-      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-      geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
-      
-      const material = new THREE.PointsMaterial({
-        size: visualizerOptions.pointSize,
-        vertexColors: true,
-        sizeAttenuation: true,
-        transparent: true,
-        opacity: 0.9,
-        alphaTest: 0.5,
-        map: generatePointTexture()
-      });
-      
-      const points = new THREE.Points(geometry, material);
-      points.visible = time === currentTimepoint;
-      sceneRef.current?.add(points);
-      
-      pointsGroups[time] = points;
+      sizes[i] = visualizerOptions.pointSize;
     });
     
-    setTimeGroupedSamples(pointsGroups);
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
     
-    if (pointsGroups[currentTimepoint]) {
-      pointsRef.current = pointsGroups[currentTimepoint];
+    const material = new THREE.PointsMaterial({
+      size: visualizerOptions.pointSize,
+      vertexColors: true,
+      sizeAttenuation: true,
+      transparent: true,
+      opacity: isDarkMode ? 1.0 : 0.9,
+      alphaTest: 0.5,
+      map: generatePointTexture(isDarkMode)
+    });
+    
+    const points = new THREE.Points(geometry, material);
+    sceneRef.current.add(points);
+    pointsRef.current = points;
+    
+    // Update highlight position if there's a selected point
+    if (selectedSample) {
+      const position = new THREE.Vector3(
+        (selectedSample.x - center.x) * scaleFactor,
+        (selectedSample.y - center.y) * scaleFactor,
+        (selectedSample.z - center.z) * scaleFactor
+      );
+
+      let color;
+      if (visualizerOptions.coloringMode === 'phenotype') {
+        color = new THREE.Color(
+          selectedSample.color_phenotypic?.r ?? 0,
+          selectedSample.color_phenotypic?.g ?? 0,
+          selectedSample.color_phenotypic?.b ?? 0
+        );
+      } else {
+        color = new THREE.Color(
+          selectedSample.color?.r ?? 0,
+          selectedSample.color?.g ?? 0,
+          selectedSample.color?.b ?? 0
+        );
+      }
       
-      // Update camera and controls target to match the new center
-      if (cameraRef.current && controlsRef.current) {
-        const currentTimeSamples = groupedSamples[currentTimepoint] || [];
-        if (currentTimeSamples.length > 0) {
-          const center = new THREE.Vector3();
-          currentTimeSamples.forEach(sample => {
-            center.add(new THREE.Vector3(sample.x, sample.y, sample.z));
-          });
-          center.divideScalar(currentTimeSamples.length);
-          
-          // Update camera position relative to new center
-          const cameraOffset = new THREE.Vector3(73.5, 73.5, 73.5);
-          cameraRef.current.position.copy(center).add(cameraOffset);
-          cameraRef.current.lookAt(center);
-          
-          // Update controls target
-          controlsRef.current.target.copy(center);
-          controlsRef.current.update();
-        }
+      if (isDarkMode) {
+        color.multiplyScalar(1.5);
+        clampColor(color);
+      }
+      
+      createHighlightMesh(position, color);
+    }
+    
+  }, [filteredSamples4D, visualizerOptions, selectedSample, isDarkMode]);
+
+  // Set default selected sample with "control" when the component mounts
+  useEffect(() => {
+    if (filteredSamples4D.length > 0 && !selectedSample) {
+      const defaultSample = filteredSamples4D.find(sample => sample.phenotype === 'control');
+      if (defaultSample) {
+        setSelectedSample(defaultSample);
       }
     }
-    
-  }, [filteredSamples4D, visualizerOptions, currentTimepoint]);
-  
-  useEffect(() => {
-    Object.values(timeGroupedSamples).forEach(points => {
-      points.visible = false;
-    });
-    
-    if (timeGroupedSamples[currentTimepoint]) {
-      timeGroupedSamples[currentTimepoint].visible = true;
-      pointsRef.current = timeGroupedSamples[currentTimepoint];
-    }
-  }, [currentTimepoint, timeGroupedSamples]);
-  
-  // Add this function to create a highlight mesh
-  const createHighlightMesh = (position: THREE.Vector3, color: THREE.Color) => {
-    if (!sceneRef.current) return null;
-    
-    // Remove previous highlight if it exists
-    if (selectedPointMesh && sceneRef.current) {
-      sceneRef.current.remove(selectedPointMesh);
-    }
-    
-    // Create a larger sphere for the highlight
-    const geometry = new THREE.SphereGeometry(1.0, 32, 32);
-    const material = new THREE.MeshBasicMaterial({
-      color: color,
-      transparent: true,
-      opacity: 0.8,
-      wireframe: true,
-      wireframeLinewidth: 2
-    });
-    
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.copy(position);
-    sceneRef.current.add(mesh);
-    setSelectedPointMesh(mesh);
-    
-    return mesh;
-  };
-  
-  // Update the handleClick function
+  }, [filteredSamples4D]);
+
+  // Handle point selection with raycaster
   const handleClick = (event: React.MouseEvent) => {
     if (!containerRef.current || !cameraRef.current || !pointsRef.current) return;
+    if (isDragging) return;
     
     const rect = containerRef.current.getBoundingClientRect();
     mouseRef.current.x = ((event.clientX - rect.left) / containerRef.current.clientWidth) * 2 - 1;
@@ -368,108 +453,57 @@ const Visualizer4D: React.FC = () => {
     
     if (intersects.length > 0) {
       const index = intersects[0].index;
-      if (typeof index === 'number') {
-        // Get the samples for the current timepoint using the grouped samples
-        const groupedSamples = groupSamplesByTime(filteredSamples4D);
-        const currentTimeSamples = groupedSamples[currentTimepoint] || [];
+      if (typeof index === 'number' && index < filteredSamples4D.length) {
+        setLastSelectedIndex(index);
+        const selectedSample = filteredSamples4D[index];
+        setSelectedSample(selectedSample);
+
+        const center = new THREE.Vector3();
+        filteredSamples4D.forEach(sample => {
+          center.add(new THREE.Vector3(sample.x, sample.y, sample.z));
+        });
+        center.divideScalar(filteredSamples4D.length);
         
-        if (index < currentTimeSamples.length) {
-          setLastSelectedIndex(index);
-          const selectedSample = currentTimeSamples[index];
-          setSelectedSample(selectedSample);
+        const position = new THREE.Vector3(
+          (selectedSample.x - center.x) * 4,
+          (selectedSample.y - center.y) * 4,
+          (selectedSample.z - center.z) * 4
+        );
 
-          // Create highlight at the selected point's position
-          const center = new THREE.Vector3();
-          currentTimeSamples.forEach(sample => {
-            center.add(new THREE.Vector3(sample.x, sample.y, sample.z));
-          });
-          center.divideScalar(currentTimeSamples.length);
-          
-          const position = new THREE.Vector3(
-            (selectedSample.x - center.x) * 4,
-            (selectedSample.y - center.y) * 4,
-            (selectedSample.z - center.z) * 4
+        let color;
+        if (visualizerOptions.coloringMode === 'phenotype') {
+          color = new THREE.Color(
+            selectedSample.color_phenotypic?.r ?? 0,
+            selectedSample.color_phenotypic?.g ?? 0,
+            selectedSample.color_phenotypic?.b ?? 0
           );
-
-          // Get the color based on the current coloring mode
-          let color;
-          if (visualizerOptions.coloringMode === 'phenotype') {
-            color = new THREE.Color(
-              selectedSample.color_phenotypic.r,
-              selectedSample.color_phenotypic.g,
-              selectedSample.color_phenotypic.b
-            );
-          } else {
-            color = new THREE.Color(
-              selectedSample.color.r,
-              selectedSample.color.g,
-              selectedSample.color.b
-            );
-          }
-          
-          createHighlightMesh(position, color);
+        } else {
+          color = new THREE.Color(
+            selectedSample.color?.r ?? 0,
+            selectedSample.color?.g ?? 0,
+            selectedSample.color?.b ?? 0
+          );
         }
-      }
-    } else {
-      // Clear selection if clicking on empty space
-      setSelectedSample(null);
-      if (selectedPointMesh && sceneRef.current) {
-        sceneRef.current.remove(selectedPointMesh);
-        setSelectedPointMesh(null);
+        
+        if (isDarkMode) {
+          color.multiplyScalar(1.5);
+          clampColor(color);
+        }
+        
+        createHighlightMesh(position, color);
       }
     }
   };
-  
-  // Generate circular point texture for better-looking points
-  const generatePointTexture = () => {
-    const canvas = document.createElement('canvas');
-    const size = 64;
-    canvas.width = size;
-    canvas.height = size;
-    const context = canvas.getContext('2d');
-    
-    if (!context) return null;
-    
-    const centerX = size / 2;
-    const centerY = size / 2;
-    const radius = size / 2 - 2;
-    
-    // Draw circular point
-    context.beginPath();
-    context.arc(centerX, centerY, radius, 0, 2 * Math.PI, false);
-    
-    // Create gradient
-    const gradient = context.createRadialGradient(
-      centerX, centerY, 0,
-      centerX, centerY, radius
-    );
-    gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
-    gradient.addColorStop(0.2, 'rgba(255, 255, 255, 0.9)');
-    gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.8)');
-    gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
-    
-    context.fillStyle = gradient;
-    context.fill();
-    
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.needsUpdate = true;
-    
-    return texture;
-  };
-  
-  // Set default selected sample with "control" when the component mounts
-  useEffect(() => {
-    if (filteredSamples4D.length > 0 && !selectedSample) {
-      const defaultSample = filteredSamples4D.find(sample => sample.phenotype === 'control');
-      if (defaultSample) {
-        setSelectedSample(defaultSample);
-      }
-    }
-  }, [filteredSamples4D, selectedSample, setSelectedSample]);
-  
+
   return (
-    <div className="bg-white shadow-md overflow-hidden h-full border border-gray-200">
-      <div className="p-3 bg-white border-b border-gray-200">
+    <div className={`${isDarkMode ? 'bg-gray-900' : 'bg-white'} shadow-md overflow-hidden h-full border ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+      {/* Mobile Warning Message */}
+      <div className={`lg:hidden ${isDarkMode ? 'bg-yellow-900 border-yellow-600 text-yellow-200' : 'bg-yellow-100 border-yellow-500 text-yellow-700'} border-l-4 p-4 sticky top-0 z-50`} role="alert">
+        <p className="font-bold text-base">Desktop Recommended</p>
+        <p className="text-sm">For the best experience, please view this visualization on a desktop device.</p>
+      </div>
+
+      <div className={`p-3 ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} border-b`}>
         <VisualizerControls type="4d" />
       </div>
       
@@ -486,6 +520,31 @@ const Visualizer4D: React.FC = () => {
         
         {/* Zoom Controls */}
         <div className="absolute top-4 right-4 flex flex-col space-y-2 group">
+          {/* Dark Mode Toggle */}
+          <button 
+            onClick={toggleDarkMode}
+            className={`${isDarkMode ? 'bg-yellow-600 hover:bg-yellow-700' : 'bg-gray-600 hover:bg-gray-700'} text-white p-3 rounded-lg shadow-lg w-12 h-12 flex items-center justify-center transition-all border-2 ${isDarkMode ? 'border-yellow-400' : 'border-gray-400'}`}
+            title={isDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+          >
+            {isDarkMode ? (
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="5"></circle>
+                <line x1="12" y1="1" x2="12" y2="3"></line>
+                <line x1="12" y1="21" x2="12" y2="23"></line>
+                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                <line x1="1" y1="12" x2="3" y2="12"></line>
+                <line x1="21" y1="12" x2="23" y2="12"></line>
+                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+              </svg>
+            ) : (
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+              </svg>
+            )}
+          </button>
+
           <button 
             onClick={() => {
               if (cameraRef.current) {
@@ -506,7 +565,6 @@ const Visualizer4D: React.FC = () => {
             </svg>
           </button>
           
-          {/* Zoom In Button */}
           <button 
             onClick={() => {
               if (cameraRef.current) {
@@ -527,7 +585,6 @@ const Visualizer4D: React.FC = () => {
             </svg>
           </button>
           
-          {/* Zoom Out Button */}
           <button 
             onClick={() => {
               if (cameraRef.current) {
@@ -547,8 +604,7 @@ const Visualizer4D: React.FC = () => {
             </svg>
           </button>
           
-          {/* Zoom Level Indicator */}
-          <div className="bg-white bg-opacity-80 p-2 rounded-lg shadow-lg text-center text-xs text-gray-700 font-medium opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+          <div className={`${isDarkMode ? 'bg-gray-800 bg-opacity-90 text-gray-200' : 'bg-white bg-opacity-80 text-gray-700'} p-2 rounded-lg shadow-lg text-center text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity duration-200`}>
             <span>Zoom: {zoomLevel}%</span>
           </div>
           
@@ -566,7 +622,7 @@ const Visualizer4D: React.FC = () => {
         </div>
         
         {/* Status Panel */}
-        <div className="absolute bottom-20 left-4 bg-white bg-opacity-90 text-gray-800 text-xs p-2 border border-gray-300 rounded shadow">
+        <div className={`absolute bottom-4 left-4 ${isDarkMode ? 'bg-gray-800 bg-opacity-90 text-gray-200 border-gray-600' : 'bg-white bg-opacity-90 text-gray-800 border-gray-300'} text-xs p-2 border rounded shadow`}>
           <div className="flex items-center space-x-2">
             <div className={`h-2 w-2 rounded-full ${fps > 30 ? 'bg-green-500' : fps > 15 ? 'bg-yellow-500' : 'bg-red-500'}`}></div>
             <span>{fps} FPS</span>
@@ -579,9 +635,9 @@ const Visualizer4D: React.FC = () => {
         
         {/* Help Overlay */}
         {showHelp && (
-          <div className="absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center" onClick={toggleHelp}>
-            <div className="bg-gray-800 p-6 rounded-xl shadow-2xl max-w-md" onClick={e => e.stopPropagation()}>
-              <h3 className="text-xl font-bold text-white mb-4">Navigation Controls</h3>
+          <div className="absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4" onClick={toggleHelp}>
+            <div className={`${isDarkMode ? 'bg-gray-800' : 'bg-gray-800'} p-4 md:p-6 rounded-xl shadow-2xl w-full max-w-md`} onClick={e => e.stopPropagation()}>
+              <h3 className="text-lg md:text-xl font-bold text-white mb-4">Navigation Controls</h3>
               
               <div className="text-gray-300 space-y-3">
                 <div className="flex items-start">

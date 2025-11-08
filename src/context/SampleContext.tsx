@@ -32,7 +32,7 @@ const defaultOptions: VisualizerOptions = {
   showAxes: true,
   showGrid: true,
   highlightSelected: true,
-  performance: 'balanced',
+  performance: 'balanced'
 };
 
 const SampleContext = createContext<SampleContextType | null>(null);
