@@ -7,6 +7,7 @@ import Visualizer4D from './components/Visualizer4D';
 import Footer from './components/Footer';
 import SamplePanel from './components/SamplePanel';
 import About from './components/About';
+import PasswordProtection from './components/PasswordProtection';
 import { SampleProvider } from './context/SampleContext';
 
 function Explorer() {
@@ -39,14 +40,16 @@ function Explorer() {
 
 function App() {
   return (
-    <Router>
-      <SampleProvider>
-        <Routes>
-          <Route path="/" element={<Explorer />} />
-          <Route path="/about" element={<About />} />
-        </Routes>
-      </SampleProvider>
-    </Router>
+    <PasswordProtection>
+      <Router>
+        <SampleProvider>
+          <Routes>
+            <Route path="/" element={<Explorer />} />
+            <Route path="/about" element={<About />} />
+          </Routes>
+        </SampleProvider>
+      </Router>
+    </PasswordProtection>
   );
 }
 
