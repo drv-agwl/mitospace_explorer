@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { useSample } from '../context/SampleContext';
 import VisualizerControls from './VisualizerControls';
+import { adaptColorForDarkTheme } from '../utils/colorUtils';
 
 const Visualizer2D: React.FC = () => {
   const { 
@@ -29,7 +30,7 @@ const Visualizer2D: React.FC = () => {
   const [pointCount, setPointCount] = useState(0);
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
   const [selectedPointMesh, setSelectedPointMesh] = useState<THREE.Mesh | null>(null);
-  const [isDarkMode, setIsDarkMode] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(true);
 
   const toggleHelp = () => {
     setShowHelp(!showHelp);
@@ -39,15 +40,7 @@ const Visualizer2D: React.FC = () => {
     setIsDarkMode(!isDarkMode);
   };
 
-  // Helper function to clamp color values
-  const clampColor = (color: THREE.Color) => {
-    color.r = Math.max(0, Math.min(1, color.r));
-    color.g = Math.max(0, Math.min(1, color.g));
-    color.b = Math.max(0, Math.min(1, color.b));
-    return color;
-  };
-
-  // Add this function to create a highlight mesh
+  // Create highlight mesh for selected point
   const createHighlightMesh = (position: THREE.Vector3, color: THREE.Color) => {
     if (!sceneRef.current) return null;
     
@@ -99,11 +92,11 @@ const Visualizer2D: React.FC = () => {
     );
     
     if (darkMode) {
-      // Brighter gradient for dark mode
+      // Crisp gradient for dark mode - retains color to edges
       gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
-      gradient.addColorStop(0.2, 'rgba(255, 255, 255, 0.95)');
-      gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.9)');
-      gradient.addColorStop(1, 'rgba(255, 255, 255, 0.3)');
+      gradient.addColorStop(0.3, 'rgba(255, 255, 255, 0.95)');
+      gradient.addColorStop(0.7, 'rgba(255, 255, 255, 0.85)');
+      gradient.addColorStop(1, 'rgba(255, 255, 255, 0.45)');
     } else {
       // Original gradient for light mode
       gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
@@ -343,26 +336,18 @@ const Visualizer2D: React.FC = () => {
       positions[i * 3 + 2] = (sample.z - center.z) * scaleFactor;
       
       // Use color based on the selected coloring mode
-      let color;
-      if (visualizerOptions.coloringMode === 'phenotype') {
-        color = new THREE.Color(
-          sample.color_phenotypic?.r ?? 0,
-          sample.color_phenotypic?.g ?? 0,
-          sample.color_phenotypic?.b ?? 0
-        );
-      } else {
-        color = new THREE.Color(
-          sample.color?.r ?? 0,
-          sample.color?.g ?? 0,
-          sample.color?.b ?? 0
-        );
-      }
-      
-      // Enhance colors for dark mode
-      if (isDarkMode) {
-        color.multiplyScalar(1.5);
-        clampColor(color);
-      }
+      const cr = visualizerOptions.coloringMode === 'phenotype'
+        ? (sample.color_phenotypic?.r ?? 0)
+        : (sample.color?.r ?? 0);
+      const cg = visualizerOptions.coloringMode === 'phenotype'
+        ? (sample.color_phenotypic?.g ?? 0)
+        : (sample.color?.g ?? 0);
+      const cb = visualizerOptions.coloringMode === 'phenotype'
+        ? (sample.color_phenotypic?.b ?? 0)
+        : (sample.color?.b ?? 0);
+      const color = isDarkMode
+        ? new THREE.Color(...Object.values(adaptColorForDarkTheme(cr, cg, cb)))
+        : new THREE.Color(cr, cg, cb);
       
       colors[i * 3] = color.r;
       colors[i * 3 + 1] = color.g;
@@ -397,26 +382,18 @@ const Visualizer2D: React.FC = () => {
         (selectedSample.z - center.z) * scaleFactor
       );
 
-      let color;
-      if (visualizerOptions.coloringMode === 'phenotype') {
-        color = new THREE.Color(
-          selectedSample.color_phenotypic?.r ?? 0,
-          selectedSample.color_phenotypic?.g ?? 0,
-          selectedSample.color_phenotypic?.b ?? 0
-        );
-      } else {
-        color = new THREE.Color(
-          selectedSample.color?.r ?? 0,
-          selectedSample.color?.g ?? 0,
-          selectedSample.color?.b ?? 0
-        );
-      }
-      
-      if (isDarkMode) {
-        color.multiplyScalar(1.5);
-        clampColor(color);
-      }
-      
+      const cr = visualizerOptions.coloringMode === 'phenotype'
+        ? (selectedSample.color_phenotypic?.r ?? 0)
+        : (selectedSample.color?.r ?? 0);
+      const cg = visualizerOptions.coloringMode === 'phenotype'
+        ? (selectedSample.color_phenotypic?.g ?? 0)
+        : (selectedSample.color?.g ?? 0);
+      const cb = visualizerOptions.coloringMode === 'phenotype'
+        ? (selectedSample.color_phenotypic?.b ?? 0)
+        : (selectedSample.color?.b ?? 0);
+      const color = isDarkMode
+        ? new THREE.Color(...Object.values(adaptColorForDarkTheme(cr, cg, cb)))
+        : new THREE.Color(cr, cg, cb);
       createHighlightMesh(position, color);
     }
     
@@ -464,61 +441,49 @@ const Visualizer2D: React.FC = () => {
           (selectedSample.z - center.z) * 4
         );
 
-        let color;
-        if (visualizerOptions.coloringMode === 'phenotype') {
-          color = new THREE.Color(
-            selectedSample.color_phenotypic?.r ?? 0,
-            selectedSample.color_phenotypic?.g ?? 0,
-            selectedSample.color_phenotypic?.b ?? 0
-          );
-        } else {
-          color = new THREE.Color(
-            selectedSample.color?.r ?? 0,
-            selectedSample.color?.g ?? 0,
-            selectedSample.color?.b ?? 0
-          );
-        }
-        
-        if (isDarkMode) {
-          color.multiplyScalar(1.5);
-          clampColor(color);
-        }
-        
+        const cr = visualizerOptions.coloringMode === 'phenotype'
+          ? (selectedSample.color_phenotypic?.r ?? 0)
+          : (selectedSample.color?.r ?? 0);
+        const cg = visualizerOptions.coloringMode === 'phenotype'
+          ? (selectedSample.color_phenotypic?.g ?? 0)
+          : (selectedSample.color?.g ?? 0);
+        const cb = visualizerOptions.coloringMode === 'phenotype'
+          ? (selectedSample.color_phenotypic?.b ?? 0)
+          : (selectedSample.color?.b ?? 0);
+        const color = isDarkMode
+          ? new THREE.Color(...Object.values(adaptColorForDarkTheme(cr, cg, cb)))
+          : new THREE.Color(cr, cg, cb);
         createHighlightMesh(position, color);
       }
     }
   };
 
   return (
-    <div className={`${isDarkMode ? 'bg-gray-900' : 'bg-white'} shadow-md overflow-hidden h-full border ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
-      {/* Mobile Warning Message */}
-      <div className={`lg:hidden ${isDarkMode ? 'bg-yellow-900 border-yellow-600 text-yellow-200' : 'bg-yellow-100 border-yellow-500 text-yellow-700'} border-l-4 p-4 sticky top-0 z-50`} role="alert">
-        <p className="font-bold text-base">Desktop Recommended</p>
-        <p className="text-sm">For the best experience, please view this visualization on a desktop device.</p>
+    <div className={`${isDarkMode ? 'bg-black' : 'bg-white'} overflow-hidden h-full flex flex-col`}>
+      <div className={`lg:hidden shrink-0 ${isDarkMode ? 'bg-amber-500/10 border-amber-500/30 text-amber-200' : 'bg-amber-50 border-amber-200 text-amber-800'} border-l-4 px-4 py-3`} role="alert">
+        <p className="font-medium text-sm">Desktop recommended for best experience</p>
       </div>
 
-      <div className={`p-3 ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} border-b`}>
-        <VisualizerControls type="2d" />
+      <div className={`shrink-0 px-6 py-4 border-b ${isDarkMode ? 'bg-black/80 border-white/10' : 'bg-white border-gray-200'}`}>
+        <VisualizerControls type="2d" dark={isDarkMode} />
       </div>
       
       <div 
         ref={containerRef} 
-        className="w-full h-[calc(100vh-120px)] relative"
+        className="flex-1 min-h-0 relative"
         onClick={handleClick}
       >
         {isLoading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-gray-800 bg-opacity-75">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
+          <div className="absolute inset-0 flex items-center justify-center bg-ink-900/50">
+            <div className="w-10 h-10 border-2 border-mito-500 border-t-transparent rounded-full animate-spin" />
           </div>
         )}
         
-        {/* Zoom Controls */}
-        <div className="absolute top-4 right-4 flex flex-col space-y-2 group">
-          {/* Dark Mode Toggle */}
+        <div className="absolute top-4 right-4 flex flex-col gap-2">
           <button 
             onClick={toggleDarkMode}
-            className={`${isDarkMode ? 'bg-yellow-600 hover:bg-yellow-700' : 'bg-gray-600 hover:bg-gray-700'} text-white p-3 rounded-lg shadow-lg w-12 h-12 flex items-center justify-center transition-all border-2 ${isDarkMode ? 'border-yellow-400' : 'border-gray-400'}`}
-            title={isDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            className={`${isDarkMode ? 'bg-amber-500 hover:bg-amber-600' : 'bg-ink-700 hover:bg-ink-800'} text-white p-2.5 rounded-xl shadow-elevated w-11 h-11 flex items-center justify-center transition-colors`}
+            title={isDarkMode ? 'Light mode' : 'Dark mode'}
           >
             {isDarkMode ? (
               <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -550,8 +515,8 @@ const Visualizer2D: React.FC = () => {
                 }
               }
             }}
-            className="bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-lg shadow-lg w-10 h-10 flex items-center justify-center transition-all"
-            title="Reset Camera"
+            className="bg-white/90 hover:bg-white text-ink-800 p-2.5 rounded-xl shadow-elevated w-11 h-11 flex items-center justify-center transition-colors backdrop-blur-sm"
+            title="Reset view"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
@@ -568,8 +533,8 @@ const Visualizer2D: React.FC = () => {
                 if (controlsRef.current) controlsRef.current.update();
               }
             }}
-            className="bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-lg shadow-lg w-10 h-10 flex items-center justify-center transition-all"
-            title="Zoom In"
+            className="bg-white/90 hover:bg-white text-ink-800 p-2.5 rounded-xl shadow-elevated w-11 h-11 flex items-center justify-center transition-colors backdrop-blur-sm"
+            title="Zoom in"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="11" cy="11" r="8"></circle>
@@ -588,8 +553,8 @@ const Visualizer2D: React.FC = () => {
                 if (controlsRef.current) controlsRef.current.update();
               }
             }}
-            className="bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-lg shadow-lg w-10 h-10 flex items-center justify-center transition-all"
-            title="Zoom Out"
+            className="bg-white/90 hover:bg-white text-ink-800 p-2.5 rounded-xl shadow-elevated w-11 h-11 flex items-center justify-center transition-colors backdrop-blur-sm"
+            title="Zoom out"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="11" cy="11" r="8"></circle>
@@ -598,14 +563,14 @@ const Visualizer2D: React.FC = () => {
             </svg>
           </button>
           
-          <div className={`${isDarkMode ? 'bg-gray-800 bg-opacity-90 text-gray-200' : 'bg-white bg-opacity-80 text-gray-700'} p-2 rounded-lg shadow-lg text-center text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity duration-200`}>
-            <span>Zoom: {zoomLevel}%</span>
+          <div className={`${isDarkMode ? 'bg-black/80 text-white/90' : 'bg-white/90 text-gray-700'} px-3 py-2 rounded-xl text-xs font-medium backdrop-blur-sm`}>
+            Zoom {zoomLevel}%
           </div>
           
           <button 
             onClick={toggleHelp}
-            className="bg-gray-600 hover:bg-gray-700 text-white p-2 rounded-lg shadow-lg w-10 h-10 flex items-center justify-center transition-all"
-            title="Navigation Help"
+            className="bg-white/90 hover:bg-white text-ink-800 p-2.5 rounded-xl shadow-elevated w-11 h-11 flex items-center justify-center transition-colors backdrop-blur-sm"
+            title="Controls"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="10"></circle>
@@ -615,57 +580,24 @@ const Visualizer2D: React.FC = () => {
           </button>
         </div>
         
-        {/* Status Panel */}
-        <div className={`absolute bottom-4 left-4 ${isDarkMode ? 'bg-gray-800 bg-opacity-90 text-gray-200 border-gray-600' : 'bg-white bg-opacity-90 text-gray-800 border-gray-300'} text-xs p-2 border rounded shadow`}>
-          <div className="flex items-center space-x-2">
-            <div className={`h-2 w-2 rounded-full ${fps > 30 ? 'bg-green-500' : fps > 15 ? 'bg-yellow-500' : 'bg-red-500'}`}></div>
-            <span>{fps} FPS</span>
-          </div>
-          
-          <div className="mt-1">
-            {pointCount.toLocaleString()} points
+        <div className={`absolute bottom-4 left-4 px-3 py-2 rounded-xl text-xs font-medium backdrop-blur-sm ${isDarkMode ? 'bg-black/80 text-white/90' : 'bg-white/90 text-gray-700'} shadow-elevated`}>
+          <div className="flex items-center gap-2">
+            <span className={`w-1.5 h-1.5 rounded-full ${fps > 30 ? 'bg-emerald-500' : fps > 15 ? 'bg-amber-500' : 'bg-red-500'}`} />
+            {fps} FPS · {pointCount.toLocaleString()} points
           </div>
         </div>
         
-        {/* Help Overlay */}
         {showHelp && (
-          <div className="absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4" onClick={toggleHelp}>
-            <div className={`${isDarkMode ? 'bg-gray-800' : 'bg-gray-800'} p-4 md:p-6 rounded-xl shadow-2xl w-full max-w-md`} onClick={e => e.stopPropagation()}>
-              <h3 className="text-lg md:text-xl font-bold text-white mb-4">Navigation Controls</h3>
-              
-              <div className="text-gray-300 space-y-3">
-                <div className="flex items-start">
-                  <div className="w-24 font-medium">Left Mouse</div>
-                  <div>Rotate the view</div>
-                </div>
-                
-                <div className="flex items-start">
-                  <div className="w-24 font-medium">Middle Mouse</div>
-                  <div>Pan the view</div>
-                </div>
-                
-                <div className="flex items-start">
-                  <div className="w-24 font-medium">Wheel/Pinch</div>
-                  <div>Zoom in/out (use two fingers on trackpad)</div>
-                </div>
-                
-                <div className="flex items-start">
-                  <div className="w-24 font-medium">Click</div>
-                  <div>Select a point</div>
-                </div>
-                
-                <div className="flex items-start">
-                  <div className="w-24 font-medium">Home Button</div>
-                  <div>Reset camera to home position</div>
-                </div>
+          <div className="absolute inset-0 bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm" onClick={toggleHelp}>
+            <div className="bg-white rounded-2xl shadow-elevated p-6 w-full max-w-md animate-fade-in" onClick={e => e.stopPropagation()}>
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">Controls</h3>
+              <div className="space-y-3 text-sm text-gray-700">
+                <div className="flex justify-between"><span className="font-medium text-gray-600">Left drag</span> Rotate</div>
+                <div className="flex justify-between"><span className="font-medium text-gray-600">Middle / Right drag</span> Pan</div>
+                <div className="flex justify-between"><span className="font-medium text-gray-600">Scroll / Pinch</span> Zoom</div>
+                <div className="flex justify-between"><span className="font-medium text-gray-600">Click</span> Select point</div>
               </div>
-              
-              <button 
-                className="mt-6 bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded transition-colors w-full"
-                onClick={toggleHelp}
-              >
-                Close
-              </button>
+              <button className="btn-primary mt-6 w-full" onClick={toggleHelp}>Done</button>
             </div>
           </div>
         )}

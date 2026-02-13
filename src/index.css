@@ -1,3 +1,62 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  html {
+    font-feature-settings: "ss01", "ss02", "cv01", "cv02", "cv03";
+  }
+  body {
+    @apply antialiased text-white bg-black;
+    font-feature-settings: "ss01", "ss02", "cv01", "cv02", "cv03";
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center justify-center px-4 py-2 rounded-lg font-medium text-sm
+           bg-white text-black
+           hover:bg-gray-200 focus:ring-2 focus:ring-white/50 focus:ring-offset-2 focus:ring-offset-black
+           transition-colors duration-150;
+  }
+  .btn-secondary {
+    @apply inline-flex items-center justify-center px-4 py-2 rounded-lg font-medium text-sm
+           bg-white/10 text-white border border-white/20
+           hover:bg-white/20 hover:border-white/30
+           focus:ring-2 focus:ring-white/30 focus:ring-offset-2 focus:ring-offset-black
+           transition-colors duration-150;
+  }
+  .card {
+    @apply bg-white/[0.06] rounded-xl border border-white/10 shadow-panel;
+  }
+  .input-base {
+    @apply w-full px-3 py-2 rounded-lg border border-white/20 bg-white/5 text-white
+           placeholder:text-white/40
+           focus:outline-none focus:ring-2 focus:ring-white/30 focus:border-white/40
+           transition-colors duration-150;
+  }
+}
+
+/* Custom scrollbar - dark theme */
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  @apply bg-white/20 rounded-full;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  @apply bg-white/30;
+}
+
+/* Range input - dark theme */
+input[type="range"] {
+  @apply appearance-none bg-white/20 rounded-full;
+}
+input[type="range"]::-webkit-slider-thumb {
+  @apply appearance-none w-4 h-4 rounded-full bg-white cursor-pointer
+         hover:bg-gray-200 transition-colors shadow-sm;
+}

@@ -1,5 +1,16 @@
 import * as THREE from 'three';
 
+/**
+ * Pass-through for dark theme - returns colors unchanged for best distinguishability.
+ */
+export function adaptColorForDarkTheme(r: number, g: number, b: number): { r: number; g: number; b: number } {
+  return {
+    r: Math.max(0, Math.min(1, r)),
+    g: Math.max(0, Math.min(1, g)),
+    b: Math.max(0, Math.min(1, b)),
+  };
+}
+
 export const getPhenotypeColor = (phenotype: string): THREE.Color => {
   switch (phenotype) {
     case 'Normal':

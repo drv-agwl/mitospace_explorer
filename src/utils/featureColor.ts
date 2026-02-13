@@ -15,22 +15,29 @@ function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
 
-function interpolatePlasma(t: number): { r: number; g: number; b: number } {
-  if (t <= 0) return { r: PLASMA_STOPS[0].r, g: PLASMA_STOPS[0].g, b: PLASMA_STOPS[0].b };
+function interpolateStops(
+  stops: { t: number; r: number; g: number; b: number }[],
+  t: number
+): { r: number; g: number; b: number } {
+  if (t <= 0) return { r: stops[0].r, g: stops[0].g, b: stops[0].b };
   if (t >= 1) {
-    const last = PLASMA_STOPS[PLASMA_STOPS.length - 1];
+    const last = stops[stops.length - 1];
     return { r: last.r, g: last.g, b: last.b };
   }
   let i = 0;
-  while (i < PLASMA_STOPS.length - 1 && PLASMA_STOPS[i + 1].t < t) i++;
-  const a = PLASMA_STOPS[i];
-  const b = PLASMA_STOPS[i + 1];
+  while (i < stops.length - 1 && stops[i + 1].t < t) i++;
+  const a = stops[i];
+  const b = stops[i + 1];
   const s = (t - a.t) / (b.t - a.t);
   return {
     r: lerp(a.r, b.r, s),
     g: lerp(a.g, b.g, s),
     b: lerp(a.b, b.b, s),
   };
+}
+
+function interpolatePlasma(t: number): { r: number; g: number; b: number } {
+  return interpolateStops(PLASMA_STOPS, t);
 }
 
 /**
@@ -79,6 +86,8 @@ export function featureToColorSafe(
 
 /**
  * Log1p-scaled plasma; nullable value → gray if null/NaN.
+ * Applies a contrast stretch (power curve) to the normalized value so the
+ * gradient spans the range more effectively and small value differences are more visible.
  */
 export function featureToColorLog1pSafe(
   value: number | null | undefined,
@@ -88,5 +97,12 @@ export function featureToColorLog1pSafe(
   if (value == null || Number.isNaN(value)) {
     return { r: 0.5, g: 0.5, b: 0.5 };
   }
-  return featureToColorLog1p(value, min, max);
+  const minLog = Math.log1p(Math.max(0, min));
+  const maxLog = Math.log1p(Math.max(0, max));
+  const valueLog = Math.log1p(Math.max(0, value));
+  const range = maxLog - minLog;
+  const tLinear = range <= 0 ? 0.5 : Math.max(0, Math.min(1, (valueLog - minLog) / range));
+  // Contrast stretch: pow(t, 0.8) expands the lower/mid range for better color separation
+  const t = Math.pow(tLinear, 0.8);
+  return interpolatePlasma(t);
 }

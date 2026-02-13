@@ -5,6 +5,7 @@ import { getFeatureStats, getFeatureValues, healthCheck } from '../api/client';
 interface VisualizerControlsProps {
   type: '2d' | '4d';
   onSemanticSliderChange?: (pointIndex: number, targetValue: number) => void;
+  dark?: boolean;
 }
 
 const FEATURE_OPTIONS = [
@@ -12,10 +13,9 @@ const FEATURE_OPTIONS = [
   { id: 'segment_length', label: 'Segment Length', apiName: 'Segment Length' },
 ];
 
-/** Default range when API is not available (Fragment Length typical range). */
 const DEFAULT_FEATURE_RANGE = { min: 1, max: 5 };
 
-const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanticSliderChange }) => {
+const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanticSliderChange, dark = true }) => {
   const {
     visualizerOptions,
     setPointSize,
@@ -44,10 +44,11 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
   const sliderValue = semanticState.semanticSliderValue ?? featureRange?.min;
   const showSlider = type === '4d' && advancedMode && selectedFeature && selectedPointIndex != null;
   const [apiConnected, setApiConnected] = useState<boolean | null>(null);
+  const [featureLoading, setFeatureLoading] = useState(false);
 
-  // Check API health when Advanced Mode is on
   useEffect(() => {
     if (type !== '4d' || !advancedMode) return;
+    setApiConnected(null);
     healthCheck()
       .then((h) => {
         setApiConnected(true);
@@ -59,23 +60,22 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
       });
   }, [type, advancedMode, setApiEmbeddingCount]);
 
-  // Load feature values and stats when feature is selected (for coloring and slider range)
   useEffect(() => {
     if (type !== '4d' || !selectedFeature) return;
-    getFeatureValues(selectedFeature)
-      .then((values) => setFeatureValues(selectedFeature, values))
-      .catch(() => {});
-    getFeatureStats(selectedFeature)
-      .then((stats) =>
-        setSemanticState((s) => ({
-          ...s,
-          featureRange: { min: stats.min, max: stats.max },
-        }))
-      )
-      .catch(() => {});
+    setFeatureLoading(true);
+    Promise.all([
+      getFeatureValues(selectedFeature).then((values) => setFeatureValues(selectedFeature, values)).catch(() => {}),
+      getFeatureStats(selectedFeature)
+        .then((stats) =>
+          setSemanticState((s) => ({
+            ...s,
+            featureRange: { min: stats.min, max: stats.max },
+          }))
+        )
+        .catch(() => {}),
+    ]).finally(() => setFeatureLoading(false));
   }, [type, selectedFeature, setFeatureValues, setSemanticState]);
 
-  // When a point is selected in semantic mode, load feature range and set slider to that point's value
   useEffect(() => {
     if (type !== '4d' || !advancedMode || !selectedFeature || selectedPointIndex == null) return;
     getFeatureStats(selectedFeature)
@@ -101,14 +101,13 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
     }
   };
 
-  return (
-    <div className="flex flex-col space-y-4 bg-slate-50/90 dark:bg-slate-800/50 p-4 rounded-xl border border-slate-200/80 dark:border-slate-700/80">
-      <div className="text-xs text-slate-600 dark:text-slate-400 font-medium">
-        Click any point to view sample details.
-      </div>
+  const textClass = 'text-white/90';
+  const textMutedClass = 'text-white/50';
 
+  return (
+    <div className="flex flex-wrap items-center gap-6">
       <div className="flex items-center gap-3">
-        <label htmlFor="pointSize" className="text-sm font-medium text-slate-700 dark:text-slate-300 w-24 shrink-0">
+        <label htmlFor="pointSize" className={`text-sm font-medium shrink-0 ${textClass}`}>
           Point size
         </label>
         <input
@@ -119,13 +118,17 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
           step="0.1"
           value={visualizerOptions.pointSize}
           onChange={(e) => setPointSize(parseFloat(e.target.value))}
-          className="w-32 h-2 bg-slate-200 dark:bg-slate-600 rounded-lg appearance-none cursor-pointer accent-blue-600"
+          className="w-24 h-1.5 accent-white"
         />
-        <span className="text-xs text-slate-500 tabular-nums">{visualizerOptions.pointSize.toFixed(1)}</span>
+        <span className={`text-xs tabular-nums w-8 ${textMutedClass}`}>
+          {visualizerOptions.pointSize.toFixed(1)}
+        </span>
       </div>
 
-      <div className="flex flex-wrap items-center gap-3">
-        <span className="text-sm font-medium text-slate-700 dark:text-slate-300 shrink-0">Color</span>
+      <div className="h-4 w-px bg-white/20" />
+
+      <div className="flex items-center gap-4">
+        <span className={`text-sm font-medium shrink-0 ${textClass}`}>Color by</span>
         <div className="flex gap-4">
           <label className="flex items-center gap-2 cursor-pointer">
             <input
@@ -133,9 +136,9 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
               name="coloringMode"
               checked={visualizerOptions.coloringMode === 'treatment'}
               onChange={() => setColoringMode('treatment')}
-              className="w-4 h-4 text-blue-600 focus:ring-blue-500"
+              className="w-4 h-4 accent-white"
             />
-            <span className="text-sm text-slate-700 dark:text-slate-300">Drug cluster</span>
+            <span className={`text-sm ${textClass}`}>Drug</span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer">
             <input
@@ -143,16 +146,17 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
               name="coloringMode"
               checked={visualizerOptions.coloringMode === 'phenotype'}
               onChange={() => setColoringMode('phenotype')}
-              className="w-4 h-4 text-blue-600 focus:ring-blue-500"
+              className="w-4 h-4 accent-white"
             />
-            <span className="text-sm text-slate-700 dark:text-slate-300">Phenotypic</span>
+            <span className={`text-sm ${textClass}`}>Phenotype</span>
           </label>
         </div>
       </div>
 
       {type === '4d' && (
         <>
-          <div className="border-t border-slate-200 dark:border-slate-600 pt-3 mt-1">
+          <div className="h-4 w-px bg-white/20" />
+          <div className="flex items-center gap-3">
             <label className="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
@@ -167,16 +171,16 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
                     semanticSliderValue: null,
                   }))
                 }
-                className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500"
+                className="w-4 h-4 rounded accent-white"
               />
-              <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Advanced Semantic Mode</span>
+              <span className={`text-sm font-medium ${textClass}`}>Semantic axis</span>
             </label>
           </div>
 
           {advancedMode && (
-            <>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">Feature</label>
+            <div className="flex flex-wrap items-center gap-4">
+              <div className="flex items-center gap-2">
+                <label className={`text-sm font-medium shrink-0 ${textClass}`}>Feature</label>
                 <select
                   value={selectedFeature ?? ''}
                   onChange={(e) => {
@@ -186,69 +190,63 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
                       selectedFeature: v,
                       semanticSliderValue: null,
                       projectedPosition: null,
-                    projectedConfidence: null,
+                      projectedConfidence: null,
                       featureRange: null,
                     }));
                   }}
-                  className="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 text-sm px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  disabled={featureLoading}
+                  className="w-40 text-sm py-1.5 px-3 rounded-lg border border-white/20 bg-white/5 text-white focus:outline-none focus:ring-2 focus:ring-white/30 focus:border-white/40 transition-colors disabled:opacity-60"
                 >
-                  <option value="">Select feature</option>
+                  <option value="">Select</option>
                   {FEATURE_OPTIONS.map((opt) => (
-                    <option key={opt.id} value={opt.apiName}>
+                    <option key={opt.id} value={opt.apiName} className="bg-black text-white">
                       {opt.label}
                     </option>
                   ))}
                 </select>
-                {apiConnected === false && (
-                  <p className="text-xs text-amber-600 dark:text-amber-400">
-                    Start the API server for semantic coloring and axis data (see server/README.md). If you use a different port, set VITE_API_URL in .env.
-                  </p>
+                {featureLoading && (
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                 )}
               </div>
-            </>
+              {apiConnected === false && (
+                <p className="text-xs text-amber-400 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                  API offline — start server for semantic mode
+                </p>
+              )}
+            </div>
           )}
 
           {advancedMode && selectedFeature && selectedPointIndex == null && (
-            <p className="text-xs text-slate-500 dark:text-slate-400 pt-1">
-              Click a point in the scatter to show the semantic axis slider.
-            </p>
+            <p className={`text-xs ${textMutedClass}`}>Click a point to enable axis slider</p>
           )}
           {showSlider && featureRange && (
-            <div className="space-y-2 pt-2 border-t border-slate-200 dark:border-slate-600">
-              <label className="text-sm font-medium text-slate-700 dark:text-slate-300 block">
-                Semantic axis: {selectedFeature}
-              </label>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                Min and max are the <strong>{selectedFeature}</strong> range across all cells. Moving the slider moves the selected point along this axis in UMAP space.
-              </p>
-              <input
-                type="range"
-                min={featureRange.min}
-                max={featureRange.max}
-                step={Math.max(0.001, (featureRange.max - featureRange.min) / 200)}
-                value={typeof sliderValue === 'number' ? sliderValue : featureRange.min}
-                onChange={(e) => handleSliderChange(parseFloat(e.target.value))}
-                className="w-full h-2 bg-slate-200 dark:bg-slate-600 rounded-lg appearance-none cursor-pointer accent-blue-600"
-              />
-              <div className="flex justify-between text-xs text-slate-600 dark:text-slate-400 tabular-nums">
-                <span title="Minimum value across dataset">min: {featureRange.min.toFixed(3)}</span>
-                <span title="Current value">value: {typeof sliderValue === 'number' ? sliderValue.toFixed(3) : featureRange.min.toFixed(3)}</span>
-                <span title="Maximum value across dataset">max: {featureRange.max.toFixed(3)}</span>
+            <div className="flex items-center gap-4 flex-wrap">
+              <div className="flex items-center gap-2 min-w-[200px]">
+                <span className={`text-xs shrink-0 ${textMutedClass}`}>{featureRange.min.toFixed(3)}</span>
+                <input
+                  type="range"
+                  min={featureRange.min}
+                  max={featureRange.max}
+                  step={Math.max(0.001, (featureRange.max - featureRange.min) / 200)}
+                  value={typeof sliderValue === 'number' ? sliderValue : featureRange.min}
+                  onChange={(e) => handleSliderChange(parseFloat(e.target.value))}
+                  className="flex-1 h-1.5 accent-white"
+                />
+                <span className={`text-xs shrink-0 ${textMutedClass}`}>{featureRange.max.toFixed(3)}</span>
               </div>
+              <span className={`text-xs tabular-nums ${textMutedClass}`}>
+                {selectedFeature}: {(typeof sliderValue === 'number' ? sliderValue : featureRange.min).toFixed(3)}
+              </span>
               {semanticState.projectedConfidence != null && semanticState.projectedConfidence < 1 && (
-                <p className="text-xs text-amber-600 dark:text-amber-400" title="Position is extrapolating slightly from the data manifold">
-                  Confidence: {Math.round(semanticState.projectedConfidence * 100)}% (near manifold)
-                </p>
-              )}
-              {apiConnected === false && (
-                <p className="text-xs text-amber-600 dark:text-amber-400">
-                  Start the API server for live projection (see server/README.md).
-                </p>
+                <span className="text-xs text-amber-400">
+                  Confidence: {Math.round(semanticState.projectedConfidence * 100)}%
+                </span>
               )}
               {apiConnected === true && isPointOutOfRange && (
-                <p className="text-xs text-amber-600 dark:text-amber-400">
-                  This point is outside the API range (semantic axis works for first {apiEmbeddingCount?.toLocaleString()} points). Try selecting a point nearer the origin.
-                </p>
+                <span className="text-xs text-amber-400">
+                  Point outside API range ({apiEmbeddingCount?.toLocaleString()} points)
+                </span>
               )}
             </div>
           )}
