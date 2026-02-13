@@ -1,18 +1,27 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { useSample } from '../context/SampleContext';
 import VisualizerControls from './VisualizerControls';
-import { groupSamplesByTime } from '../data/sampleData';
+import { projectOnAxis, getAxisTrajectory } from '../api/client';
+import { featureToColorLog1pSafe } from '../utils/featureColor';
+
+const SCALE_FACTOR = 4;
 
 const Visualizer4D: React.FC = () => {
-  const { 
-    filteredSamples4D, 
-    selectedSample, 
+  const {
+    filteredSamples4D,
+    samples4D,
+    selectedSample,
     setSelectedSample,
-    visualizerOptions 
+    setSelectedPointIndex,
+    visualizerOptions,
+    semanticState,
+    featureValues,
+    setSemanticState,
+    apiEmbeddingCount,
   } = useSample();
-  
+
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -21,22 +30,21 @@ const Visualizer4D: React.FC = () => {
   const pointsRef = useRef<THREE.Points | null>(null);
   const raycasterRef = useRef<THREE.Raycaster>(new THREE.Raycaster());
   const mouseRef = useRef<THREE.Vector2>(new THREE.Vector2());
-  
-  const [currentTimepoint] = useState<number>(0);
+  const selectedPointMeshRef = useRef<THREE.Mesh | null>(null);
+  const targetHighlightPosRef = useRef<THREE.Vector3 | null>(null);
+  const selectedSampleIdRef = useRef<string | null>(null);
+  const trajectoryLineRef = useRef<THREE.Group | null>(null);
+
+  const [trajectoryPoints, setTrajectoryPoints] = useState<Array<{ x: number; y: number; z: number }> | null>(null);
+
   const [isLoading, setIsLoading] = useState(true);
-  const [timeGroupedSamples, setTimeGroupedSamples] = useState<Record<number, THREE.Points>>({});
   const [zoomLevel, setZoomLevel] = useState(34);
   const [showHelp, setShowHelp] = useState(false);
   const [fps, setFps] = useState(0);
   const [pointCount, setPointCount] = useState(0);
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [selectedPointMesh, setSelectedPointMesh] = useState<THREE.Mesh | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(false);
-  
-  const currentSamples = filteredSamples4D.filter(
-    sample => sample.t === currentTimepoint
-  );
 
   const toggleHelp = () => {
     setShowHelp(!showHelp);
@@ -54,32 +62,48 @@ const Visualizer4D: React.FC = () => {
     return color;
   };
 
-  // Add this function to create a highlight mesh
-  const createHighlightMesh = (position: THREE.Vector3, color: THREE.Color) => {
-    if (!sceneRef.current) return null;
-    
-    // Remove previous highlight if it exists
-    if (selectedPointMesh && sceneRef.current) {
-      sceneRef.current.remove(selectedPointMesh);
-    }
-    
-    // Create a larger sphere for the highlight
-    const geometry = new THREE.SphereGeometry(1.0, 32, 32);
-    const material = new THREE.MeshBasicMaterial({
-      color: color,
-      transparent: true,
-      opacity: 0.8,
-      wireframe: true,
-      wireframeLinewidth: 2
-    });
-    
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.copy(position);
-    sceneRef.current.add(mesh);
-    setSelectedPointMesh(mesh);
-    
-    return mesh;
-  };
+  const getCenter = useCallback(() => {
+    const center = new THREE.Vector3();
+    filteredSamples4D.forEach((s) => center.add(new THREE.Vector3(s.x, s.y, s.z)));
+    center.divideScalar(filteredSamples4D.length);
+    return center;
+  }, [filteredSamples4D]);
+
+  const toScenePos = useCallback(
+    (x: number, y: number, z: number) => {
+      const c = getCenter();
+      return new THREE.Vector3(
+        (x - c.x) * SCALE_FACTOR,
+        (y - c.y) * SCALE_FACTOR,
+        (z - c.z) * SCALE_FACTOR
+      );
+    },
+    [getCenter]
+  );
+
+  const createOrUpdateHighlight = useCallback(
+    (position: THREE.Vector3, color: THREE.Color, onTrajectory = false) => {
+      if (!sceneRef.current) return;
+      const radius = onTrajectory ? 2.6 : 1.8;
+      const prev = selectedPointMeshRef.current;
+      if (prev && sceneRef.current) {
+        sceneRef.current.remove(prev);
+      }
+      const geometry = new THREE.SphereGeometry(radius, 24, 24);
+      const material = new THREE.MeshBasicMaterial({
+        color: color,
+        transparent: true,
+        opacity: onTrajectory ? 0.95 : 0.9,
+        wireframe: true,
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.copy(position);
+      sceneRef.current.add(mesh);
+      selectedPointMeshRef.current = mesh;
+      targetHighlightPosRef.current = position.clone();
+    },
+    []
+  );
 
   // Generate circular point texture for better-looking points
   const generatePointTexture = (darkMode: boolean) => {
@@ -225,17 +249,18 @@ const Visualizer4D: React.FC = () => {
       }
     };
     
+    const LERP_SPEED = 0.35;
     const animate = () => {
       requestAnimationFrame(animate);
-      
-      if (controlsRef.current) {
-        controlsRef.current.update();
+      const mesh = selectedPointMeshRef.current;
+      const target = targetHighlightPosRef.current;
+      if (mesh && target && mesh.position.distanceTo(target) > 0.001) {
+        mesh.position.lerp(target, LERP_SPEED);
       }
-      
+      if (controlsRef.current) controlsRef.current.update();
       if (rendererRef.current && cameraRef.current && sceneRef.current) {
         rendererRef.current.render(sceneRef.current, cameraRef.current);
       }
-      
       updateFPS();
     };
     
@@ -293,6 +318,20 @@ const Visualizer4D: React.FC = () => {
       if (pointsRef.current && sceneRef.current) {
         sceneRef.current.remove(pointsRef.current);
       }
+      if (selectedPointMeshRef.current && sceneRef.current) {
+        sceneRef.current.remove(selectedPointMeshRef.current);
+        selectedPointMeshRef.current = null;
+      }
+      if (trajectoryLineRef.current && sceneRef.current) {
+        sceneRef.current.remove(trajectoryLineRef.current);
+        trajectoryLineRef.current.traverse((child) => {
+          if (child instanceof THREE.Mesh) {
+            child.geometry?.dispose();
+            if (child.material) (child.material as THREE.Material).dispose();
+          }
+        });
+        trajectoryLineRef.current = null;
+      }
     };
   }, []);
 
@@ -312,185 +351,363 @@ const Visualizer4D: React.FC = () => {
     }
   }, [isDarkMode, visualizerOptions.backgroundColor]);
 
-  // Update visualization when samples or options change
+  const useFeatureColoring =
+    semanticState.advancedMode &&
+    semanticState.selectedFeature &&
+    featureValues[semanticState.selectedFeature]?.length &&
+    semanticState.featureRange;
+  const featureRange = semanticState.featureRange ?? { min: 0, max: 1 };
+
+  // Fetch trajectory whenever Advanced Semantic + feature are set (don't require points so request always runs)
+  useEffect(() => {
+    if (!semanticState.advancedMode || !semanticState.selectedFeature) {
+      setTrajectoryPoints(null);
+      return;
+    }
+    const feature = semanticState.selectedFeature as string;
+    getAxisTrajectory(feature, 80)
+      .then((res) => {
+        const count = res.points?.length ?? 0;
+        if (count >= 2) {
+          setTrajectoryPoints(res.points!);
+        } else {
+          setTrajectoryPoints(null);
+        }
+      })
+      .catch((err) => {
+        console.warn('[trajectory] fetch failed', err);
+        setTrajectoryPoints(null);
+      });
+  }, [semanticState.advancedMode, semanticState.selectedFeature]);
+
+  // Render trajectory (tube + direction arrows) in the same space as scatter
   useEffect(() => {
     if (!sceneRef.current) return;
-    
-    if (!filteredSamples4D || !Array.isArray(filteredSamples4D) || filteredSamples4D.length === 0) return;
-    
+    const prev = trajectoryLineRef.current;
+    if (prev && sceneRef.current) {
+      sceneRef.current.remove(prev);
+      prev.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.geometry?.dispose();
+          if (child.material) {
+            const mat = child.material as THREE.Material;
+            mat.dispose();
+          }
+        }
+      });
+      trajectoryLineRef.current = null;
+    }
+    if (!trajectoryPoints?.length || trajectoryPoints.length < 2) return;
+    const center =
+      filteredSamples4D.length > 0
+        ? getCenter()
+        : new THREE.Vector3(0, 0, 0);
+    const vertices = trajectoryPoints.map((p) => {
+      const x = typeof p.x === 'number' ? p.x : (Array.isArray(p) ? p[0] : 0);
+      const y = typeof p.y === 'number' ? p.y : (Array.isArray(p) ? p[1] : 0);
+      const z = typeof p.z === 'number' ? p.z : (Array.isArray(p) ? p[2] : 0);
+      return new THREE.Vector3(
+        (x - center.x) * SCALE_FACTOR,
+        (y - center.y) * SCALE_FACTOR,
+        (z - center.z) * SCALE_FACTOR
+      );
+    });
+    const curve = new THREE.CatmullRomCurve3(vertices, false);
+    const tubeRadius = 0.38;
+    const tubeSegments = Math.max(vertices.length * 2, 64);
+    const radialSegments = 8;
+    const geometry = new THREE.TubeGeometry(curve, tubeSegments, tubeRadius, radialSegments, false);
+    const posAttr = geometry.getAttribute('position');
+    const vertexCount = posAttr.count;
+    const colorArray = new Float32Array(vertexCount * 3);
+    const startColor = new THREE.Color(isDarkMode ? 0x66b3ff : 0x0066cc);
+    const endColor = new THREE.Color(isDarkMode ? 0xffaa44 : 0xff6600);
+    for (let i = 0; i < vertexCount; i++) {
+      const t = Math.floor(i / radialSegments) / tubeSegments;
+      const r = startColor.r + (endColor.r - startColor.r) * t;
+      const g = startColor.g + (endColor.g - startColor.g) * t;
+      const b = startColor.b + (endColor.b - startColor.b) * t;
+      colorArray[i * 3] = r;
+      colorArray[i * 3 + 1] = g;
+      colorArray[i * 3 + 2] = b;
+    }
+    geometry.setAttribute('color', new THREE.BufferAttribute(colorArray, 3));
+    const tubeMaterial = new THREE.MeshBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.92,
+      side: THREE.DoubleSide,
+      depthTest: true,
+    });
+    const tube = new THREE.Mesh(geometry, tubeMaterial);
+    tube.renderOrder = 10;
+
+    const group = new THREE.Group();
+    group.add(tube);
+
+    const arrowCount = 5;
+    const arrowRadius = 0.9;
+    const arrowHeight = 2.2;
+    const up = new THREE.Vector3(0, 1, 0);
+    for (let i = 1; i <= arrowCount; i++) {
+      const t = i / (arrowCount + 1);
+      const pos = curve.getPoint(t);
+      const tangent = curve.getTangent(t).normalize();
+      const arrowGeom = new THREE.ConeGeometry(arrowRadius, arrowHeight, 8);
+      const arrowMat = new THREE.MeshBasicMaterial({
+        color: isDarkMode ? 0xffaa44 : 0xff6600,
+        transparent: true,
+        opacity: 0.95,
+        depthTest: true,
+      });
+      const arrow = new THREE.Mesh(arrowGeom, arrowMat);
+      arrow.position.copy(pos);
+      if (tangent.lengthSq() > 1e-6) {
+        const quat = new THREE.Quaternion().setFromUnitVectors(up, tangent);
+        arrow.applyQuaternion(quat);
+      }
+      arrow.renderOrder = 11;
+      group.add(arrow);
+    }
+
+    group.renderOrder = 10;
+    sceneRef.current.add(group);
+    trajectoryLineRef.current = group;
+    return () => {
+      if (trajectoryLineRef.current && sceneRef.current) {
+        sceneRef.current.remove(trajectoryLineRef.current);
+        trajectoryLineRef.current.traverse((child) => {
+          if (child instanceof THREE.Mesh) {
+            child.geometry?.dispose();
+            if (child.material) (child.material as THREE.Material).dispose();
+          }
+        });
+        trajectoryLineRef.current = null;
+      }
+    };
+  }, [trajectoryPoints, isDarkMode, filteredSamples4D.length, getCenter]);
+
+  const trajectoryActive =
+    Boolean(semanticState.advancedMode && semanticState.selectedFeature && trajectoryPoints?.length) ||
+    Boolean(selectedSample && semanticState.projectedPosition);
+
+  // Update visualization when samples or options change; fade points when trajectory/selection is active
+  useEffect(() => {
+    if (!sceneRef.current) return;
+    if (!filteredSamples4D?.length) return;
+
     setPointCount(filteredSamples4D.length);
-    
-    // Remove previous visualizations
     if (pointsRef.current && sceneRef.current) {
       sceneRef.current.remove(pointsRef.current);
       pointsRef.current = null;
     }
-    
-    const scaleFactor = 4;
-    
-    // Calculate center of the point cloud
-    const center = new THREE.Vector3();
-    filteredSamples4D.forEach(sample => {
-      center.add(new THREE.Vector3(sample.x, sample.y, sample.z));
-    });
-    center.divideScalar(filteredSamples4D.length);
-    
-    // Always use points for rendering
+
+    const center = getCenter();
     const geometry = new THREE.BufferGeometry();
-    
     const positions = new Float32Array(filteredSamples4D.length * 3);
     const colors = new Float32Array(filteredSamples4D.length * 3);
     const sizes = new Float32Array(filteredSamples4D.length);
-    
+    const fv = useFeatureColoring ? featureValues[semanticState.selectedFeature!] : null;
+    const pointsOpacity = trajectoryActive ? 0.72 : (isDarkMode ? 1.0 : 0.9);
+    const pointsSize = visualizerOptions.pointSize;
+
     filteredSamples4D.forEach((sample, i) => {
-      // Position relative to center
-      positions[i * 3] = (sample.x - center.x) * scaleFactor;
-      positions[i * 3 + 1] = (sample.y - center.y) * scaleFactor;
-      positions[i * 3 + 2] = (sample.z - center.z) * scaleFactor;
-      
-      // Use color based on the selected coloring mode
-      let color;
-      if (visualizerOptions.coloringMode === 'phenotype') {
+      positions[i * 3] = (sample.x - center.x) * SCALE_FACTOR;
+      positions[i * 3 + 1] = (sample.y - center.y) * SCALE_FACTOR;
+      positions[i * 3 + 2] = (sample.z - center.z) * SCALE_FACTOR;
+
+      let color: THREE.Color;
+      if (fv && i < fv.length) {
+        const c = featureToColorLog1pSafe(fv[i], featureRange.min, featureRange.max);
+        color = new THREE.Color(c.r, c.g, c.b);
+      } else if (visualizerOptions.coloringMode === 'phenotype') {
         color = new THREE.Color(
           sample.color_phenotypic?.r ?? 0,
           sample.color_phenotypic?.g ?? 0,
           sample.color_phenotypic?.b ?? 0
         );
       } else {
-        color = new THREE.Color(
-          sample.color?.r ?? 0,
-          sample.color?.g ?? 0,
-          sample.color?.b ?? 0
-        );
+        color = new THREE.Color(sample.color?.r ?? 0, sample.color?.g ?? 0, sample.color?.b ?? 0);
       }
-      
-      // Enhance colors for dark mode
       if (isDarkMode) {
         color.multiplyScalar(1.5);
         clampColor(color);
       }
-      
       colors[i * 3] = color.r;
       colors[i * 3 + 1] = color.g;
       colors[i * 3 + 2] = color.b;
-      
-      sizes[i] = visualizerOptions.pointSize;
+      sizes[i] = pointsSize;
     });
-    
+
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
-    
     const material = new THREE.PointsMaterial({
-      size: visualizerOptions.pointSize,
+      size: pointsSize,
       vertexColors: true,
       sizeAttenuation: true,
       transparent: true,
-      opacity: isDarkMode ? 1.0 : 0.9,
+      opacity: pointsOpacity,
       alphaTest: 0.5,
-      map: generatePointTexture(isDarkMode)
+      map: generatePointTexture(isDarkMode),
     });
-    
     const points = new THREE.Points(geometry, material);
     sceneRef.current.add(points);
     pointsRef.current = points;
-    
-    // Update highlight position if there's a selected point
-    if (selectedSample) {
-      const position = new THREE.Vector3(
-        (selectedSample.x - center.x) * scaleFactor,
-        (selectedSample.y - center.y) * scaleFactor,
-        (selectedSample.z - center.z) * scaleFactor
-      );
+  }, [
+    filteredSamples4D,
+    visualizerOptions,
+    isDarkMode,
+    semanticState.advancedMode,
+    semanticState.selectedFeature,
+    semanticState.featureRange,
+    semanticState.projectedPosition,
+    featureValues,
+    getCenter,
+    useFeatureColoring,
+    featureRange.min,
+    featureRange.max,
+    trajectoryActive,
+    trajectoryPoints,
+    selectedSample,
+  ]);
 
-      let color;
-      if (visualizerOptions.coloringMode === 'phenotype') {
-        color = new THREE.Color(
-          selectedSample.color_phenotypic?.r ?? 0,
-          selectedSample.color_phenotypic?.g ?? 0,
-          selectedSample.color_phenotypic?.b ?? 0
-        );
-      } else {
-        color = new THREE.Color(
-          selectedSample.color?.r ?? 0,
-          selectedSample.color?.g ?? 0,
-          selectedSample.color?.b ?? 0
-        );
+  // Highlight position: projected (semantic, already in scene space from API) or selected sample
+  useEffect(() => {
+    const proj = semanticState.projectedPosition;
+    const pos = proj
+      ? new THREE.Vector3(proj.x, proj.y, proj.z)
+      : selectedSample
+        ? toScenePos(selectedSample.x, selectedSample.y, selectedSample.z)
+        : null;
+    if (!pos) {
+      targetHighlightPosRef.current = null;
+      if (selectedPointMeshRef.current && sceneRef.current) {
+        sceneRef.current.remove(selectedPointMeshRef.current);
+        selectedPointMeshRef.current = null;
       }
-      
-      if (isDarkMode) {
-        color.multiplyScalar(1.5);
-        clampColor(color);
-      }
-      
-      createHighlightMesh(position, color);
+      return;
     }
-    
-  }, [filteredSamples4D, visualizerOptions, selectedSample, isDarkMode]);
+    targetHighlightPosRef.current = pos.clone();
+    const useFeature = useFeatureColoring && selectedSample && lastSelectedIndex != null;
+    const fv = useFeature && semanticState.selectedFeature ? featureValues[semanticState.selectedFeature] : null;
+    const val =
+      fv && lastSelectedIndex != null && lastSelectedIndex < fv.length
+        ? fv[lastSelectedIndex]
+        : null;
+    let color: THREE.Color;
+    if (useFeature && val != null && semanticState.featureRange) {
+      const c = featureToColorLog1pSafe(val, semanticState.featureRange.min, semanticState.featureRange.max);
+      color = new THREE.Color(c.r, c.g, c.b);
+    } else if (selectedSample) {
+      color =
+        visualizerOptions.coloringMode === 'phenotype'
+          ? new THREE.Color(
+              selectedSample.color_phenotypic?.r ?? 0,
+              selectedSample.color_phenotypic?.g ?? 0,
+              selectedSample.color_phenotypic?.b ?? 0
+            )
+          : new THREE.Color(
+              selectedSample.color?.r ?? 0,
+              selectedSample.color?.g ?? 0,
+              selectedSample.color?.b ?? 0
+            );
+    } else {
+      color = new THREE.Color(1, 1, 0);
+    }
+    if (isDarkMode) {
+      color.multiplyScalar(1.5);
+      clampColor(color);
+    }
+    const onTrajectory = Boolean(proj && trajectoryPoints?.length);
+    if (!selectedPointMeshRef.current) {
+      createOrUpdateHighlight(pos, color, onTrajectory);
+    } else {
+      if (!proj) selectedPointMeshRef.current.position.copy(pos);
+      const mat = selectedPointMeshRef.current.material as THREE.MeshBasicMaterial;
+      if (mat) mat.color.copy(color);
+      // Resize sphere when switching on/off trajectory (recreate with new radius)
+      const currentRadius = (selectedPointMeshRef.current.geometry as THREE.SphereGeometry).parameters.radius;
+      const wantRadius = onTrajectory ? 2.6 : 1.8;
+      if (Math.abs(currentRadius - wantRadius) > 0.01) {
+        createOrUpdateHighlight(pos, color, onTrajectory);
+      }
+    }
+  }, [
+    semanticState.projectedPosition,
+    selectedSample,
+    semanticState.featureRange,
+    semanticState.selectedFeature,
+    featureValues,
+    useFeatureColoring,
+    lastSelectedIndex,
+    visualizerOptions.coloringMode,
+    isDarkMode,
+    toScenePos,
+    createOrUpdateHighlight,
+    trajectoryPoints,
+  ]);
 
-  // Set default selected sample with "control" when the component mounts
   useEffect(() => {
     if (filteredSamples4D.length > 0 && !selectedSample) {
-      const defaultSample = filteredSamples4D.find(sample => sample.phenotype === 'control');
-      if (defaultSample) {
-        setSelectedSample(defaultSample);
-      }
+      const defaultSample = filteredSamples4D.find((s) => s.phenotype === 'control');
+      if (defaultSample) setSelectedSample(defaultSample);
     }
-  }, [filteredSamples4D]);
+  }, [filteredSamples4D, selectedSample, setSelectedSample]);
 
-  // Handle point selection with raycaster
+  useEffect(() => {
+    selectedSampleIdRef.current = selectedSample?.id ?? null;
+  }, [selectedSample]);
+
+  const handleSemanticSliderChange = useCallback(
+    (_pointIndex: number, targetValue: number) => {
+      if (!selectedSample) return;
+      const embeddingIndex = samples4D.findIndex((s) => s.id === selectedSample.id);
+      if (embeddingIndex < 0) return;
+      const maxIndex = apiEmbeddingCount ?? Infinity;
+      if (embeddingIndex >= maxIndex) return;
+      const feature = semanticState.selectedFeature ?? 'Fragment Length';
+      const center = getCenter();
+      const options = {
+        centerX: center.x,
+        centerY: center.y,
+        centerZ: center.z,
+        scaleFactor: SCALE_FACTOR,
+      };
+      const requestSampleId = selectedSample.id;
+      projectOnAxis(embeddingIndex, targetValue, feature, options)
+        .then((res) => {
+          if (selectedSampleIdRef.current !== requestSampleId) return;
+          const proj = { x: res.x, y: res.y, z: res.z };
+          setSemanticState((s) => ({
+            ...s,
+            projectedPosition: proj,
+            projectedConfidence: res.confidence ?? null,
+          }));
+          targetHighlightPosRef.current = new THREE.Vector3(proj.x, proj.y, proj.z);
+        })
+        .catch((err) => {
+          console.error('[semantic] API error', err);
+        });
+    },
+    [selectedSample, samples4D, semanticState.selectedFeature, setSemanticState, apiEmbeddingCount, getCenter]
+  );
+
   const handleClick = (event: React.MouseEvent) => {
     if (!containerRef.current || !cameraRef.current || !pointsRef.current) return;
     if (isDragging) return;
-    
     const rect = containerRef.current.getBoundingClientRect();
     mouseRef.current.x = ((event.clientX - rect.left) / containerRef.current.clientWidth) * 2 - 1;
     mouseRef.current.y = -((event.clientY - rect.top) / containerRef.current.clientHeight) * 2 + 1;
-    
     raycasterRef.current.setFromCamera(mouseRef.current, cameraRef.current);
-    
     const intersects = raycasterRef.current.intersectObject(pointsRef.current);
-    
     if (intersects.length > 0) {
       const index = intersects[0].index;
       if (typeof index === 'number' && index < filteredSamples4D.length) {
         setLastSelectedIndex(index);
-        const selectedSample = filteredSamples4D[index];
-        setSelectedSample(selectedSample);
-
-        const center = new THREE.Vector3();
-        filteredSamples4D.forEach(sample => {
-          center.add(new THREE.Vector3(sample.x, sample.y, sample.z));
-        });
-        center.divideScalar(filteredSamples4D.length);
-        
-        const position = new THREE.Vector3(
-          (selectedSample.x - center.x) * 4,
-          (selectedSample.y - center.y) * 4,
-          (selectedSample.z - center.z) * 4
-        );
-
-        let color;
-        if (visualizerOptions.coloringMode === 'phenotype') {
-          color = new THREE.Color(
-            selectedSample.color_phenotypic?.r ?? 0,
-            selectedSample.color_phenotypic?.g ?? 0,
-            selectedSample.color_phenotypic?.b ?? 0
-          );
-        } else {
-          color = new THREE.Color(
-            selectedSample.color?.r ?? 0,
-            selectedSample.color?.g ?? 0,
-            selectedSample.color?.b ?? 0
-          );
-        }
-        
-        if (isDarkMode) {
-          color.multiplyScalar(1.5);
-          clampColor(color);
-        }
-        
-        createHighlightMesh(position, color);
+        setSelectedPointIndex(index);
+        setSelectedSample(filteredSamples4D[index]);
+        setSemanticState((s) => ({ ...s, projectedPosition: null, projectedConfidence: null }));
       }
     }
   };
@@ -504,7 +721,7 @@ const Visualizer4D: React.FC = () => {
       </div>
 
       <div className={`p-3 ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} border-b`}>
-        <VisualizerControls type="4d" />
+        <VisualizerControls type="4d" onSemanticSliderChange={handleSemanticSliderChange} />
       </div>
       
       <div 

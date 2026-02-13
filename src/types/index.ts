@@ -34,6 +34,24 @@ export interface VisualizerProps {
 
 export type ColoringMode = 'treatment' | 'phenotype';
 export type RenderingMode = 'points' | 'instanced';
+
+export interface SemanticState {
+  advancedMode: boolean;
+  selectedFeature: string | null;
+  semanticSliderValue: number | null;
+  projectedPosition: { x: number; y: number; z: number } | null;
+  /** 1 = on manifold, <1 when extrapolating (for confidence indicator) */
+  projectedConfidence: number | null;
+  featureRange: { min: number; max: number } | null;
+}
+
+export interface FeatureOption {
+  id: string;
+  label: string;
+  columnName: string;
+  weightsPath: string;
+  biasPath: string;
+}
 export type LabelVisibility = 'none' | 'selected' | 'all';
 
 export interface VisualizerOptions {

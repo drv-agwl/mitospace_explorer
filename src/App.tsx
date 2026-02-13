@@ -8,10 +8,29 @@ import Footer from './components/Footer';
 import SamplePanel from './components/SamplePanel';
 import About from './components/About';
 import PasswordProtection from './components/PasswordProtection';
+import SpaceLanding from './components/SpaceLanding';
 import { SampleProvider } from './context/SampleContext';
 
 function Explorer() {
+  const [viewMode, setViewMode] = useState<'landing' | 'explorer'>('landing');
   const [activeTab, setActiveTab] = useState<'2d' | '4d'>('4d');
+
+  const handleSelectSpace = (space: '4d' | '2d') => {
+    setActiveTab(space);
+    setViewMode('explorer');
+  };
+
+  if (viewMode === 'landing') {
+    return (
+      <div className="flex flex-col min-h-screen bg-white">
+        <Header />
+        <main className="flex-grow">
+          <SpaceLanding onSelect={handleSelectSpace} />
+        </main>
+        <Footer />
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col min-h-screen bg-white">

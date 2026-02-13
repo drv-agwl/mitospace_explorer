@@ -1,0 +1,12 @@
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+numpy>=1.24.0
+pandas>=2.0.0
+python-multipart>=0.0.6
+# Required to load umap_reducer.pkl (joblib needs umap-learn + numba/pynndescent at load time)
+umap-learn>=0.5.0
+joblib>=1.2.0
+# numba (used by umap) requires llvmlite>=0.44.0; upgrade if you see "Numba requires at least version 0.44.0 of llvmlite"
+llvmlite>=0.44.0
+# Required to load surrogate reducer from scripts/fit_embedding_to_umap.py (MLPRegressor)
+scikit-learn>=1.0.0
