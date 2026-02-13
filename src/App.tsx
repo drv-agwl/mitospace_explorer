@@ -9,6 +9,7 @@ import SamplePanel from './components/SamplePanel';
 import About from './components/About';
 import PasswordProtection from './components/PasswordProtection';
 import SpaceLanding from './components/SpaceLanding';
+import GlobalKeyboardShortcuts from './components/GlobalKeyboardShortcuts';
 import { SampleProvider } from './context/SampleContext';
 
 function Explorer() {
@@ -35,6 +36,7 @@ function Explorer() {
   return (
     <div className="flex flex-col min-h-screen bg-black">
       <Header />
+      <GlobalKeyboardShortcuts />
 
       <main className="flex-grow flex min-h-0">
         <div className="flex-grow flex flex-col min-w-0">

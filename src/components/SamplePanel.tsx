@@ -111,13 +111,16 @@ const SamplePanel: React.FC = () => {
                   )}
                 </div>
               </div>
-              <button
-                onClick={() => setSelectedSample(null)}
-                className={`p-2 rounded-lg ${getContrastColor()} opacity-80 hover:opacity-100 hover:bg-black/10 transition-all`}
-                title="Close"
-              >
-                <X size={18} />
-              </button>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] opacity-70 hidden sm:inline">Esc</span>
+                <button
+                  onClick={() => setSelectedSample(null)}
+                  className={`p-2 rounded-lg ${getContrastColor()} opacity-80 hover:opacity-100 hover:bg-black/10 transition-all`}
+                  title="Close (Esc)"
+                >
+                  <X size={18} />
+                </button>
+              </div>
             </div>
           </div>
 

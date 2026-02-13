@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { Sun, Moon, Home, ZoomIn, ZoomOut, HelpCircle } from 'lucide-react';
+import { Sun, Moon, Home, ZoomIn, ZoomOut, HelpCircle, Maximize2, Minimize2, Copy } from 'lucide-react';
 import { useSample } from '../context/SampleContext';
 import VisualizerControls from './VisualizerControls';
+import ColorLegend from './ColorLegend';
 import { projectOnAxis, getAxisTrajectory } from '../api/client';
 import { featureToColorLog1pSafe } from '../utils/featureColor';
 import { adaptColorForDarkTheme } from '../utils/colorUtils';
@@ -25,6 +26,7 @@ const Visualizer4D: React.FC = () => {
   } = useSample();
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const fullscreenContainerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
@@ -47,6 +49,8 @@ const Visualizer4D: React.FC = () => {
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [copiedCoords, setCopiedCoords] = useState(false);
 
   const toggleHelp = () => {
     setShowHelp(!showHelp);
@@ -167,8 +171,13 @@ const Visualizer4D: React.FC = () => {
       alpha: true,
       powerPreference: 'high-performance'
     });
-    renderer.setSize(containerRef.current.clientWidth, containerRef.current.clientHeight);
+    const w = Math.max(1, containerRef.current.clientWidth);
+    const h = Math.max(1, containerRef.current.clientHeight);
+    renderer.setSize(w, h);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.domElement.style.display = 'block';
+    renderer.domElement.style.width = '100%';
+    renderer.domElement.style.height = '100%';
     containerRef.current.appendChild(renderer.domElement);
     rendererRef.current = renderer;
     
@@ -263,14 +272,20 @@ const Visualizer4D: React.FC = () => {
     
     const handleResize = () => {
       if (!containerRef.current || !cameraRef.current || !rendererRef.current) return;
-      
-      cameraRef.current.aspect = containerRef.current.clientWidth / containerRef.current.clientHeight;
+      const w = Math.max(1, containerRef.current.clientWidth);
+      const h = Math.max(1, containerRef.current.clientHeight);
+      cameraRef.current.aspect = w / h;
       cameraRef.current.updateProjectionMatrix();
-      rendererRef.current.setSize(containerRef.current.clientWidth, containerRef.current.clientHeight);
+      rendererRef.current.setSize(w, h);
     };
     
     window.addEventListener('resize', handleResize);
-    
+
+    const resizeObserver = new ResizeObserver(() => {
+      handleResize();
+    });
+    resizeObserver.observe(containerRef.current);
+
     // Add specific wheel event handler for better trackpad pinch-to-zoom support
     const handleWheel = (event: WheelEvent) => {
       if (event.ctrlKey || event.metaKey) {
@@ -301,6 +316,7 @@ const Visualizer4D: React.FC = () => {
     
     return () => {
       window.removeEventListener('resize', handleResize);
+      resizeObserver.disconnect();
       if (containerRef.current) {
         containerRef.current.removeEventListener('wheel', handleWheel);
       }
@@ -708,11 +724,67 @@ const Visualizer4D: React.FC = () => {
         setSelectedSample(filteredSamples4D[index]);
         setSemanticState((s) => ({ ...s, projectedPosition: null, projectedConfidence: null }));
       }
+    } else {
+      setSelectedSample(null);
+      setSelectedPointIndex(null);
+      setSemanticState((s) => ({ ...s, projectedPosition: null, projectedConfidence: null }));
     }
   };
 
+  const handleResetView = useCallback(() => {
+    if (cameraRef.current) {
+      cameraRef.current.position.set(25, 25, 25);
+      cameraRef.current.lookAt(new THREE.Vector3(0, 0, 0));
+      if (controlsRef.current) {
+        controlsRef.current.target.set(0, 0, 0);
+        controlsRef.current.update();
+      }
+    }
+  }, []);
+
+  const toggleFullscreen = () => {
+    const el = fullscreenContainerRef.current;
+    if (!el) return;
+    if (!document.fullscreenElement) {
+      el.requestFullscreen?.();
+      setIsFullscreen(true);
+    } else {
+      document.exitFullscreen?.();
+      setIsFullscreen(false);
+    }
+  };
+
+  useEffect(() => {
+    const onFullscreenChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
+  }, []);
+
+  const handleCopyCoords = () => {
+    if (!selectedSample) return;
+    const s = selectedSample;
+    const text = `(${s.x.toFixed(4)}, ${s.y.toFixed(4)}, ${s.z.toFixed(4)})`;
+    navigator.clipboard.writeText(text).then(() => {
+      setCopiedCoords(true);
+      setTimeout(() => setCopiedCoords(false), 1500);
+    });
+  };
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return;
+      if (e.key === 'r' || e.key === 'R') {
+        e.preventDefault();
+        handleResetView();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [handleResetView]);
+
   return (
-    <div className={`${isDarkMode ? 'bg-black' : 'bg-white'} overflow-hidden h-full flex flex-col`}>
+    <div ref={fullscreenContainerRef} className={`${isDarkMode ? 'bg-black' : 'bg-white'} overflow-hidden h-full flex flex-col`}>
       {/* Mobile Warning */}
       <div className={`lg:hidden shrink-0 ${isDarkMode ? 'bg-amber-500/10 border-amber-500/30 text-amber-200' : 'bg-amber-50 border-amber-200 text-amber-800'} border-l-4 px-4 py-3`} role="alert">
         <p className="font-medium text-sm">Desktop recommended for best experience</p>
@@ -744,18 +816,9 @@ const Visualizer4D: React.FC = () => {
             {isDarkMode ? <Sun size={18} strokeWidth={2} /> : <Moon size={18} strokeWidth={2} />}
           </button>
           <button
-            onClick={() => {
-              if (cameraRef.current) {
-                cameraRef.current.position.set(25, 25, 25);
-                cameraRef.current.lookAt(new THREE.Vector3(0, 0, 0));
-                if (controlsRef.current) {
-                  controlsRef.current.target.set(0, 0, 0);
-                  controlsRef.current.update();
-                }
-              }
-            }}
+            onClick={handleResetView}
             className="bg-white/10 hover:bg-white/15 text-white/90 p-2.5 rounded-xl w-10 h-10 flex items-center justify-center transition-colors border border-white/10"
-            title="Reset view"
+            title="Reset view (R)"
           >
             <Home size={18} strokeWidth={2} />
           </button>
@@ -791,19 +854,41 @@ const Visualizer4D: React.FC = () => {
             Zoom {zoomLevel}%
           </div>
           <button
+            onClick={toggleFullscreen}
+            className="bg-white/10 hover:bg-white/15 text-white/90 p-2.5 rounded-xl w-10 h-10 flex items-center justify-center transition-colors border border-white/10"
+            title="Fullscreen"
+          >
+            {isFullscreen ? <Minimize2 size={18} strokeWidth={2} /> : <Maximize2 size={18} strokeWidth={2} />}
+          </button>
+          <button
             onClick={toggleHelp}
             className="bg-white/10 hover:bg-white/15 text-white/90 p-2.5 rounded-xl w-10 h-10 flex items-center justify-center transition-colors border border-white/10"
-            title="Controls"
+            title="Controls (?)"
           >
             <HelpCircle size={18} strokeWidth={2} />
           </button>
         </div>
         
-        {/* Status */}
-        <div className={`absolute bottom-4 left-4 px-3 py-2 rounded-xl text-xs font-medium backdrop-blur-sm border border-white/10 ${isDarkMode ? 'bg-black/70 text-white/80' : 'bg-white/90 text-gray-700'}`}>
-          <div className="flex items-center gap-2">
-            <span className={`w-1.5 h-1.5 rounded-full ${fps > 30 ? 'bg-emerald-500' : fps > 15 ? 'bg-amber-500' : 'bg-red-500'}`} />
-            {fps} FPS · {pointCount.toLocaleString()} points
+        {/* Copy coords - when sample selected */}
+        {selectedSample && (
+          <button
+            onClick={handleCopyCoords}
+            className="absolute top-4 left-4 bg-white/10 hover:bg-white/15 text-white/90 px-3 py-2 rounded-xl text-xs font-medium flex items-center gap-2 transition-colors border border-white/10"
+            title="Copy coordinates"
+          >
+            <Copy size={14} strokeWidth={2} />
+            {copiedCoords ? 'Copied!' : 'Copy coords'}
+          </button>
+        )}
+        
+        {/* Bottom-left: legend + status */}
+        <div className="absolute bottom-4 left-4 flex flex-col gap-2">
+          <ColorLegend visible={!useFeatureColoring} />
+          <div className={`px-3 py-2 rounded-xl text-xs font-medium backdrop-blur-sm border border-white/10 ${isDarkMode ? 'bg-black/70 text-white/80' : 'bg-white/90 text-gray-700'}`}>
+            <div className="flex items-center gap-2">
+              <span className={`w-1.5 h-1.5 rounded-full ${fps > 30 ? 'bg-emerald-500' : fps > 15 ? 'bg-amber-500' : 'bg-red-500'}`} />
+              {fps} FPS · {pointCount.toLocaleString()} points
+            </div>
           </div>
         </div>
         
@@ -817,6 +902,12 @@ const Visualizer4D: React.FC = () => {
                 <div className="flex justify-between"><span className="font-medium text-white/90">Middle / Right drag</span> Pan</div>
                 <div className="flex justify-between"><span className="font-medium text-white/90">Scroll / Pinch</span> Zoom</div>
                 <div className="flex justify-between"><span className="font-medium text-white/90">Click</span> Select point</div>
+                <div className="flex justify-between"><span className="font-medium text-white/90">Click empty</span> Deselect</div>
+                <div className="border-t border-white/10 mt-4 pt-4 space-y-1.5">
+                  <p className="text-white/50 text-xs font-medium uppercase tracking-wider">Shortcuts</p>
+                  <div className="flex justify-between"><span className="font-medium text-white/90">Esc</span> Close panel</div>
+                  <div className="flex justify-between"><span className="font-medium text-white/90">R</span> Reset view</div>
+                </div>
               </div>
               <button className="btn-primary mt-6 w-full" onClick={toggleHelp}>Done</button>
             </div>
