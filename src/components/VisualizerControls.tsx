@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { SlidersHorizontal, Palette, Sparkles } from 'lucide-react';
+import { SlidersHorizontal, Palette, Sparkles, LayoutList, ImageIcon } from 'lucide-react';
 import { useSample } from '../context/SampleContext';
 import { getFeatureStats, getFeatureValues, healthCheck } from '../api/client';
+import { findNearestSampleIndex } from './SemanticAxisPreview';
 
 interface VisualizerControlsProps {
   type: '2d' | '4d';
@@ -30,6 +31,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
     featureValues,
     samples4D,
     selectedSample,
+    setSelectedSample,
   } = useSample();
 
   const selectedEmbeddingIndex =
@@ -176,6 +178,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
                     projectedPosition: null,
                     projectedConfidence: null,
                     semanticSliderValue: null,
+                    axisSamplesVisible: e.target.checked ? s.axisSamplesVisible : false,
                   }))
                 }
                 className="w-4 h-4 rounded accent-white"
@@ -200,6 +203,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
                       projectedPosition: null,
                       projectedConfidence: null,
                       featureRange: null,
+                      axisSamplesVisible: false,
                     }));
                   }}
                   disabled={featureLoading}
@@ -221,6 +225,24 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
                   <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
                   API offline — start server for semantic mode
                 </p>
+              )}
+              {selectedFeature && (
+                <button
+                  onClick={() =>
+                    setSemanticState((s) => ({
+                      ...s,
+                      axisSamplesVisible: !s.axisSamplesVisible,
+                    }))
+                  }
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                    semanticState.axisSamplesVisible
+                      ? 'bg-white/15 text-white'
+                      : 'bg-white/5 hover:bg-white/10 text-white/80'
+                  }`}
+                >
+                  <LayoutList size={14} />
+                  {semanticState.axisSamplesVisible ? 'Hide samples' : 'Visualize samples along axis'}
+                </button>
               )}
             </div>
           )}
@@ -256,6 +278,22 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
                   Point outside API range ({apiEmbeddingCount?.toLocaleString()} points)
                 </span>
               )}
+              <button
+                onClick={() => {
+                  const vals = featureValues[selectedFeature];
+                  if (!vals || !featureRange) return;
+                  const target = typeof sliderValue === 'number' ? sliderValue : featureRange.min;
+                  const maxIdx = apiEmbeddingCount ?? vals.length;
+                  const idx = findNearestSampleIndex(target, vals, maxIdx);
+                  const sample = samples4D[idx];
+                  if (sample) setSelectedSample(sample);
+                }}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white text-sm font-medium transition-colors"
+                title="Show sample at current axis position"
+              >
+                <ImageIcon size={14} />
+                Render
+              </button>
             </div>
           )}
         </>

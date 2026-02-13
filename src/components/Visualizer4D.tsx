@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Sun, Moon, Home, ZoomIn, ZoomOut, HelpCircle, Maximize2, Minimize2, Copy } from 'lucide-react';
 import { useSample } from '../context/SampleContext';
 import VisualizerControls from './VisualizerControls';
+import SemanticAxisPreview from './SemanticAxisPreview';
 import ColorLegend from './ColorLegend';
 import { projectOnAxis, getAxisTrajectory } from '../api/client';
 import { featureToColorLog1pSafe } from '../utils/featureColor';
@@ -794,7 +795,25 @@ const Visualizer4D: React.FC = () => {
       <div className={`shrink-0 px-6 py-4 border-b ${isDarkMode ? 'bg-black/90 border-white/[0.08]' : 'bg-white border-gray-200'}`}>
         <VisualizerControls type="4d" onSemanticSliderChange={handleSemanticSliderChange} dark={isDarkMode} />
       </div>
-      
+
+      {/* Axis samples preview */}
+      {semanticState.axisSamplesVisible &&
+        semanticState.selectedFeature &&
+        semanticState.featureRange &&
+        featureValues[semanticState.selectedFeature] && (
+          <SemanticAxisPreview
+            featureRange={semanticState.featureRange}
+            featureValues={featureValues[semanticState.selectedFeature]}
+            selectedFeature={semanticState.selectedFeature}
+            samples={samples4D}
+            apiEmbeddingCount={apiEmbeddingCount}
+            onClose={() =>
+              setSemanticState((s) => ({ ...s, axisSamplesVisible: false }))
+            }
+            onSelectSample={setSelectedSample}
+          />
+        )}
+
       <div
         ref={containerRef}
         className="flex-1 min-h-0 relative overflow-hidden"

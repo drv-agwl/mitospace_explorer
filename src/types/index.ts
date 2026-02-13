@@ -43,6 +43,8 @@ export interface SemanticState {
   /** 1 = on manifold, <1 when extrapolating (for confidence indicator) */
   projectedConfidence: number | null;
   featureRange: { min: number; max: number } | null;
+  /** Show 5 samples uniformly spread along the axis */
+  axisSamplesVisible?: boolean;
 }
 
 export interface FeatureOption {

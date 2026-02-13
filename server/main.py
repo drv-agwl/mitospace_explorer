@@ -27,6 +27,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Trim outliers from high Fragment/Segment Length; use percentile bounds instead of raw min/max
+FEATURE_PERCENTILE_LOW = 2   # bottom 2% trimmed
+FEATURE_PERCENTILE_HIGH = 98  # top 2% trimmed
+
+
+def _feature_bounds(arr: np.ndarray) -> tuple[float, float]:
+    """Return (min, max) using percentile bounds to exclude outliers."""
+    valid = arr[~np.isnan(arr)]
+    if len(valid) < 2:
+        return float(np.min(valid)) if len(valid) == 1 else (0.0, 1.0)
+    lo, hi = np.nanpercentile(arr, [FEATURE_PERCENTILE_LOW, FEATURE_PERCENTILE_HIGH])
+    return float(lo), float(hi)
+
+
 # Loaded at startup: UMAP coords, feature values, and learnt curve (feature value -> UMAP x,y,z)
 umap_points: np.ndarray | None = None
 feature_values: dict[str, np.ndarray] = {}
@@ -48,7 +62,7 @@ def _project_spatial(feature_name: str, target_value: float, bandwidth_ratio: fl
     valid = ~np.isnan(f)
     if not np.any(valid):
         raise ValueError(f"No valid values for feature {feature_name}")
-    f_min, f_max = float(np.min(f[valid])), float(np.max(f[valid]))
+    f_min, f_max = _feature_bounds(f)
     sigma = (f_max - f_min) / bandwidth_ratio
     if sigma < 1e-12:
         sigma = 1.0
@@ -190,7 +204,7 @@ def axis_trajectory(
     valid = arr[~np.isnan(arr)]
     if len(valid) == 0:
         raise HTTPException(status_code=404, detail="No valid feature values")
-    f_min, f_max = float(np.min(valid)), float(np.max(valid))
+    f_min, f_max = _feature_bounds(arr)
     num_points = max(2, min(200, num_points))
     values = np.linspace(f_min, f_max, num_points, dtype=np.float64).reshape(-1, 1)
     coords = feature_umap_model[feature].predict(values)
@@ -232,7 +246,8 @@ def feature_stats(feature: str = "Fragment Length"):
     valid = arr[~np.isnan(arr)]
     if len(valid) == 0:
         return {"min": 0.0, "max": 1.0}
-    return {"min": float(np.min(valid)), "max": float(np.max(valid))}
+    f_min, f_max = _feature_bounds(arr)
+    return {"min": f_min, "max": f_max}
 
 
 @app.get("/api/features/{feature_name}")
