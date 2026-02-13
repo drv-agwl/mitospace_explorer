@@ -154,7 +154,7 @@ const Visualizer4D: React.FC = () => {
     if (!containerRef.current) return;
     
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color('#1a1a1a');
+    scene.background = null;
     sceneRef.current = scene;
     
     const camera = new THREE.PerspectiveCamera(
@@ -348,8 +348,8 @@ const Visualizer4D: React.FC = () => {
   // Update scene background and lighting when dark mode changes
   useEffect(() => {
     if (sceneRef.current) {
-      sceneRef.current.background = new THREE.Color(isDarkMode ? '#1a1a1a' : visualizerOptions.backgroundColor);
-      
+      sceneRef.current.background = null;
+
       const lights = sceneRef.current.children.filter(child => child instanceof THREE.Light);
       lights.forEach(light => {
         if (light instanceof THREE.AmbientLight) {
@@ -795,10 +795,15 @@ const Visualizer4D: React.FC = () => {
         <VisualizerControls type="4d" onSemanticSliderChange={handleSemanticSliderChange} dark={isDarkMode} />
       </div>
       
-      <div 
-        ref={containerRef} 
-        className="flex-1 min-h-0 relative"
+      <div
+        ref={containerRef}
+        className="flex-1 min-h-0 relative overflow-hidden"
         onClick={handleClick}
+        style={{
+          background: isDarkMode
+            ? 'linear-gradient(to bottom, #171717 0%, #1a1a1a 30%, #1a1a1a 70%, #1e1e1e 100%)'
+            : 'linear-gradient(to bottom, #e5e5e5 0%, #f0f0f0 30%, #f0f0f0 70%, #f5f5f5 100%)',
+        }}
       >
         {isLoading && (
           <div className="absolute inset-0 flex items-center justify-center bg-ink-900/50">
