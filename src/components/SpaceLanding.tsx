@@ -33,14 +33,14 @@ const SpaceLanding: React.FC<SpaceLandingProps> = ({ onSelect }) => {
           </div>
           <h3 className="text-xl font-semibold text-white mb-2">4D MitoSpace</h3>
           <p className="text-white/60 text-sm leading-relaxed">
-            Interactive 3D UMAP embedding from LLSM time-lapse movies. Explore drug clusters, phenotypic overlays, and semantic axis navigation.
+            AI-powered 4D embedding from LLSM time-lapse movies. Explore drug clusters, phenotypic overlays, and semantic axis navigation.
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
             <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium bg-white/10 text-white/80">
               LLSM
             </span>
             <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium bg-white/10 text-white/80">
-              3D UMAP
+              4D AI
             </span>
           </div>
         </button>

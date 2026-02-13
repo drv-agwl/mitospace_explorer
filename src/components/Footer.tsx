@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { ExternalLink } from 'lucide-react';
+import MitoSpaceLogo from './MitoSpaceLogo';
 
 const Footer: React.FC = () => {
   return (
@@ -8,8 +9,8 @@ const Footer: React.FC = () => {
       <div className="max-w-[1920px] mx-auto px-6 py-4">
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
-            <div className="w-5 h-5 rounded-md bg-white/[0.06] border border-white/[0.08] flex items-center justify-center">
-              <div className="w-1.5 h-1.5 rounded-full bg-white/70" />
+            <div className="w-5 h-5 rounded-md bg-white/[0.06] border border-white/[0.08] flex items-center justify-center text-white/60">
+              <MitoSpaceLogo size={12} variant="light" />
             </div>
             <span className="text-sm text-white/45">MitoSpace Explorer · Schöneberg Lab</span>
           </div>
