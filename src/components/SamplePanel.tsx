@@ -67,27 +67,30 @@ const SamplePanel: React.FC = () => {
   const getColorStyle = () => {
     if (!selectedSample) return {};
     const color = visualizerOptions.coloringMode === 'phenotype' ? selectedSample.color_phenotypic : selectedSample.color;
-    return { backgroundColor: `rgb(${color.r * 255}, ${color.g * 255}, ${color.b * 255})` };
+    const r = (color?.r ?? 0) * 255;
+    const g = (color?.g ?? 0) * 255;
+    const b = (color?.b ?? 0) * 255;
+    return { backgroundColor: `rgb(${r}, ${g}, ${b})` };
   };
 
   const getContrastColor = () => {
     if (!selectedSample) return 'text-black';
     const color = visualizerOptions.coloringMode === 'phenotype' ? selectedSample.color_phenotypic : selectedSample.color;
-    const luminance = 0.299 * color.r + 0.587 * color.g + 0.114 * color.b;
+    const luminance = 0.299 * (color?.r ?? 0) + 0.587 * (color?.g ?? 0) + 0.114 * (color?.b ?? 0);
     return luminance > 0.5 ? 'text-black' : 'text-white';
   };
 
   return (
-    <div className="w-[420px] min-w-[420px] bg-black border-l border-white/10 h-full flex flex-col overflow-hidden">
+    <div className="w-[400px] min-w-[400px] bg-black/95 border-l border-white/[0.08] h-full flex flex-col overflow-hidden backdrop-blur-sm">
       {selectedSample ? (
         <>
           <div
-            className="shrink-0 px-6 py-4 border-b border-white/10"
+            className="shrink-0 px-6 py-5 border-b border-white/[0.08]"
             style={{ ...getColorStyle(), color: undefined }}
           >
             <div className="flex justify-between items-start">
               <div>
-                <h3 className={`text-lg font-semibold ${getContrastColor()}`}>
+                <h3 className={`text-lg font-semibold tracking-tight ${getContrastColor()}`}>
                   {selectedSample.treatment.drug}
                 </h3>
                 <div className={`mt-1 flex items-center gap-2 ${getContrastColor()} opacity-90`}>
@@ -121,15 +124,15 @@ const SamplePanel: React.FC = () => {
           <div className="flex-1 overflow-y-auto scrollbar-thin px-6 py-5 space-y-6">
             {(selectedSample.videos || selectedSample.images) && (
               <section>
-                <h4 className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-3 flex items-center gap-2">
+                <h4 className="text-[11px] font-semibold text-white/50 uppercase tracking-widest mb-3 flex items-center gap-2">
                   {selectedSample.videos ? (
                     <>
-                      <Video size={14} className="text-white/60" />
+                      <Video size={13} strokeWidth={2} className="text-white/50" />
                       4D Movie
                     </>
                   ) : (
                     <>
-                      <Microscope size={14} className="text-white/60" />
+                      <Microscope size={13} strokeWidth={2} className="text-white/50" />
                       Images
                     </>
                   )}
@@ -142,7 +145,7 @@ const SamplePanel: React.FC = () => {
                       </button>
                     )}
                     {selectedSample.videos.map((video, index) => (
-                      <div key={index} className="rounded-xl overflow-hidden bg-white/5 border border-white/10">
+                      <div key={index} className="rounded-xl overflow-hidden bg-white/[0.03] border border-white/[0.08]">
                         <div className="relative aspect-video">
                           {videoLoadError[index] ? (
                             <div className="absolute inset-0 flex items-center justify-center text-white/40">
@@ -176,7 +179,7 @@ const SamplePanel: React.FC = () => {
                 ) : (
                   <div className="space-y-4">
                     {selectedSample.images?.map((image, index) => (
-                      <div key={index} className="rounded-xl overflow-hidden bg-white/5 border border-white/10">
+                      <div key={index} className="rounded-xl overflow-hidden bg-white/[0.03] border border-white/[0.08]">
                         <div className="relative aspect-video">
                           {imageLoadError[index] ? (
                             <div className="absolute inset-0 flex items-center justify-center text-white/40">
@@ -210,11 +213,11 @@ const SamplePanel: React.FC = () => {
             )}
 
             <section>
-              <h4 className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-3 flex items-center gap-2">
-                <Pill size={14} className="text-white/60" />
+              <h4 className="text-[11px] font-semibold text-white/50 uppercase tracking-widest mb-3 flex items-center gap-2">
+                <Pill size={13} strokeWidth={2} className="text-white/50" />
                 Treatment
               </h4>
-              <div className="rounded-xl border border-white/10 overflow-hidden">
+              <div className="rounded-xl border border-white/[0.08] overflow-hidden bg-white/[0.02]">
                 <div className="grid grid-cols-2 divide-x divide-white/10">
                   <div className="p-4 text-center">
                     <p className="text-xs font-medium text-white/50 mb-0.5">Drug</p>
@@ -250,9 +253,9 @@ const SamplePanel: React.FC = () => {
             </section>
 
             <section>
-              <h4 className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-3">Colors</h4>
+              <h4 className="text-[11px] font-semibold text-white/50 uppercase tracking-widest mb-3">Colors</h4>
               <div className="grid grid-cols-2 gap-3">
-                <div className="rounded-lg border border-white/10 p-3">
+                <div className="rounded-lg border border-white/[0.08] bg-white/[0.02] p-3">
                   <p className="text-xs font-medium text-white/50 mb-2">Treatment</p>
                   <div className="flex items-center gap-2">
                     <div
@@ -266,17 +269,17 @@ const SamplePanel: React.FC = () => {
                     </span>
                   </div>
                 </div>
-                <div className="rounded-lg border border-white/10 p-3">
+                <div className="rounded-lg border border-white/[0.08] bg-white/[0.02] p-3">
                   <p className="text-xs font-medium text-white/50 mb-2">Phenotype</p>
                   <div className="flex items-center gap-2">
                     <div
                       className="w-8 h-8 rounded-lg border border-white/20"
                       style={{
-                        backgroundColor: `rgb(${selectedSample.color_phenotypic.r * 255}, ${selectedSample.color_phenotypic.g * 255}, ${selectedSample.color_phenotypic.b * 255})`,
+                        backgroundColor: `rgb(${(selectedSample.color_phenotypic?.r ?? 0) * 255}, ${(selectedSample.color_phenotypic?.g ?? 0) * 255}, ${(selectedSample.color_phenotypic?.b ?? 0) * 255})`,
                       }}
                     />
                     <span className="text-xs text-white/60 tabular-nums">
-                      RGB({Math.round(selectedSample.color_phenotypic.r * 255)}, {Math.round(selectedSample.color_phenotypic.g * 255)}, {Math.round(selectedSample.color_phenotypic.b * 255)})
+                      RGB({Math.round((selectedSample.color_phenotypic?.r ?? 0) * 255)}, {Math.round((selectedSample.color_phenotypic?.g ?? 0) * 255)}, {Math.round((selectedSample.color_phenotypic?.b ?? 0) * 255)})
                     </span>
                   </div>
                 </div>
@@ -284,11 +287,11 @@ const SamplePanel: React.FC = () => {
             </section>
 
             <section>
-              <h4 className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-3 flex items-center gap-2">
-                <Database size={14} className="text-white/60" />
+              <h4 className="text-[11px] font-semibold text-white/50 uppercase tracking-widest mb-3 flex items-center gap-2">
+                <Database size={13} strokeWidth={2} className="text-white/50" />
                 Metadata
               </h4>
-              <div className="rounded-xl border border-white/10 overflow-hidden">
+              <div className="rounded-xl border border-white/[0.08] overflow-hidden bg-white/[0.02]">
                 <table className="w-full text-sm">
                   <tbody>
                     {Object.entries(selectedSample.metadata).map(([key, value]) => (
@@ -304,12 +307,12 @@ const SamplePanel: React.FC = () => {
           </div>
         </>
       ) : (
-        <div className="flex-1 flex flex-col items-center justify-center px-8 text-center">
-          <div className="w-16 h-16 rounded-2xl bg-white/5 flex items-center justify-center mb-4">
-            <Microscope size={28} className="text-white/40" />
+        <div className="flex-1 flex flex-col items-center justify-center px-10 text-center">
+          <div className="w-20 h-20 rounded-2xl bg-white/[0.04] border border-white/[0.06] flex items-center justify-center mb-5">
+            <Microscope size={32} strokeWidth={1.5} className="text-white/30" />
           </div>
-          <p className="text-base font-medium text-white mb-2">No sample selected</p>
-          <p className="text-sm text-white/50 max-w-[240px]">
+          <p className="text-base font-medium text-white/90 mb-2 tracking-tight">No sample selected</p>
+          <p className="text-sm text-white/45 max-w-[260px] leading-relaxed">
             Click any point in the visualization to view sample details, media, and treatment data.
           </p>
         </div>

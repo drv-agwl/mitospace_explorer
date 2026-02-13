@@ -38,7 +38,7 @@ function Explorer() {
 
       <main className="flex-grow flex min-h-0">
         <div className="flex-grow flex flex-col min-w-0">
-          <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 bg-black/50 backdrop-blur-sm">
+          <div className="flex items-center justify-between px-6 py-4 border-b border-white/[0.08] bg-black/80 backdrop-blur-sm">
             <TabNavigation activeTab={activeTab} setActiveTab={setActiveTab} />
           </div>
 

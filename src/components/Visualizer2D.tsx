@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { Sun, Moon, Home, ZoomIn, ZoomOut, HelpCircle } from 'lucide-react';
 import { useSample } from '../context/SampleContext';
 import VisualizerControls from './VisualizerControls';
 import { adaptColorForDarkTheme } from '../utils/colorUtils';
@@ -464,7 +465,7 @@ const Visualizer2D: React.FC = () => {
         <p className="font-medium text-sm">Desktop recommended for best experience</p>
       </div>
 
-      <div className={`shrink-0 px-6 py-4 border-b ${isDarkMode ? 'bg-black/80 border-white/10' : 'bg-white border-gray-200'}`}>
+      <div className={`shrink-0 px-6 py-4 border-b ${isDarkMode ? 'bg-black/90 border-white/[0.08]' : 'bg-white border-gray-200'}`}>
         <VisualizerControls type="2d" dark={isDarkMode} />
       </div>
       
@@ -480,31 +481,14 @@ const Visualizer2D: React.FC = () => {
         )}
         
         <div className="absolute top-4 right-4 flex flex-col gap-2">
-          <button 
+          <button
             onClick={toggleDarkMode}
-            className={`${isDarkMode ? 'bg-amber-500 hover:bg-amber-600' : 'bg-ink-700 hover:bg-ink-800'} text-white p-2.5 rounded-xl shadow-elevated w-11 h-11 flex items-center justify-center transition-colors`}
-            title={isDarkMode ? 'Light mode' : 'Dark mode'}
+            className={`${isDarkMode ? 'bg-amber-500/90 hover:bg-amber-500' : 'bg-white/10 hover:bg-white/15'} text-white p-2.5 rounded-xl w-10 h-10 flex items-center justify-center transition-colors border border-white/10`}
+            title={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
           >
-            {isDarkMode ? (
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="5"></circle>
-                <line x1="12" y1="1" x2="12" y2="3"></line>
-                <line x1="12" y1="21" x2="12" y2="23"></line>
-                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
-                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
-                <line x1="1" y1="12" x2="3" y2="12"></line>
-                <line x1="21" y1="12" x2="23" y2="12"></line>
-                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
-                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
-              </svg>
-            ) : (
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
-              </svg>
-            )}
+            {isDarkMode ? <Sun size={18} strokeWidth={2} /> : <Moon size={18} strokeWidth={2} />}
           </button>
-
-          <button 
+          <button
             onClick={() => {
               if (cameraRef.current) {
                 cameraRef.current.position.set(25, 25, 25);
@@ -515,16 +499,12 @@ const Visualizer2D: React.FC = () => {
                 }
               }
             }}
-            className="bg-white/90 hover:bg-white text-ink-800 p-2.5 rounded-xl shadow-elevated w-11 h-11 flex items-center justify-center transition-colors backdrop-blur-sm"
+            className="bg-white/10 hover:bg-white/15 text-white/90 p-2.5 rounded-xl w-10 h-10 flex items-center justify-center transition-colors border border-white/10"
             title="Reset view"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
-              <polyline points="9 22 9 12 15 12 15 22"></polyline>
-            </svg>
+            <Home size={18} strokeWidth={2} />
           </button>
-          
-          <button 
+          <button
             onClick={() => {
               if (cameraRef.current) {
                 const currentPos = cameraRef.current.position.clone();
@@ -533,18 +513,12 @@ const Visualizer2D: React.FC = () => {
                 if (controlsRef.current) controlsRef.current.update();
               }
             }}
-            className="bg-white/90 hover:bg-white text-ink-800 p-2.5 rounded-xl shadow-elevated w-11 h-11 flex items-center justify-center transition-colors backdrop-blur-sm"
+            className="bg-white/10 hover:bg-white/15 text-white/90 p-2.5 rounded-xl w-10 h-10 flex items-center justify-center transition-colors border border-white/10"
             title="Zoom in"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="11" cy="11" r="8"></circle>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-              <line x1="11" y1="8" x2="11" y2="14"></line>
-              <line x1="8" y1="11" x2="14" y2="11"></line>
-            </svg>
+            <ZoomIn size={18} strokeWidth={2} />
           </button>
-          
-          <button 
+          <button
             onClick={() => {
               if (cameraRef.current) {
                 const currentPos = cameraRef.current.position.clone();
@@ -553,34 +527,24 @@ const Visualizer2D: React.FC = () => {
                 if (controlsRef.current) controlsRef.current.update();
               }
             }}
-            className="bg-white/90 hover:bg-white text-ink-800 p-2.5 rounded-xl shadow-elevated w-11 h-11 flex items-center justify-center transition-colors backdrop-blur-sm"
+            className="bg-white/10 hover:bg-white/15 text-white/90 p-2.5 rounded-xl w-10 h-10 flex items-center justify-center transition-colors border border-white/10"
             title="Zoom out"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="11" cy="11" r="8"></circle>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-              <line x1="8" y1="11" x2="14" y2="11"></line>
-            </svg>
+            <ZoomOut size={18} strokeWidth={2} />
           </button>
-          
-          <div className={`${isDarkMode ? 'bg-black/80 text-white/90' : 'bg-white/90 text-gray-700'} px-3 py-2 rounded-xl text-xs font-medium backdrop-blur-sm`}>
+          <div className={`${isDarkMode ? 'bg-black/70 text-white/80' : 'bg-white/90 text-gray-700'} px-3 py-2 rounded-xl text-xs font-medium border border-white/10 backdrop-blur-sm`}>
             Zoom {zoomLevel}%
           </div>
-          
-          <button 
+          <button
             onClick={toggleHelp}
-            className="bg-white/90 hover:bg-white text-ink-800 p-2.5 rounded-xl shadow-elevated w-11 h-11 flex items-center justify-center transition-colors backdrop-blur-sm"
+            className="bg-white/10 hover:bg-white/15 text-white/90 p-2.5 rounded-xl w-10 h-10 flex items-center justify-center transition-colors border border-white/10"
             title="Controls"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10"></circle>
-              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
-              <line x1="12" y1="17" x2="12.01" y2="17"></line>
-            </svg>
+            <HelpCircle size={18} strokeWidth={2} />
           </button>
         </div>
         
-        <div className={`absolute bottom-4 left-4 px-3 py-2 rounded-xl text-xs font-medium backdrop-blur-sm ${isDarkMode ? 'bg-black/80 text-white/90' : 'bg-white/90 text-gray-700'} shadow-elevated`}>
+        <div className={`absolute bottom-4 left-4 px-3 py-2 rounded-xl text-xs font-medium backdrop-blur-sm border border-white/10 ${isDarkMode ? 'bg-black/70 text-white/80' : 'bg-white/90 text-gray-700'}`}>
           <div className="flex items-center gap-2">
             <span className={`w-1.5 h-1.5 rounded-full ${fps > 30 ? 'bg-emerald-500' : fps > 15 ? 'bg-amber-500' : 'bg-red-500'}`} />
             {fps} FPS · {pointCount.toLocaleString()} points
@@ -589,13 +553,13 @@ const Visualizer2D: React.FC = () => {
         
         {showHelp && (
           <div className="absolute inset-0 bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm" onClick={toggleHelp}>
-            <div className="bg-white rounded-2xl shadow-elevated p-6 w-full max-w-md animate-fade-in" onClick={e => e.stopPropagation()}>
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">Controls</h3>
-              <div className="space-y-3 text-sm text-gray-700">
-                <div className="flex justify-between"><span className="font-medium text-gray-600">Left drag</span> Rotate</div>
-                <div className="flex justify-between"><span className="font-medium text-gray-600">Middle / Right drag</span> Pan</div>
-                <div className="flex justify-between"><span className="font-medium text-gray-600">Scroll / Pinch</span> Zoom</div>
-                <div className="flex justify-between"><span className="font-medium text-gray-600">Click</span> Select point</div>
+            <div className="bg-[#0f0f0f] border border-white/10 rounded-2xl shadow-elevated p-6 w-full max-w-md animate-fade-in" onClick={e => e.stopPropagation()}>
+              <h3 className="text-lg font-semibold text-white mb-4">Controls</h3>
+              <div className="space-y-3 text-sm text-white/70">
+                <div className="flex justify-between"><span className="font-medium text-white/90">Left drag</span> Rotate</div>
+                <div className="flex justify-between"><span className="font-medium text-white/90">Middle / Right drag</span> Pan</div>
+                <div className="flex justify-between"><span className="font-medium text-white/90">Scroll / Pinch</span> Zoom</div>
+                <div className="flex justify-between"><span className="font-medium text-white/90">Click</span> Select point</div>
               </div>
               <button className="btn-primary mt-6 w-full" onClick={toggleHelp}>Done</button>
             </div>

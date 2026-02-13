@@ -6,7 +6,7 @@ const Header: React.FC = () => {
   const isAbout = location.pathname === '/about';
 
   return (
-    <header className="bg-black/80 backdrop-blur-md border-b border-white/10 sticky top-0 z-50">
+    <header className="bg-black/90 backdrop-blur-md border-b border-white/[0.08] sticky top-0 z-50">
       <div className="max-w-[1920px] mx-auto px-6 py-4">
         <div className="flex items-center justify-between">
           <Link to="/" className="flex items-center gap-3 group">
@@ -36,7 +36,7 @@ const Header: React.FC = () => {
               <h1 className="text-lg font-semibold text-white tracking-tight">
                 MitoSpace Explorer
               </h1>
-              <p className="text-xs text-white/50 hidden sm:block">
+              <p className="text-xs text-white/45 hidden sm:block tracking-wide">
                 Mitochondrial phenotype atlas
               </p>
             </div>
@@ -46,7 +46,7 @@ const Header: React.FC = () => {
             <Link
               to="/about"
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                isAbout ? 'bg-white/10 text-white' : 'text-white/70 hover:text-white hover:bg-white/5'
+                isAbout ? 'bg-white/10 text-white' : 'text-white/60 hover:text-white hover:bg-white/[0.06]'
               }`}
             >
               About
@@ -55,7 +55,7 @@ const Header: React.FC = () => {
               href="https://www.schoeneberglab.org/"
               target="_blank"
               rel="noopener noreferrer"
-              className="px-4 py-2 rounded-lg text-sm font-medium text-white/70 hover:text-white hover:bg-white/5 transition-colors"
+              className="px-4 py-2 rounded-lg text-sm font-medium text-white/60 hover:text-white hover:bg-white/[0.06] transition-colors"
             >
               Lab
             </a>

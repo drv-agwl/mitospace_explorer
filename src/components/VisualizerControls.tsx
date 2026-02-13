@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { SlidersHorizontal, Palette, Sparkles } from 'lucide-react';
 import { useSample } from '../context/SampleContext';
 import { getFeatureStats, getFeatureValues, healthCheck } from '../api/client';
 
@@ -15,7 +16,7 @@ const FEATURE_OPTIONS = [
 
 const DEFAULT_FEATURE_RANGE = { min: 1, max: 5 };
 
-const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanticSliderChange, dark = true }) => {
+const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanticSliderChange }) => {
   const {
     visualizerOptions,
     setPointSize,
@@ -103,10 +104,14 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
 
   const textClass = 'text-white/90';
   const textMutedClass = 'text-white/50';
+  const controlBg = 'bg-white/[0.04]';
+  const divider = 'h-4 w-px bg-white/15';
 
   return (
-    <div className="flex flex-wrap items-center gap-6">
-      <div className="flex items-center gap-3">
+    <div className="flex flex-wrap items-center gap-4">
+      {/* Point size */}
+      <div className={`flex items-center gap-3 px-4 py-2 rounded-lg ${controlBg} border border-white/[0.06]`}>
+        <SlidersHorizontal size={16} className="text-white/50 shrink-0" />
         <label htmlFor="pointSize" className={`text-sm font-medium shrink-0 ${textClass}`}>
           Point size
         </label>
@@ -120,17 +125,19 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
           onChange={(e) => setPointSize(parseFloat(e.target.value))}
           className="w-24 h-1.5 accent-white"
         />
-        <span className={`text-xs tabular-nums w-8 ${textMutedClass}`}>
+        <span className={`text-xs tabular-nums font-mono w-8 ${textMutedClass}`}>
           {visualizerOptions.pointSize.toFixed(1)}
         </span>
       </div>
 
-      <div className="h-4 w-px bg-white/20" />
+      <div className={divider} />
 
-      <div className="flex items-center gap-4">
+      {/* Color by */}
+      <div className={`flex items-center gap-4 px-4 py-2 rounded-lg ${controlBg} border border-white/[0.06]`}>
+        <Palette size={16} className="text-white/50 shrink-0" />
         <span className={`text-sm font-medium shrink-0 ${textClass}`}>Color by</span>
         <div className="flex gap-4">
-          <label className="flex items-center gap-2 cursor-pointer">
+          <label className="flex items-center gap-2 cursor-pointer group">
             <input
               type="radio"
               name="coloringMode"
@@ -138,9 +145,9 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
               onChange={() => setColoringMode('treatment')}
               className="w-4 h-4 accent-white"
             />
-            <span className={`text-sm ${textClass}`}>Drug</span>
+            <span className={`text-sm ${textClass} group-hover:text-white`}>Drug</span>
           </label>
-          <label className="flex items-center gap-2 cursor-pointer">
+          <label className="flex items-center gap-2 cursor-pointer group">
             <input
               type="radio"
               name="coloringMode"
@@ -148,15 +155,15 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
               onChange={() => setColoringMode('phenotype')}
               className="w-4 h-4 accent-white"
             />
-            <span className={`text-sm ${textClass}`}>Phenotype</span>
+            <span className={`text-sm ${textClass} group-hover:text-white`}>Phenotype</span>
           </label>
         </div>
       </div>
 
       {type === '4d' && (
         <>
-          <div className="h-4 w-px bg-white/20" />
-          <div className="flex items-center gap-3">
+          <div className={divider} />
+          <div className={`flex items-center gap-3 px-4 py-2 rounded-lg ${controlBg} border border-white/[0.06]`}>
             <label className="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
@@ -173,12 +180,13 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
                 }
                 className="w-4 h-4 rounded accent-white"
               />
+              <Sparkles size={16} className="text-white/50 shrink-0" />
               <span className={`text-sm font-medium ${textClass}`}>Semantic axis</span>
             </label>
           </div>
 
           {advancedMode && (
-            <div className="flex flex-wrap items-center gap-4">
+            <div className={`flex flex-wrap items-center gap-4 px-4 py-2 rounded-lg ${controlBg} border border-white/[0.06]`}>
               <div className="flex items-center gap-2">
                 <label className={`text-sm font-medium shrink-0 ${textClass}`}>Feature</label>
                 <select
@@ -195,7 +203,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
                     }));
                   }}
                   disabled={featureLoading}
-                  className="w-40 text-sm py-1.5 px-3 rounded-lg border border-white/20 bg-white/5 text-white focus:outline-none focus:ring-2 focus:ring-white/30 focus:border-white/40 transition-colors disabled:opacity-60"
+                  className="w-40 text-sm py-1.5 px-3 rounded-md border border-white/15 bg-white/5 text-white placeholder:text-white/40 focus:outline-none focus:ring-1 focus:ring-white/30 focus:border-white/30 transition-colors disabled:opacity-60"
                 >
                   <option value="">Select</option>
                   {FEATURE_OPTIONS.map((opt) => (
@@ -218,10 +226,10 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
           )}
 
           {advancedMode && selectedFeature && selectedPointIndex == null && (
-            <p className={`text-xs ${textMutedClass}`}>Click a point to enable axis slider</p>
+            <p className={`text-xs ${textMutedClass} italic`}>Click a point to enable axis slider</p>
           )}
           {showSlider && featureRange && (
-            <div className="flex items-center gap-4 flex-wrap">
+            <div className={`flex items-center gap-4 flex-wrap px-4 py-2 rounded-lg ${controlBg} border border-white/[0.06]`}>
               <div className="flex items-center gap-2 min-w-[200px]">
                 <span className={`text-xs shrink-0 ${textMutedClass}`}>{featureRange.min.toFixed(3)}</span>
                 <input

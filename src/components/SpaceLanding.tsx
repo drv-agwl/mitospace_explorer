@@ -21,9 +21,9 @@ const SpaceLanding: React.FC<SpaceLandingProps> = ({ onSelect }) => {
         <button
           type="button"
           onClick={() => onSelect('4d')}
-          className="group relative flex flex-col items-start p-8 rounded-2xl bg-white/[0.04] border border-white/10
-                     hover:bg-white/[0.08] hover:border-white/20
-                     transition-all duration-300 text-left focus:outline-none focus:ring-2 focus:ring-white/30 focus:ring-offset-2 focus:ring-offset-black"
+          className="group relative flex flex-col items-start p-8 rounded-2xl bg-white/[0.04] border border-white/[0.08]
+                     hover:bg-white/[0.06] hover:border-white/[0.12]
+                     transition-all duration-300 text-left focus:outline-none focus:ring-2 focus:ring-white/20 focus:ring-offset-2 focus:ring-offset-black"
         >
           <div className="flex items-center justify-between w-full mb-6">
             <div className="flex items-center justify-center w-14 h-14 rounded-xl bg-white/10 text-white group-hover:bg-white/20 transition-colors">
@@ -48,10 +48,10 @@ const SpaceLanding: React.FC<SpaceLandingProps> = ({ onSelect }) => {
         <button
           type="button"
           onClick={() => onSelect('2d')}
-          className="group relative flex flex-col items-start p-8 rounded-2xl bg-white/[0.04] border border-white/10
-                     hover:bg-white/[0.08] hover:border-white/20
+          className="group relative flex flex-col items-start p-8 rounded-2xl bg-white/[0.04] border border-white/[0.08]
+                     hover:bg-white/[0.06] hover:border-white/[0.12]
                      transition-all duration-300 text-left focus:outline-none focus:ring-2 focus:ring-white/20 focus:ring-offset-2 focus:ring-offset-black
-                     opacity-80 hover:opacity-100"
+                     opacity-90 hover:opacity-100"
         >
           <div className="flex items-center justify-between w-full mb-6">
             <div className="flex items-center justify-center w-14 h-14 rounded-xl bg-white/10 text-white/80 group-hover:bg-white/20 transition-colors">
