@@ -9,12 +9,14 @@ interface MitoSpaceLogoProps {
 }
 
 /**
- * MitoSpace Explorer logo: minimal neural network motif.
- * Professional, AI-themed icon for mitochondrial phenotype visualization.
+ * MitoSpace Explorer logo: neural network motif forming an "M".
+ * Mitochondria silhouette in background; input → hidden → output layers.
  */
 const MitoSpaceLogo: React.FC<MitoSpaceLogoProps> = ({ size = 24, variant = 'dark', className = '' }) => {
-  const stroke = variant === 'dark' ? 'currentColor' : 'rgba(255,255,255,0.7)';
-  const fill = variant === 'dark' ? 'currentColor' : 'rgba(255,255,255,0.7)';
+  const stroke = variant === 'dark' ? 'currentColor' : 'rgba(255,255,255,0.85)';
+  const node = variant === 'dark' ? 'currentColor' : 'rgba(255,255,255,0.96)';
+  const nodeSecondary = variant === 'dark' ? 'currentColor' : 'rgba(255,255,255,0.9)';
+  const mito = variant === 'dark' ? 'currentColor' : 'rgba(255,255,255,0.15)';
 
   return (
     <svg
@@ -26,20 +28,23 @@ const MitoSpaceLogo: React.FC<MitoSpaceLogoProps> = ({ size = 24, variant = 'dar
       className={className}
       aria-hidden
     >
-      {/* Neural network: input (3) -> hidden (3) -> output (2) */}
-      <circle cx="6" cy="6" r="1.6" fill={fill} />
-      <circle cx="16" cy="6" r="1.6" fill={fill} />
-      <circle cx="26" cy="6" r="1.6" fill={fill} />
-      <circle cx="8" cy="16" r="1.4" fill={fill} />
-      <circle cx="16" cy="16" r="1.4" fill={fill} />
-      <circle cx="24" cy="16" r="1.4" fill={fill} />
-      <circle cx="11" cy="26" r="1.5" fill={fill} />
-      <circle cx="21" cy="26" r="1.5" fill={fill} />
-      {/* Vertical connections */}
-      <path d="M6 7.6v5.8M16 7.6v5.8M26 7.6v5.8" stroke={stroke} strokeWidth="0.7" strokeLinecap="round" />
-      <path d="M8 17.4v6.1M16 17.4v6.1M24 17.4v6.1" stroke={stroke} strokeWidth="0.7" strokeLinecap="round" />
-      {/* Diagonal connections between layers */}
-      <path d="M6 6l6 8M16 6l0 8M26 6l-6 8M8 16l5 8M16 16l0 8M24 16l-5 8" stroke={stroke} strokeWidth="0.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.8" />
+      {/* Mitochondria silhouette — translucent, behind M */}
+      <ellipse cx="16" cy="16" rx="9" ry="5.5" stroke={mito} strokeWidth="0.35" fill="none" opacity="0.85" />
+      <path d="M 13 14.5 Q 16 16 13 17.5 M 16 13 Q 19 16 16 19 M 19 14.5 Q 22 16 19 17.5" stroke={mito} strokeWidth="0.25" fill="none" opacity="0.6" />
+      {/* M structure — thicker legs, V slightly lighter */}
+      <path d="M 6 6 L 6 16 L 6 26 M 26 6 L 26 16 L 26 26" stroke={stroke} strokeWidth="1.05" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M 6 6 L 11 12.5 L 16 19 L 21 12.5 L 26 6" stroke={stroke} strokeWidth="0.85" strokeLinecap="round" strokeLinejoin="round" />
+      {/* Primary nodes */}
+      <circle cx="6" cy="6" r="1.25" fill={node} />
+      <circle cx="26" cy="6" r="1.25" fill={node} />
+      <circle cx="16" cy="19" r="1.35" fill={node} />
+      <circle cx="6" cy="26" r="1.1" fill={node} />
+      <circle cx="26" cy="26" r="1.1" fill={node} />
+      {/* Hidden layer nodes */}
+      <circle cx="6" cy="16" r="1" fill={nodeSecondary} opacity="0.9" />
+      <circle cx="26" cy="16" r="1" fill={nodeSecondary} opacity="0.9" />
+      <circle cx="11" cy="12.5" r="0.95" fill={nodeSecondary} opacity="0.88" />
+      <circle cx="21" cy="12.5" r="0.95" fill={nodeSecondary} opacity="0.88" />
     </svg>
   );
 };

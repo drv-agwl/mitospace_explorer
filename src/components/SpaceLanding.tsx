@@ -1,5 +1,6 @@
 import React from 'react';
 import { Layers, Grid3X3, ArrowRight } from 'lucide-react';
+import MitoSpaceLogo from './MitoSpaceLogo';
 
 interface SpaceLandingProps {
   onSelect: (space: '4d' | '2d') => void;
@@ -8,6 +9,11 @@ interface SpaceLandingProps {
 const SpaceLanding: React.FC<SpaceLandingProps> = ({ onSelect }) => {
   return (
     <div className="min-h-[calc(100vh-180px)] flex flex-col items-center justify-center px-6 py-16">
+      <div className="flex flex-col items-center mb-12">
+        <div className="flex items-center justify-center w-28 h-28 sm:w-36 sm:h-36 rounded-2xl bg-white/[0.08] border border-white/[0.12] shadow-[0_0_40px_rgba(255,255,255,0.04)]">
+          <MitoSpaceLogo size={88} variant="light" />
+        </div>
+      </div>
       <div className="text-center max-w-2xl mx-auto mb-16" data-tour="landing-title">
         <h2 className="text-3xl sm:text-4xl font-semibold text-white tracking-tight mb-4">
           Choose your exploration space
