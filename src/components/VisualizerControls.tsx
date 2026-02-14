@@ -180,14 +180,14 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
           <Filter size={16} className="text-white/50 shrink-0" />
           <span>
             {selectedDrugs.size === 0
-              ? 'All drugs'
-              : `${selectedDrugs.size} drug${selectedDrugs.size === 1 ? '' : 's'} selected`}
+              ? 'All conditions'
+              : `${selectedDrugs.size} condition${selectedDrugs.size === 1 ? '' : 's'} selected`}
           </span>
         </button>
         {drugFilterOpen && (
           <div className="absolute top-full left-0 mt-1 z-50 min-w-[220px] max-h-[320px] overflow-y-auto rounded-xl border border-white/[0.12] bg-black/95 shadow-xl py-2 scrollbar-thin">
             <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-white/10 mb-2">
-              <span className="text-xs font-medium text-white/60 uppercase tracking-wider">Filter by drug</span>
+              <span className="text-xs font-medium text-white/60 uppercase tracking-wider">Filter by condition</span>
               <div className="flex items-center gap-2">
                 <button
                   onClick={selectAllDrugFilter}
