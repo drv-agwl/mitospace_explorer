@@ -33,8 +33,8 @@ const SpaceLanding: React.FC<SpaceLandingProps> = ({ onSelect }) => {
             <ArrowRight className="w-5 h-5 text-white/40 group-hover:text-white group-hover:translate-x-1 transition-all" />
           </div>
           <h3 className="text-xl font-semibold text-white mb-2">4D MitoSpace</h3>
-          <p className="text-white/60 text-sm leading-relaxed">
-            AI-powered 4D embedding from LLSM time-lapse movies. Explore drug clusters, phenotypic overlays, and semantic axis navigation.
+          <p className="text-white/60 text-sm leading-relaxed flex-1">
+            AI applied to 4D cell movies from high-resolution LLSM data. Explore drug clusters, phenotypic overlays, and semantic axis navigation.
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
             <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium bg-white/10 text-white/80">
@@ -62,12 +62,15 @@ const SpaceLanding: React.FC<SpaceLandingProps> = ({ onSelect }) => {
             <ArrowRight className="w-5 h-5 text-white/40 group-hover:text-white/60 group-hover:translate-x-1 transition-all" />
           </div>
           <h3 className="text-xl font-semibold text-white mb-2">2D MitoSpace</h3>
-          <p className="text-white/60 text-sm leading-relaxed">
-            Confocal microscopy embedding view. Coming soon.
+          <p className="text-white/60 text-sm leading-relaxed flex-1">
+            AI applied to 2D cells from confocal microscopy. Semantic axis coming soon.
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium bg-white/10 text-white/60">
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium bg-white/10 text-white/80">
               Confocal
+            </span>
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium bg-white/10 text-white/80">
+              2D AI
             </span>
           </div>
         </button>
