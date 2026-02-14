@@ -257,7 +257,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
       {type === '4d' && (
         <>
           <div className={divider} />
-          <div className={`flex items-center gap-3 px-4 py-2 rounded-lg ${controlBg} border border-white/[0.06]`}>
+          <div className={`flex items-center gap-3 px-4 py-2 rounded-lg ${controlBg} border border-white/[0.06]`} data-tour="semantic-axis-toggle">
             <label className="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
@@ -281,7 +281,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
           </div>
 
           {advancedMode && (
-            <div className={`flex flex-wrap items-center gap-4 px-4 py-2 rounded-lg ${controlBg} border border-white/[0.06]`}>
+            <div className={`flex flex-wrap items-center gap-4 px-4 py-2 rounded-lg ${controlBg} border border-white/[0.06]`} data-tour="semantic-feature-controls">
               <div className="flex items-center gap-2">
                 <label className={`text-sm font-medium shrink-0 ${textClass}`}>Feature</label>
                 <select
@@ -350,7 +350,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
             <p className={`text-xs ${textMutedClass} italic`}>Click a point to enable axis slider</p>
           )}
           {showSlider && featureRange && (
-            <div className={`flex items-center gap-4 flex-wrap px-4 py-2 rounded-lg ${controlBg} border border-white/[0.06]`}>
+            <div className={`flex items-center gap-4 flex-wrap px-4 py-2 rounded-lg ${controlBg} border border-white/[0.06]`} data-tour="semantic-axis-slider">
               <div className="flex items-center gap-2 min-w-[200px]">
                 <span className={`text-xs shrink-0 ${textMutedClass}`}>{featureRange.min.toFixed(3)}</span>
                 <input

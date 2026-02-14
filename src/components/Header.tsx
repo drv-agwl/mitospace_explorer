@@ -6,9 +6,11 @@ import TabNavigation from './TabNavigation';
 interface HeaderProps {
   activeTab?: '2d' | '4d';
   setActiveTab?: (tab: '2d' | '4d') => void;
+  onStartTour?: () => void;
+  showTourButton?: boolean;
 }
 
-const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
+const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, onStartTour, showTourButton }) => {
   const location = useLocation();
   const isAbout = location.pathname === '/about';
   const showTabs = activeTab != null && setActiveTab != null;
@@ -32,12 +34,22 @@ const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab }) => {
           </Link>
 
           {showTabs && (
-            <div className="flex-1 flex justify-center min-w-0">
+            <div className="flex-1 flex justify-center min-w-0" data-tour="header-tabs">
               <TabNavigation activeTab={activeTab} setActiveTab={setActiveTab} />
             </div>
           )}
 
           <nav className="flex items-center gap-1 shrink-0">
+            {showTourButton && onStartTour && (
+              <button
+                type="button"
+                onClick={onStartTour}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-white/60 hover:text-white hover:bg-white/[0.06] transition-colors"
+                aria-label="Take tour"
+              >
+                Take tour
+              </button>
+            )}
             <Link
               to="/about"
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${

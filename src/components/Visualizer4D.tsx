@@ -783,6 +783,7 @@ const Visualizer4D: React.FC = () => {
         className={`shrink-0 px-6 py-2.5 border-b ${isDarkMode ? 'bg-black/90 border-white/[0.08]' : 'bg-white border-gray-200'}`}
         role="toolbar"
         aria-label="Visualization controls"
+        data-tour="controls-toolbar"
       >
         <VisualizerControls type="4d" onSemanticSliderChange={handleSemanticSliderChange} dark={isDarkMode} />
       </div>
@@ -808,6 +809,7 @@ const Visualizer4D: React.FC = () => {
       <div
         ref={containerRef}
         className="flex-1 min-h-0 relative overflow-hidden"
+        data-tour="visualizer-canvas"
         onClick={handleClick}
         style={{
           background: isDarkMode

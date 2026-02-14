@@ -125,7 +125,7 @@ const SemanticAxisPreview: React.FC<SemanticAxisPreviewProps> = ({
   if (axisSamples.length === 0) return null;
 
   return (
-    <div className="shrink-0 border-b border-white/[0.08] bg-black/95 backdrop-blur-sm">
+    <div className="shrink-0 border-b border-white/[0.08] bg-black/95 backdrop-blur-sm" data-tour="semantic-axis-preview">
       <div className="flex items-center justify-between px-6 py-3 gap-4">
         <p className="text-xs font-medium text-white/70 uppercase tracking-wider shrink-0">
           Samples along {selectedFeature}

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import Header from './components/Header';
 import Visualizer2D from './components/Visualizer2D';
@@ -9,21 +9,33 @@ import About from './components/About';
 import PasswordProtection from './components/PasswordProtection';
 import SpaceLanding from './components/SpaceLanding';
 import GlobalKeyboardShortcuts from './components/GlobalKeyboardShortcuts';
+import { OnboardingTour, hasCompletedOnboarding, resetOnboarding } from './components/OnboardingTour';
 import { SampleProvider } from './context/SampleContext';
 
 function Explorer() {
   const [viewMode, setViewMode] = useState<'landing' | 'explorer'>('landing');
   const [activeTab, setActiveTab] = useState<'2d' | '4d'>('4d');
+  const [runTour, setRunTour] = useState(false);
 
   const handleSelectSpace = (space: '4d' | '2d') => {
     setActiveTab(space);
     setViewMode('explorer');
   };
 
+  const handleStartTour = () => {
+    resetOnboarding();
+    setRunTour(true);
+  };
+
+  useEffect(() => {
+    if (!hasCompletedOnboarding()) setRunTour(true);
+  }, [viewMode]);
+
   if (viewMode === 'landing') {
     return (
       <div className="flex flex-col min-h-screen bg-black">
-        <Header />
+        <Header onStartTour={handleStartTour} showTourButton />
+        <OnboardingTour run={runTour} variant="landing" onComplete={() => setRunTour(false)} />
         <main className="flex-grow">
           <SpaceLanding onSelect={handleSelectSpace} />
         </main>
@@ -34,7 +46,8 @@ function Explorer() {
 
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-black">
-      <Header activeTab={activeTab} setActiveTab={setActiveTab} />
+      <Header activeTab={activeTab} setActiveTab={setActiveTab} onStartTour={handleStartTour} showTourButton />
+      <OnboardingTour run={runTour} variant="explorer" onComplete={() => setRunTour(false)} />
       <GlobalKeyboardShortcuts />
 
       <main className="flex-1 flex flex-col min-h-0 overflow-hidden">
@@ -51,6 +64,7 @@ function Explorer() {
           <aside
             className="w-[400px] min-w-[400px] min-h-0 flex flex-col shrink-0 overflow-hidden"
             aria-label="Sample details"
+            data-tour="sample-panel"
           >
             <SamplePanel />
           </aside>
