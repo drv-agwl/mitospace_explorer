@@ -137,7 +137,10 @@ const SamplePanel: React.FC = () => {
                         {isPlaying ? <><Pause size={14} className="mr-2" />Pause</> : <><Play size={14} className="mr-2" />Play all</>}
                       </button>
                     )}
-                    {selectedSample.videos.map((video, index) => (
+                    {selectedSample.videos.map((video, index) => {
+                      const channelLabels = ['MitoTracker Green', 'TMRM'];
+                      const channelLabel = channelLabels[index] ?? null;
+                      return (
                       <div key={index} className="rounded-xl overflow-hidden bg-white/[0.03] border border-white/[0.08]">
                         <div className="relative aspect-video">
                           {videoLoadError[index] ? (
@@ -166,8 +169,13 @@ const SamplePanel: React.FC = () => {
                             </>
                           )}
                         </div>
+                        {channelLabel && (
+                          <p className="px-3 py-2 text-[11px] font-medium text-white/50 uppercase tracking-wide">
+                            {channelLabel}
+                          </p>
+                        )}
                       </div>
-                    ))}
+                    );})}
                   </div>
                 ) : (
                   <div className="space-y-4">

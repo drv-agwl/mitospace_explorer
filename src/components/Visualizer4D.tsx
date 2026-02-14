@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { Home, ZoomIn, ZoomOut, HelpCircle, Maximize2, Minimize2, Copy } from 'lucide-react';
+import { Home, ZoomIn, ZoomOut, HelpCircle, Maximize2, Minimize2, Copy, Grid3X3 } from 'lucide-react';
 import { useSample } from '../context/SampleContext';
 import VisualizerControls from './VisualizerControls';
 import SemanticAxisPreview from './SemanticAxisPreview';
@@ -20,6 +20,7 @@ const Visualizer4D: React.FC = () => {
     setSelectedSample,
     setSelectedPointIndex,
     visualizerOptions,
+    setShowGrid,
     semanticState,
     featureValues,
     setSemanticState,
@@ -39,6 +40,8 @@ const Visualizer4D: React.FC = () => {
   const targetHighlightPosRef = useRef<THREE.Vector3 | null>(null);
   const selectedSampleIdRef = useRef<string | null>(null);
   const trajectoryLineRef = useRef<THREE.Group | null>(null);
+  const gridRef = useRef<THREE.GridHelper | null>(null);
+  const grid2Ref = useRef<THREE.GridHelper | null>(null);
 
   const [trajectoryPoints, setTrajectoryPoints] = useState<Array<{ x: number; y: number; z: number }> | null>(null);
 
@@ -224,6 +227,29 @@ const Visualizer4D: React.FC = () => {
     const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
     directionalLight.position.set(1, 1, 1);
     scene.add(directionalLight);
+
+    // Floor grid — XZ plane (horizontal, no rotation)
+    const gridSize = 280;
+    const gridDivisions = 56;
+    const grid = new THREE.GridHelper(gridSize, gridDivisions, 0x4a4a4a, 0x2d2d2d);
+    grid.position.y = 0;
+    grid.renderOrder = -1;
+    const gridMat = grid.material as THREE.LineBasicMaterial;
+    gridMat.opacity = 0.28;
+    gridMat.transparent = true;
+    scene.add(grid);
+    gridRef.current = grid;
+
+    // Back wall grid — XY plane (vertical, perpendicular to floor)
+    const grid2 = new THREE.GridHelper(gridSize, gridDivisions, 0x4a4a4a, 0x2d2d2d);
+    grid2.rotation.x = -Math.PI / 2;
+    grid2.position.z = 0;
+    grid2.renderOrder = -1;
+    const grid2Mat = grid2.material as THREE.LineBasicMaterial;
+    grid2Mat.opacity = 0.22;
+    grid2Mat.transparent = true;
+    scene.add(grid2);
+    grid2Ref.current = grid2;
     
     // FPS counter setup
     let frameCount = 0;
@@ -322,6 +348,18 @@ const Visualizer4D: React.FC = () => {
         });
         trajectoryLineRef.current = null;
       }
+      if (gridRef.current && sceneRef.current) {
+        sceneRef.current.remove(gridRef.current);
+        gridRef.current.geometry.dispose();
+        (gridRef.current.material as THREE.Material).dispose();
+        gridRef.current = null;
+      }
+      if (grid2Ref.current && sceneRef.current) {
+        sceneRef.current.remove(grid2Ref.current);
+        grid2Ref.current.geometry.dispose();
+        (grid2Ref.current.material as THREE.Material).dispose();
+        grid2Ref.current = null;
+      }
     };
   }, []);
 
@@ -340,6 +378,15 @@ const Visualizer4D: React.FC = () => {
       });
     }
   }, [isDarkMode, visualizerOptions.backgroundColor]);
+
+  // Grids pass through center (origin) — no positioning update needed
+
+  // Toggle grid visibility
+  useEffect(() => {
+    const show = visualizerOptions.showGrid !== false;
+    if (gridRef.current) gridRef.current.visible = show;
+    if (grid2Ref.current) grid2Ref.current.visible = show;
+  }, [visualizerOptions.showGrid]);
 
   const useFeatureColoring =
     semanticState.advancedMode &&
@@ -866,6 +913,13 @@ const Visualizer4D: React.FC = () => {
             title="Fullscreen (F) — hide browser UI"
           >
             {isFullscreen ? <Minimize2 size={18} strokeWidth={2} /> : <Maximize2 size={18} strokeWidth={2} />}
+          </button>
+          <button
+            onClick={() => setShowGrid(visualizerOptions.showGrid === false)}
+            className={`p-2.5 rounded-xl w-10 h-10 flex items-center justify-center transition-colors border ${visualizerOptions.showGrid !== false ? 'bg-white/15 text-white border-white/20' : 'bg-white/10 hover:bg-white/15 text-white/90 border-white/10'}`}
+            title={visualizerOptions.showGrid !== false ? 'Hide grid' : 'Show grid'}
+          >
+            <Grid3X3 size={18} strokeWidth={2} />
           </button>
           <button
             onClick={toggleHelp}
