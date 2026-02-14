@@ -6,6 +6,7 @@ Axis method (semantic slider): feature value -> UMAP (x, y, z).
 At startup we fit feature_umap_model per feature: MLP(feature_values) -> umap_points.
 Slider targetValue is passed to the model; response is the 3D position on that curve.
 """
+import os
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -18,10 +19,15 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data" / "filtered"
 
 app = FastAPI(title="MitoSpace Explorer API")
+_cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+if os.environ.get("CORS_ORIGINS"):
+    _cors_origins.extend(s.strip() for s in os.environ["CORS_ORIGINS"].split(",") if s.strip())
+# Localhost regex + Netlify (*.netlify.app) for production frontend
+_cors_origin_regex = r"http://(localhost|127\.0\.0\.1)(:\d+)?$|https://[^.]+\.netlify\.app$"
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_origins=_cors_origins,
+    allow_origin_regex=_cors_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

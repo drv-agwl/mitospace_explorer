@@ -52,15 +52,29 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
   useEffect(() => {
     if (type !== '4d' || !advancedMode) return;
     setApiConnected(null);
-    healthCheck()
-      .then((h) => {
-        setApiConnected(true);
-        setApiEmbeddingCount(h.embedding_count ?? null);
-      })
-      .catch(() => {
-        setApiConnected(false);
-        setApiEmbeddingCount(null);
-      });
+    let cancelled = false;
+    const tryHealth = (attempt = 0) => {
+      healthCheck()
+        .then((h) => {
+          if (!cancelled) {
+            setApiConnected(true);
+            setApiEmbeddingCount(h.embedding_count ?? null);
+          }
+        })
+        .catch(() => {
+          if (cancelled) return;
+          if (attempt < 2) {
+            setTimeout(() => tryHealth(attempt + 1), 1500);
+          } else {
+            setApiConnected(false);
+            setApiEmbeddingCount(null);
+          }
+        });
+    };
+    tryHealth();
+    return () => {
+      cancelled = true;
+    };
   }, [type, advancedMode, setApiEmbeddingCount]);
 
   useEffect(() => {
@@ -69,12 +83,13 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
     Promise.all([
       getFeatureValues(selectedFeature).then((values) => setFeatureValues(selectedFeature, values)).catch(() => {}),
       getFeatureStats(selectedFeature)
-        .then((stats) =>
+        .then((stats) => {
+          setApiConnected(true);
           setSemanticState((s) => ({
             ...s,
             featureRange: { min: stats.min, max: stats.max },
-          }))
-        )
+          }));
+        })
         .catch(() => {}),
     ]).finally(() => setFeatureLoading(false));
   }, [type, selectedFeature, setFeatureValues, setSemanticState]);
@@ -221,10 +236,17 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
                 )}
               </div>
               {apiConnected === false && (
-                <p className="text-xs text-amber-400 flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                  API offline — start server for semantic mode
-                </p>
+                <div className="text-xs text-amber-400 flex flex-col gap-1">
+                  <p className="flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />
+                    API offline — semantic mode needs the backend.
+                  </p>
+                  <p className="text-white/70 pl-4">
+                    {typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+                      ? 'Run from project root: uvicorn server.main:app --reload --port 8000'
+                      : 'If this is the deployed site, ensure the backend is deployed (e.g. Render) and VITE_API_URL is set in Netlify, then redeploy.'}
+                  </p>
+                </div>
               )}
               {selectedFeature && (
                 <button
