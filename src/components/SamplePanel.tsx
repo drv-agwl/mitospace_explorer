@@ -73,6 +73,15 @@ const SamplePanel: React.FC = () => {
     return { backgroundColor: `rgb(${r}, ${g}, ${b})` };
   };
 
+  const getAccentBorderStyle = () => {
+    if (!selectedSample) return {};
+    const color = visualizerOptions.coloringMode === 'phenotype' ? selectedSample.color_phenotypic : selectedSample.color;
+    const r = Math.round((color?.r ?? 0) * 255);
+    const g = Math.round((color?.g ?? 0) * 255);
+    const b = Math.round((color?.b ?? 0) * 255);
+    return { borderLeftWidth: 4, borderLeftColor: `rgb(${r}, ${g}, ${b})` };
+  };
+
   const getContrastColor = () => {
     if (!selectedSample) return 'text-black';
     const color = visualizerOptions.coloringMode === 'phenotype' ? selectedSample.color_phenotypic : selectedSample.color;
@@ -84,28 +93,31 @@ const SamplePanel: React.FC = () => {
     <div className="flex-1 min-h-0 w-full flex flex-col overflow-hidden bg-black/95 border-l border-white/[0.08] backdrop-blur-sm">
       {selectedSample ? (
         <>
-          <div
-            className="shrink-0 px-6 py-5 border-b border-white/[0.08]"
-            style={{ ...getColorStyle(), color: undefined }}
-          >
-            <div className="flex justify-between items-start">
-              <div>
-                <h3 className={`text-lg font-semibold tracking-tight ${getContrastColor()}`}>
-                  {selectedSample.treatment.drug}
-                </h3>
-                <div className={`mt-1 flex items-center gap-2 ${getContrastColor()} opacity-90`}>
-                  <MapPin size={12} />
-                  <span className="text-xs">
-                    ({selectedSample.x.toFixed(2)}, {selectedSample.y.toFixed(2)}, {selectedSample.z.toFixed(2)})
-                  </span>
-                </div>
-                <div className={`mt-2 flex flex-wrap gap-2 ${getContrastColor()}`}>
-                  <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-black/20 backdrop-blur-sm">
+          <div className="shrink-0 px-6 py-4 border-b border-white/[0.08]">
+            <div
+              className="rounded-xl border border-white/[0.08] overflow-hidden bg-white/[0.03] flex"
+              style={getAccentBorderStyle()}
+            >
+              <div className="p-4 flex-1 min-w-0">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-base font-semibold text-white tracking-tight truncate">
+                    {selectedSample.treatment.drug}
+                  </h3>
+                  <span
+                    className={`shrink-0 inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium ${getContrastColor()}`}
+                    style={getColorStyle()}
+                  >
                     {selectedSample.phenotype}
                   </span>
+                </div>
+                <div className="mt-3 flex items-center gap-4 text-xs text-white/50">
+                  <span className="flex items-center gap-1.5">
+                    <MapPin size={11} strokeWidth={2} className="text-white/40 shrink-0" />
+                    ({selectedSample.x.toFixed(2)}, {selectedSample.y.toFixed(2)}, {selectedSample.z.toFixed(2)})
+                  </span>
                   {selectedSample.t !== undefined && (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-black/20 backdrop-blur-sm">
-                      <Clock size={10} />
+                    <span className="flex items-center gap-1">
+                      <Clock size={11} strokeWidth={2} className="text-white/40 shrink-0" />
                       T{selectedSample.t}
                     </span>
                   )}
@@ -141,7 +153,7 @@ const SamplePanel: React.FC = () => {
                       const channelLabels = ['MitoTracker Green', 'TMRM'];
                       const channelLabel = channelLabels[index] ?? null;
                       return (
-                      <div key={index} className="rounded-xl overflow-hidden bg-white/[0.03] border border-white/[0.08]">
+                      <div key={index} className="rounded-xl overflow-hidden bg-white/[0.03] border border-white/[0.08]" style={getAccentBorderStyle()}>
                         <div className="relative aspect-video">
                           {videoLoadError[index] ? (
                             <div className="absolute inset-0 flex items-center justify-center text-white/40">
@@ -180,7 +192,7 @@ const SamplePanel: React.FC = () => {
                 ) : (
                   <div className="space-y-4">
                     {selectedSample.images?.map((image, index) => (
-                      <div key={index} className="rounded-xl overflow-hidden bg-white/[0.03] border border-white/[0.08]">
+                      <div key={index} className="rounded-xl overflow-hidden bg-white/[0.03] border border-white/[0.08]" style={getAccentBorderStyle()}>
                         <div className="relative aspect-video">
                           {imageLoadError[index] ? (
                             <div className="absolute inset-0 flex items-center justify-center text-white/40">
