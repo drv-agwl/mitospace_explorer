@@ -1,6 +1,7 @@
 import React, { useMemo, useRef, useState, useCallback } from 'react';
 import { Video, X, Play, Pause } from 'lucide-react';
 import type { Sample } from '../types';
+import { getFeatureDisplayLabel } from '../constants/features';
 
 const AXIS_SAMPLE_COUNT = 9;
 
@@ -128,7 +129,7 @@ const SemanticAxisPreview: React.FC<SemanticAxisPreviewProps> = ({
     <div className="shrink-0 border-b border-white/[0.08] bg-black/95 backdrop-blur-sm" data-tour="semantic-axis-preview">
       <div className="flex items-center justify-between px-6 py-3 gap-4">
         <p className="text-xs font-medium text-white/70 uppercase tracking-wider shrink-0">
-          Samples along {selectedFeature}
+          Samples along {getFeatureDisplayLabel(selectedFeature)}
         </p>
         <div className="flex items-center gap-3 shrink-0">
           {canSync && (

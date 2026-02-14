@@ -4,27 +4,13 @@ import { useSample } from '../context/SampleContext';
 import { getFeatureStats, getFeatureValues, healthCheck } from '../api/client';
 import { findNearestSampleIndex } from './SemanticAxisPreview';
 import FeatureSelect from './FeatureSelect';
+import { FEATURE_GROUPS, getFeatureDisplayLabel } from '../constants/features';
 
 interface VisualizerControlsProps {
   type: '2d' | '4d';
   onSemanticSliderChange?: (pointIndex: number, targetValue: number) => void;
   dark?: boolean;
 }
-
-const FEATURE_GROUPS = [
-  {
-    category: 'Mitochondria dynamics',
-    features: [{ id: 'optical_flow_fg', label: 'Motility', apiName: 'Optical Flow (fg)' }],
-  },
-  {
-    category: 'Mitochondrial Morphology',
-    features: [{ id: 'segment_length', label: 'Segment Length', apiName: 'Segment Length' }],
-  },
-  {
-    category: 'Mitochondria function',
-    features: [{ id: 'tmrm_intensity', label: 'Membrane Potential', apiName: 'TMRM Intensity' }],
-  },
-];
 
 const DEFAULT_FEATURE_RANGE = { min: 1, max: 5 };
 
@@ -370,7 +356,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
                 <span className={`text-xs shrink-0 ${textMutedClass}`}>{featureRange.max.toFixed(3)}</span>
               </div>
               <span className={`text-xs tabular-nums ${textMutedClass}`}>
-                {selectedFeature}: {(typeof sliderValue === 'number' ? sliderValue : featureRange.min).toFixed(3)}
+                {getFeatureDisplayLabel(selectedFeature)}: {(typeof sliderValue === 'number' ? sliderValue : featureRange.min).toFixed(3)}
               </span>
               {semanticState.projectedConfidence != null && semanticState.projectedConfidence < 1 && (
                 <span className="text-xs text-amber-400">
