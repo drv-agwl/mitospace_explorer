@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import Header from './components/Header';
-import TabNavigation from './components/TabNavigation';
 import Visualizer2D from './components/Visualizer2D';
 import Visualizer4D from './components/Visualizer4D';
 import Footer from './components/Footer';
@@ -34,22 +33,28 @@ function Explorer() {
   }
 
   return (
-    <div className="flex flex-col min-h-screen bg-black">
-      <Header />
+    <div className="h-screen flex flex-col overflow-hidden bg-black">
+      <Header activeTab={activeTab} setActiveTab={setActiveTab} />
       <GlobalKeyboardShortcuts />
 
-      <main className="flex-grow flex min-h-0">
-        <div className="flex-grow flex flex-col min-w-0">
-          <div className="flex items-center justify-between px-6 py-4 border-b border-white/[0.08] bg-black/80 backdrop-blur-sm">
-            <TabNavigation activeTab={activeTab} setActiveTab={setActiveTab} />
-          </div>
-
-          <div className="flex-grow min-h-0">
+      <main className="flex-1 flex flex-col min-h-0 overflow-hidden">
+        <div className="flex-1 flex min-h-0 overflow-hidden">
+          {/* Left: visualizer (controls + canvas) - no scroll, controls always visible */}
+          <section
+            className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden"
+            aria-label="Visualization"
+          >
             {activeTab === '2d' ? <Visualizer2D /> : <Visualizer4D />}
-          </div>
-        </div>
+          </section>
 
-        <SamplePanel />
+          {/* Right: independently scrollable sample panel */}
+          <aside
+            className="w-[400px] min-w-[400px] min-h-0 flex flex-col shrink-0 overflow-hidden"
+            aria-label="Sample details"
+          >
+            <SamplePanel />
+          </aside>
+        </div>
       </main>
 
       <Footer />

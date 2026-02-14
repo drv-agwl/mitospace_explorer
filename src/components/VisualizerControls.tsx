@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { SlidersHorizontal, Palette, Sparkles, LayoutList, ImageIcon } from 'lucide-react';
+import React, { useEffect, useState, useRef } from 'react';
+import { SlidersHorizontal, Palette, Sparkles, LayoutList, ImageIcon, Filter, X } from 'lucide-react';
 import { useSample } from '../context/SampleContext';
 import { getFeatureStats, getFeatureValues, healthCheck } from '../api/client';
 import { findNearestSampleIndex } from './SemanticAxisPreview';
@@ -32,7 +32,25 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
     samples4D,
     selectedSample,
     setSelectedSample,
+    selectedDrugs,
+    availableDrugs,
+    toggleDrugFilter,
+    selectAllDrugFilter,
+    clearDrugFilter,
   } = useSample();
+
+  const [drugFilterOpen, setDrugFilterOpen] = useState(false);
+  const drugFilterRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (drugFilterRef.current && !drugFilterRef.current.contains(e.target as Node)) {
+        setDrugFilterOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const selectedEmbeddingIndex =
     selectedSample && samples4D ? samples4D.findIndex((s) => s.id === selectedSample.id) : -1;
@@ -125,7 +143,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
   const divider = 'h-4 w-px bg-white/15';
 
   return (
-    <div className="flex flex-wrap items-center gap-4">
+    <div className="flex flex-wrap items-center justify-evenly gap-x-6 gap-y-3 w-full">
       {/* Point size */}
       <div className={`flex items-center gap-3 px-4 py-2 rounded-lg ${controlBg} border border-white/[0.06]`}>
         <SlidersHorizontal size={16} className="text-white/50 shrink-0" />
@@ -145,6 +163,65 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
         <span className={`text-xs tabular-nums font-mono w-8 ${textMutedClass}`}>
           {visualizerOptions.pointSize.toFixed(1)}
         </span>
+      </div>
+
+      <div className={divider} />
+
+      {/* Drug filter */}
+      <div className="relative" ref={drugFilterRef}>
+        <button
+          onClick={() => setDrugFilterOpen(!drugFilterOpen)}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${controlBg} border border-white/[0.06] ${
+            selectedDrugs.size > 0
+              ? 'bg-white/10 text-white border-white/20'
+              : 'text-white/70 hover:text-white/90 hover:bg-white/[0.06]'
+          }`}
+        >
+          <Filter size={16} className="text-white/50 shrink-0" />
+          <span>
+            {selectedDrugs.size === 0
+              ? 'All drugs'
+              : `${selectedDrugs.size} drug${selectedDrugs.size === 1 ? '' : 's'} selected`}
+          </span>
+        </button>
+        {drugFilterOpen && (
+          <div className="absolute top-full left-0 mt-1 z-50 min-w-[220px] max-h-[320px] overflow-y-auto rounded-xl border border-white/[0.12] bg-black/95 shadow-xl py-2 scrollbar-thin">
+            <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-white/10 mb-2">
+              <span className="text-xs font-medium text-white/60 uppercase tracking-wider">Filter by drug</span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={selectAllDrugFilter}
+                  className="text-xs text-white/60 hover:text-white"
+                >
+                  Select all
+                </button>
+                <button
+                  onClick={clearDrugFilter}
+                  className="flex items-center gap-1 text-xs text-white/60 hover:text-white"
+                >
+                  <X size={12} />
+                  Clear all
+                </button>
+              </div>
+            </div>
+            <div className="px-2 space-y-0.5">
+              {availableDrugs.map((drug) => (
+                <label
+                  key={drug}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer hover:bg-white/[0.06]"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedDrugs.has(drug)}
+                    onChange={() => toggleDrugFilter(drug)}
+                    className="w-4 h-4 rounded accent-white"
+                  />
+                  <span className="text-sm text-white/90">{drug}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className={divider} />

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useMemo, ReactNode } from 'react';
 import { Sample, ColoringMode, VisualizerOptions, RenderingMode, LabelVisibility, PerformanceMode, SemanticState } from '../types';
 import { samples2D, samples4D } from '../data/sampleData';
 
@@ -40,6 +40,12 @@ interface SampleContextType {
   setFeatureValues: (feature: string, values: number[]) => void;
   filteredSamples2D: Sample[];
   filteredSamples4D: Sample[];
+  selectedDrugs: Set<string>;
+  availableDrugs: string[];
+  setSelectedDrugs: (drugs: Set<string>) => void;
+  toggleDrugFilter: (drug: string) => void;
+  selectAllDrugFilter: () => void;
+  clearDrugFilter: () => void;
 }
 
 const defaultOptions: VisualizerOptions = {
@@ -60,6 +66,7 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [selectedSample, setSelectedSample] = useState<Sample | null>(null);
   const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedDrugs, setSelectedDrugs] = useState<Set<string>>(new Set());
   const [visualizerOptions, setVisualizerOptions] = useState<VisualizerOptions>(defaultOptions);
   const [semanticState, setSemanticState] = useState<SemanticState>(initialSemanticState);
   const [featureValues, setFeatureValuesState] = useState<Record<string, number[]>>({});
@@ -104,21 +111,65 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setVisualizerOptions(prev => ({ ...prev, performance: mode }));
   };
 
-  const filterSamples = (samples: Sample[]): Sample[] => {
-    if (!searchQuery) return samples;
-    
-    const query = searchQuery.toLowerCase();
-    return samples.filter(sample => 
-      sample.treatment.drug.toLowerCase().includes(query) ||
-      sample.phenotype.toLowerCase().includes(query) ||
-      Object.values(sample.metadata).some(value => 
-        String(value).toLowerCase().includes(query)
-      )
-    );
-  };
+  const availableDrugs = useMemo(() => {
+    const drugs = new Set<string>();
+    samples2D.forEach(s => drugs.add(s.treatment.drug));
+    samples4D.forEach(s => drugs.add(s.treatment.drug));
+    return Array.from(drugs).sort((a, b) => a.localeCompare(b));
+  }, []);
+
+  const toggleDrugFilter = useCallback((drug: string) => {
+    setSelectedDrugs(prev => {
+      const next = new Set(prev);
+      if (next.has(drug)) {
+        next.delete(drug);
+      } else {
+        next.add(drug);
+      }
+      return next;
+    });
+  }, []);
+
+  const selectAllDrugFilter = useCallback(() => {
+    setSelectedDrugs(new Set(availableDrugs));
+  }, [availableDrugs]);
+
+  const clearDrugFilter = useCallback(() => {
+    setSelectedDrugs(new Set());
+    setSearchQuery('');
+  }, []);
+
+  const filterSamples = useCallback((samples: Sample[]): Sample[] => {
+    let result = samples;
+    if (selectedDrugs.size > 0) {
+      result = result.filter(sample => selectedDrugs.has(sample.treatment.drug));
+    }
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase();
+      result = result.filter(sample =>
+        sample.treatment.drug.toLowerCase().includes(query) ||
+        sample.phenotype.toLowerCase().includes(query) ||
+        Object.values(sample.metadata).some(value =>
+          String(value).toLowerCase().includes(query)
+        )
+      );
+    }
+    return result;
+  }, [selectedDrugs, searchQuery]);
 
   const filteredSamples2D = filterSamples(samples2D);
   const filteredSamples4D = filterSamples(samples4D);
+
+  useEffect(() => {
+    if (!selectedSample) return;
+    const inFiltered =
+      filteredSamples2D.some(s => s.id === selectedSample.id) ||
+      filteredSamples4D.some(s => s.id === selectedSample.id);
+    if (!inFiltered) {
+      setSelectedSample(null);
+      setSelectedPointIndex(null);
+    }
+  }, [filteredSamples2D, filteredSamples4D, selectedSample, setSelectedSample, setSelectedPointIndex]);
 
   return (
     <SampleContext.Provider
@@ -149,6 +200,12 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         setApiEmbeddingCount,
         filteredSamples2D,
         filteredSamples4D,
+        selectedDrugs,
+        availableDrugs,
+        setSelectedDrugs,
+        toggleDrugFilter,
+        selectAllDrugFilter,
+        clearDrugFilter,
       }}
     >
       {children}

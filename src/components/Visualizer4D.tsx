@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { Sun, Moon, Home, ZoomIn, ZoomOut, HelpCircle, Maximize2, Minimize2, Copy } from 'lucide-react';
+import { Home, ZoomIn, ZoomOut, HelpCircle, Maximize2, Minimize2, Copy } from 'lucide-react';
 import { useSample } from '../context/SampleContext';
 import VisualizerControls from './VisualizerControls';
 import SemanticAxisPreview from './SemanticAxisPreview';
@@ -43,7 +43,6 @@ const Visualizer4D: React.FC = () => {
   const [trajectoryPoints, setTrajectoryPoints] = useState<Array<{ x: number; y: number; z: number }> | null>(null);
 
   const [isLoading, setIsLoading] = useState(true);
-  const [zoomLevel, setZoomLevel] = useState(34);
   const [showHelp, setShowHelp] = useState(false);
   const [fps, setFps] = useState(0);
   const [pointCount, setPointCount] = useState(0);
@@ -55,10 +54,6 @@ const Visualizer4D: React.FC = () => {
 
   const toggleHelp = () => {
     setShowHelp(!showHelp);
-  };
-
-  const toggleDarkMode = () => {
-    setIsDarkMode(!isDarkMode);
   };
 
   const getCenter = useCallback(() => {
@@ -205,8 +200,10 @@ const Visualizer4D: React.FC = () => {
     
     controlsRef.current = controls;
     
-    // Set initial camera position
-    camera.position.set(73.5, 73.5, 73.5);
+    // Set initial camera position (~74% zoom: distance ~79 from origin)
+    const initDist = 1 + 0.26 * 299; // 74% zoom
+    const initCoord = initDist / Math.sqrt(3);
+    camera.position.set(initCoord, initCoord, initCoord);
     camera.lookAt(0, 0, 0);
     controls.target.set(0, 0, 0);
     controls.update();
@@ -220,17 +217,6 @@ const Visualizer4D: React.FC = () => {
       setIsDragging(false);
     });
     
-    controls.addEventListener('change', () => {
-      // Update zoom level for UI
-      if (cameraRef.current) {
-        const distance = camera.position.distanceTo(new THREE.Vector3(0, 0, 0));
-        const maxDistance = 300;
-        const minDistance = 1;
-        const normalizedDistance = (distance - minDistance) / (maxDistance - minDistance);
-        const zoomPercentage = 100 - Math.min(Math.round(normalizedDistance * 100), 95);
-        setZoomLevel(zoomPercentage);
-      }
-    });
     
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
     scene.add(ambientLight);
@@ -302,13 +288,6 @@ const Visualizer4D: React.FC = () => {
           
           cameraRef.current.position.addScaledVector(direction, zoomAmount);
           controlsRef.current.update();
-          
-          const distance = cameraRef.current.position.distanceTo(new THREE.Vector3(0, 0, 0));
-          const maxDistance = 300;
-          const minDistance = 1;
-          const normalizedDistance = (distance - minDistance) / (maxDistance - minDistance);
-          const zoomPercentage = 100 - Math.min(Math.round(normalizedDistance * 100), 95);
-          setZoomLevel(zoomPercentage);
         }
       }
     };
@@ -743,20 +722,24 @@ const Visualizer4D: React.FC = () => {
     }
   }, []);
 
-  const toggleFullscreen = () => {
-    const el = fullscreenContainerRef.current;
+  const toggleFullscreen = useCallback(() => {
+    const el = fullscreenContainerRef.current as HTMLElement & { webkitRequestFullscreen?: () => void };
     if (!el) return;
-    if (!document.fullscreenElement) {
-      el.requestFullscreen?.();
+    const doc = document as Document & { webkitFullscreenElement?: Element };
+    if (!doc.fullscreenElement && !doc.webkitFullscreenElement) {
+      el.requestFullscreen?.() ?? el.webkitRequestFullscreen?.();
       setIsFullscreen(true);
     } else {
-      document.exitFullscreen?.();
+      document.exitFullscreen?.() ?? (document as Document & { webkitExitFullscreen?: () => void }).webkitExitFullscreen?.();
       setIsFullscreen(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    const onFullscreenChange = () => setIsFullscreen(!!document.fullscreenElement);
+    const onFullscreenChange = () => {
+      const doc = document as Document & { webkitFullscreenElement?: Element };
+      setIsFullscreen(!!(doc.fullscreenElement ?? doc.webkitFullscreenElement));
+    };
     document.addEventListener('fullscreenchange', onFullscreenChange);
     return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
   }, []);
@@ -779,20 +762,28 @@ const Visualizer4D: React.FC = () => {
         e.preventDefault();
         handleResetView();
       }
+      if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        toggleFullscreen();
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [handleResetView]);
+  }, [handleResetView, toggleFullscreen]);
 
   return (
-    <div ref={fullscreenContainerRef} className={`${isDarkMode ? 'bg-black' : 'bg-white'} overflow-hidden h-full flex flex-col`}>
+    <div ref={fullscreenContainerRef} className={`${isDarkMode ? 'bg-black' : 'bg-white'} h-full flex flex-col overflow-hidden`}>
       {/* Mobile Warning */}
       <div className={`lg:hidden shrink-0 ${isDarkMode ? 'bg-amber-500/10 border-amber-500/30 text-amber-200' : 'bg-amber-50 border-amber-200 text-amber-800'} border-l-4 px-4 py-3`} role="alert">
         <p className="font-medium text-sm">Desktop recommended for best experience</p>
       </div>
 
-      {/* Toolbar */}
-      <div className={`shrink-0 px-6 py-4 border-b ${isDarkMode ? 'bg-black/90 border-white/[0.08]' : 'bg-white border-gray-200'}`}>
+      {/* Sticky toolbar - stays visible when scrolling visualization pane */}
+      <div
+        className={`shrink-0 px-6 py-2.5 border-b ${isDarkMode ? 'bg-black/90 border-white/[0.08]' : 'bg-white border-gray-200'}`}
+        role="toolbar"
+        aria-label="Visualization controls"
+      >
         <VisualizerControls type="4d" onSemanticSliderChange={handleSemanticSliderChange} dark={isDarkMode} />
       </div>
 
@@ -833,13 +824,6 @@ const Visualizer4D: React.FC = () => {
         {/* Floating controls */}
         <div className="absolute top-4 right-4 flex flex-col gap-2">
           <button
-            onClick={toggleDarkMode}
-            className={`${isDarkMode ? 'bg-amber-500/90 hover:bg-amber-500' : 'bg-white/10 hover:bg-white/15'} text-white p-2.5 rounded-xl w-10 h-10 flex items-center justify-center transition-colors border border-white/10`}
-            title={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
-          >
-            {isDarkMode ? <Sun size={18} strokeWidth={2} /> : <Moon size={18} strokeWidth={2} />}
-          </button>
-          <button
             onClick={handleResetView}
             className="bg-white/10 hover:bg-white/15 text-white/90 p-2.5 rounded-xl w-10 h-10 flex items-center justify-center transition-colors border border-white/10"
             title="Reset view (R)"
@@ -874,13 +858,10 @@ const Visualizer4D: React.FC = () => {
           >
             <ZoomOut size={18} strokeWidth={2} />
           </button>
-          <div className={`${isDarkMode ? 'bg-black/70 text-white/80' : 'bg-white/90 text-gray-700'} px-3 py-2 rounded-xl text-xs font-medium border border-white/10 backdrop-blur-sm`}>
-            Zoom {zoomLevel}%
-          </div>
           <button
             onClick={toggleFullscreen}
             className="bg-white/10 hover:bg-white/15 text-white/90 p-2.5 rounded-xl w-10 h-10 flex items-center justify-center transition-colors border border-white/10"
-            title="Fullscreen"
+            title="Fullscreen (F) — hide browser UI"
           >
             {isFullscreen ? <Minimize2 size={18} strokeWidth={2} /> : <Maximize2 size={18} strokeWidth={2} />}
           </button>
@@ -901,7 +882,7 @@ const Visualizer4D: React.FC = () => {
             title="Copy coordinates"
           >
             <Copy size={14} strokeWidth={2} />
-            {copiedCoords ? 'Copied!' : 'Copy coords'}
+            {copiedCoords ? 'Copied!' : 'Copy coordinates'}
           </button>
         )}
         
@@ -929,8 +910,9 @@ const Visualizer4D: React.FC = () => {
                 <div className="flex justify-between"><span className="font-medium text-white/90">Click empty</span> Deselect</div>
                 <div className="border-t border-white/10 mt-4 pt-4 space-y-1.5">
                   <p className="text-white/50 text-xs font-medium uppercase tracking-wider">Shortcuts</p>
-                  <div className="flex justify-between"><span className="font-medium text-white/90">Esc</span> Close panel</div>
+                  <div className="flex justify-between"><span className="font-medium text-white/90">F</span> Fullscreen (hide browser)</div>
                   <div className="flex justify-between"><span className="font-medium text-white/90">R</span> Reset view</div>
+                  <div className="flex justify-between"><span className="font-medium text-white/90">Esc</span> Close panel</div>
                 </div>
               </div>
               <button className="btn-primary mt-6 w-full" onClick={toggleHelp}>Done</button>

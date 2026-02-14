@@ -1,9 +1,9 @@
 import React, { useState, useRef } from 'react';
-import { X, Microscope, Pill, Clock, Video, Play, Pause, MapPin, Database } from 'lucide-react';
+import { Microscope, Pill, Clock, Video, Play, Pause, MapPin, Database } from 'lucide-react';
 import { useSample } from '../context/SampleContext';
 
 const SamplePanel: React.FC = () => {
-  const { selectedSample, setSelectedSample, visualizerOptions } = useSample();
+  const { selectedSample, visualizerOptions } = useSample();
   const [videoLoadError, setVideoLoadError] = useState<Record<number, boolean>>({});
   const [videoLoading, setVideoLoading] = useState<Record<number, boolean>>({});
   const [isPlaying, setIsPlaying] = useState(false);
@@ -81,7 +81,7 @@ const SamplePanel: React.FC = () => {
   };
 
   return (
-    <div className="w-[400px] min-w-[400px] bg-black/95 border-l border-white/[0.08] h-full flex flex-col overflow-hidden backdrop-blur-sm">
+    <div className="flex-1 min-h-0 w-full flex flex-col overflow-hidden bg-black/95 border-l border-white/[0.08] backdrop-blur-sm">
       {selectedSample ? (
         <>
           <div
@@ -111,20 +111,10 @@ const SamplePanel: React.FC = () => {
                   )}
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] opacity-70 hidden sm:inline">Esc</span>
-                <button
-                  onClick={() => setSelectedSample(null)}
-                  className={`p-2 rounded-lg ${getContrastColor()} opacity-80 hover:opacity-100 hover:bg-black/10 transition-all`}
-                  title="Close (Esc)"
-                >
-                  <X size={18} />
-                </button>
-              </div>
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto scrollbar-thin px-6 py-5 space-y-6">
+          <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin px-6 py-5 space-y-6">
             {(selectedSample.videos || selectedSample.images) && (
               <section>
                 <h4 className="text-[11px] font-semibold text-white/50 uppercase tracking-widest mb-3 flex items-center gap-2">

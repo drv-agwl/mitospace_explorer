@@ -1,7 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { Sun, Moon, Home, ZoomIn, ZoomOut, HelpCircle, Maximize2, Minimize2, Copy } from 'lucide-react';
+import { Home, ZoomIn, ZoomOut, HelpCircle, Maximize2, Minimize2, Copy } from 'lucide-react';
 import { useSample } from '../context/SampleContext';
 import VisualizerControls from './VisualizerControls';
 import ColorLegend from './ColorLegend';
@@ -39,10 +39,6 @@ const Visualizer2D: React.FC = () => {
 
   const toggleHelp = () => {
     setShowHelp(!showHelp);
-  };
-
-  const toggleDarkMode = () => {
-    setIsDarkMode(!isDarkMode);
   };
 
   // Create highlight mesh for selected point
@@ -484,17 +480,18 @@ const Visualizer2D: React.FC = () => {
     }
   };
 
-  const toggleFullscreen = () => {
-    const el = fullscreenContainerRef.current;
+  const toggleFullscreen = useCallback(() => {
+    const el = fullscreenContainerRef.current as HTMLElement & { webkitRequestFullscreen?: () => void };
     if (!el) return;
-    if (!document.fullscreenElement) {
-      el.requestFullscreen?.();
+    const doc = document as Document & { webkitFullscreenElement?: Element };
+    if (!doc.fullscreenElement && !doc.webkitFullscreenElement) {
+      el.requestFullscreen?.() ?? el.webkitRequestFullscreen?.();
       setIsFullscreen(true);
     } else {
-      document.exitFullscreen?.();
+      document.exitFullscreen?.() ?? (document as Document & { webkitExitFullscreen?: () => void }).webkitExitFullscreen?.();
       setIsFullscreen(false);
     }
-  };
+  }, []);
 
   const handleCopyCoords = () => {
     if (!selectedSample) return;
@@ -513,24 +510,35 @@ const Visualizer2D: React.FC = () => {
         e.preventDefault();
         handleResetView();
       }
+      if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        toggleFullscreen();
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, []);
+  }, [toggleFullscreen]);
 
   useEffect(() => {
-    const onFullscreenChange = () => setIsFullscreen(!!document.fullscreenElement);
+    const onFullscreenChange = () => {
+      const doc = document as Document & { webkitFullscreenElement?: Element };
+      setIsFullscreen(!!(doc.fullscreenElement ?? doc.webkitFullscreenElement));
+    };
     document.addEventListener('fullscreenchange', onFullscreenChange);
     return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
   }, []);
 
   return (
-    <div ref={fullscreenContainerRef} className={`${isDarkMode ? 'bg-black' : 'bg-white'} overflow-hidden h-full flex flex-col`}>
+    <div ref={fullscreenContainerRef} className={`${isDarkMode ? 'bg-black' : 'bg-white'} h-full flex flex-col overflow-hidden`}>
       <div className={`lg:hidden shrink-0 ${isDarkMode ? 'bg-amber-500/10 border-amber-500/30 text-amber-200' : 'bg-amber-50 border-amber-200 text-amber-800'} border-l-4 px-4 py-3`} role="alert">
         <p className="font-medium text-sm">Desktop recommended for best experience</p>
       </div>
 
-      <div className={`shrink-0 px-6 py-4 border-b ${isDarkMode ? 'bg-black/90 border-white/[0.08]' : 'bg-white border-gray-200'}`}>
+      <div
+        className={`shrink-0 px-6 py-2.5 border-b ${isDarkMode ? 'bg-black/90 border-white/[0.08]' : 'bg-white border-gray-200'}`}
+        role="toolbar"
+        aria-label="Visualization controls"
+      >
         <VisualizerControls type="2d" dark={isDarkMode} />
       </div>
       
@@ -551,13 +559,6 @@ const Visualizer2D: React.FC = () => {
         )}
         
         <div className="absolute top-4 right-4 flex flex-col gap-2">
-          <button
-            onClick={toggleDarkMode}
-            className={`${isDarkMode ? 'bg-amber-500/90 hover:bg-amber-500' : 'bg-white/10 hover:bg-white/15'} text-white p-2.5 rounded-xl w-10 h-10 flex items-center justify-center transition-colors border border-white/10`}
-            title={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
-          >
-            {isDarkMode ? <Sun size={18} strokeWidth={2} /> : <Moon size={18} strokeWidth={2} />}
-          </button>
           <button
             onClick={handleResetView}
             className="bg-white/10 hover:bg-white/15 text-white/90 p-2.5 rounded-xl w-10 h-10 flex items-center justify-center transition-colors border border-white/10"
@@ -599,7 +600,7 @@ const Visualizer2D: React.FC = () => {
           <button
             onClick={toggleFullscreen}
             className="bg-white/10 hover:bg-white/15 text-white/90 p-2.5 rounded-xl w-10 h-10 flex items-center justify-center transition-colors border border-white/10"
-            title="Fullscreen"
+            title="Fullscreen (F) — hide browser UI"
           >
             {isFullscreen ? <Minimize2 size={18} strokeWidth={2} /> : <Maximize2 size={18} strokeWidth={2} />}
           </button>
@@ -619,7 +620,7 @@ const Visualizer2D: React.FC = () => {
             title="Copy coordinates"
           >
             <Copy size={14} strokeWidth={2} />
-            {copiedCoords ? 'Copied!' : 'Copy coords'}
+            {copiedCoords ? 'Copied!' : 'Copy coordinates'}
           </button>
         )}
         
@@ -645,8 +646,9 @@ const Visualizer2D: React.FC = () => {
                 <div className="flex justify-between"><span className="font-medium text-white/90">Click empty</span> Deselect</div>
                 <div className="border-t border-white/10 mt-4 pt-4 space-y-1.5">
                   <p className="text-white/50 text-xs font-medium uppercase tracking-wider">Shortcuts</p>
-                  <div className="flex justify-between"><span className="font-medium text-white/90">Esc</span> Close panel</div>
+                  <div className="flex justify-between"><span className="font-medium text-white/90">F</span> Fullscreen (hide browser)</div>
                   <div className="flex justify-between"><span className="font-medium text-white/90">R</span> Reset view</div>
+                  <div className="flex justify-between"><span className="font-medium text-white/90">Esc</span> Close panel</div>
                 </div>
               </div>
               <button className="btn-primary mt-6 w-full" onClick={toggleHelp}>Done</button>
