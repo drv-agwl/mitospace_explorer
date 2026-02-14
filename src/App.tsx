@@ -34,7 +34,7 @@ function Explorer() {
   if (viewMode === 'landing') {
     return (
       <div className="flex flex-col min-h-screen bg-black">
-        <Header onStartTour={handleStartTour} showTourButton />
+        <Header onStartTour={handleStartTour} showTourButton onLogoClick={() => setViewMode('landing')} />
         <OnboardingTour run={runTour} variant="landing" onComplete={() => setRunTour(false)} />
         <main className="flex-grow">
           <SpaceLanding onSelect={handleSelectSpace} />
@@ -46,7 +46,7 @@ function Explorer() {
 
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-black">
-      <Header activeTab={activeTab} setActiveTab={setActiveTab} onStartTour={handleStartTour} showTourButton />
+      <Header activeTab={activeTab} setActiveTab={setActiveTab} onStartTour={handleStartTour} showTourButton onLogoClick={() => setViewMode('landing')} />
       <OnboardingTour run={runTour} variant="explorer" onComplete={() => setRunTour(false)} />
       <GlobalKeyboardShortcuts />
 
