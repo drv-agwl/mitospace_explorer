@@ -101,7 +101,7 @@ def startup():
     csv_path = DATA / "mitotnt_features.csv"
     if csv_path.exists():
         df = pd.read_csv(csv_path)
-        for col in ("Fragment Length", "Segment Length"):
+        for col in ("Segment Length", "TMRM Intensity", "Optical Flow (fg)"):
             if col in df.columns:
                 vals = df[col].fillna(df[col].mean())
                 feature_values[col] = vals.values.astype(np.float64)

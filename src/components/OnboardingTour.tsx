@@ -66,7 +66,7 @@ const EXPLORER_STEPS: Step[] = [
   },
   {
     target: '[data-tour="controls-toolbar"]',
-    content: 'After enabling Semantic axis: select a feature (Fragment Length or Segment Length), then click any point in the 3D view. A slider will appear—drag it to see where cells with different values would lie. A golden sphere traces the learned axis through the cloud.',
+    content: 'After enabling Semantic axis: select a feature (Motility, Segment Length, or Membrane Potential), then click any point in the 3D view. A slider will appear—drag it to see where cells with different values would lie. A golden sphere traces the learned axis through the cloud.',
     disableBeacon: true,
     placement: 'bottom',
   },

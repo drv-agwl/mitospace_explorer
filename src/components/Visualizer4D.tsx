@@ -6,9 +6,11 @@ import { useSample } from '../context/SampleContext';
 import VisualizerControls from './VisualizerControls';
 import SemanticAxisPreview from './SemanticAxisPreview';
 import ColorLegend from './ColorLegend';
+import FeatureColorBar from './FeatureColorBar';
 import { projectOnAxis, getAxisTrajectory } from '../api/client';
 import { featureToColorLog1pSafe } from '../utils/featureColor';
 import { adaptColorForDarkTheme } from '../utils/colorUtils';
+import { dropdownCloseInProgressRef } from '../utils/dropdownCloseRef';
 
 const SCALE_FACTOR = 4;
 
@@ -708,7 +710,7 @@ const Visualizer4D: React.FC = () => {
       if (embeddingIndex < 0) return;
       const maxIndex = apiEmbeddingCount ?? Infinity;
       if (embeddingIndex >= maxIndex) return;
-      const feature = semanticState.selectedFeature ?? 'Fragment Length';
+      const feature = semanticState.selectedFeature ?? 'Optical Flow (fg)';
       const center = getCenter();
       const options = {
         centerX: center.x,
@@ -752,9 +754,13 @@ const Visualizer4D: React.FC = () => {
         setSemanticState((s) => ({ ...s, projectedPosition: null, projectedConfidence: null }));
       }
     } else {
-      setSelectedSample(null);
-      setSelectedPointIndex(null);
-      setSemanticState((s) => ({ ...s, projectedPosition: null, projectedConfidence: null }));
+      if (dropdownCloseInProgressRef.current) {
+        dropdownCloseInProgressRef.current = false;
+      } else {
+        setSelectedSample(null);
+        setSelectedPointIndex(null);
+        setSemanticState((s) => ({ ...s, projectedPosition: null, projectedConfidence: null }));
+      }
     }
   };
 
@@ -942,9 +948,10 @@ const Visualizer4D: React.FC = () => {
           </button>
         )}
         
-        {/* Bottom-left: legend + status */}
+        {/* Bottom-left: legend or feature color bar + status */}
         <div className="absolute bottom-4 left-4 flex flex-col gap-2">
           <ColorLegend visible={!useFeatureColoring} />
+          <FeatureColorBar visible={!!useFeatureColoring} />
           <div className={`px-3 py-2 rounded-xl text-xs font-medium backdrop-blur-sm border border-white/10 ${isDarkMode ? 'bg-black/70 text-white/80' : 'bg-white/90 text-gray-700'}`}>
             <div className="flex items-center gap-2">
               <span className={`w-1.5 h-1.5 rounded-full ${fps > 30 ? 'bg-emerald-500' : fps > 15 ? 'bg-amber-500' : 'bg-red-500'}`} />

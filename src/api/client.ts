@@ -30,7 +30,7 @@ export interface ProjectOptions {
 export async function projectOnAxis(
   pointIndex: number,
   targetValue: number,
-  feature: string = 'Fragment Length',
+  feature: string = 'Optical Flow (fg)',
   options?: ProjectOptions
 ): Promise<ProjectResponse> {
   const body: Record<string, unknown> = { pointIndex, targetValue, feature };
@@ -75,7 +75,7 @@ export interface AxisTrajectoryOptions {
 }
 
 export async function getAxisTrajectory(
-  feature: string = 'Fragment Length',
+  feature: string = 'Optical Flow (fg)',
   numPoints: number = 80,
   options?: AxisTrajectoryOptions
 ): Promise<AxisTrajectoryResponse> {

@@ -3,6 +3,7 @@ import { SlidersHorizontal, Palette, Sparkles, LayoutList, ImageIcon, Filter, X 
 import { useSample } from '../context/SampleContext';
 import { getFeatureStats, getFeatureValues, healthCheck } from '../api/client';
 import { findNearestSampleIndex } from './SemanticAxisPreview';
+import FeatureSelect from './FeatureSelect';
 
 interface VisualizerControlsProps {
   type: '2d' | '4d';
@@ -10,9 +11,19 @@ interface VisualizerControlsProps {
   dark?: boolean;
 }
 
-const FEATURE_OPTIONS = [
-  { id: 'fragment_length', label: 'Fragment Length', apiName: 'Fragment Length' },
-  { id: 'segment_length', label: 'Segment Length', apiName: 'Segment Length' },
+const FEATURE_GROUPS = [
+  {
+    category: 'Mitochondria dynamics',
+    features: [{ id: 'optical_flow_fg', label: 'Motility', apiName: 'Optical Flow (fg)' }],
+  },
+  {
+    category: 'Mitochondrial Morphology',
+    features: [{ id: 'segment_length', label: 'Segment Length', apiName: 'Segment Length' }],
+  },
+  {
+    category: 'Mitochondria function',
+    features: [{ id: 'tmrm_intensity', label: 'Membrane Potential', apiName: 'TMRM Intensity' }],
+  },
 ];
 
 const DEFAULT_FEATURE_RANGE = { min: 1, max: 5 };
@@ -266,7 +277,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
                   setSemanticState((s) => ({
                     ...s,
                     advancedMode: e.target.checked,
-                    selectedFeature: e.target.checked ? (s.selectedFeature || 'Fragment Length') : null,
+                    selectedFeature: e.target.checked ? (s.selectedFeature || 'Optical Flow (fg)') : null,
                     projectedPosition: null,
                     projectedConfidence: null,
                     semanticSliderValue: null,
@@ -282,15 +293,16 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
 
           {advancedMode && (
             <div className={`flex flex-wrap items-center gap-4 px-4 py-2 rounded-lg ${controlBg} border border-white/[0.06]`} data-tour="semantic-feature-controls">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-3">
                 <label className={`text-sm font-medium shrink-0 ${textClass}`}>Feature</label>
-                <select
-                  value={selectedFeature ?? ''}
-                  onChange={(e) => {
-                    const v = e.target.value || null;
+                <FeatureSelect
+                  groups={FEATURE_GROUPS}
+                  value={selectedFeature}
+                  onChange={(apiName) => {
+                    if (apiName === selectedFeature) return;
                     setSemanticState((s) => ({
                       ...s,
-                      selectedFeature: v,
+                      selectedFeature: apiName,
                       semanticSliderValue: null,
                       projectedPosition: null,
                       projectedConfidence: null,
@@ -299,17 +311,10 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
                     }));
                   }}
                   disabled={featureLoading}
-                  className="w-40 text-sm py-1.5 px-3 rounded-md border border-white/15 bg-white/5 text-white placeholder:text-white/40 focus:outline-none focus:ring-1 focus:ring-white/30 focus:border-white/30 transition-colors disabled:opacity-60"
-                >
-                  <option value="">Select</option>
-                  {FEATURE_OPTIONS.map((opt) => (
-                    <option key={opt.id} value={opt.apiName} className="bg-black text-white">
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
+                  placeholder="Select feature"
+                />
                 {featureLoading && (
-                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin shrink-0" />
                 )}
               </div>
               {apiConnected === false && (
