@@ -60,7 +60,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
   const selectedFeature = semanticState.selectedFeature;
   const featureRange = semanticState.featureRange ?? (selectedFeature ? DEFAULT_FEATURE_RANGE : null);
   const sliderValue = semanticState.semanticSliderValue ?? featureRange?.min;
-  const showSlider = type === '4d' && advancedMode && selectedFeature && selectedPointIndex != null;
+  const showSlider = type === '4d' && advancedMode && selectedFeature && featureRange != null;
   const [apiConnected, setApiConnected] = useState<boolean | null>(null);
   const [featureLoading, setFeatureLoading] = useState(false);
 
@@ -110,18 +110,22 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
   }, [type, selectedFeature, setFeatureValues, setSemanticState]);
 
   useEffect(() => {
-    if (type !== '4d' || !advancedMode || !selectedFeature || selectedPointIndex == null) return;
+    if (type !== '4d' || !advancedMode || !selectedFeature) return;
     getFeatureStats(selectedFeature)
       .then((stats) => {
         const values = featureValues[selectedFeature];
         const pointValue =
-          values && selectedPointIndex < values.length && Number.isFinite(values[selectedPointIndex])
+          selectedPointIndex != null &&
+          values &&
+          selectedPointIndex < values.length &&
+          Number.isFinite(values[selectedPointIndex])
             ? values[selectedPointIndex]
             : null;
+        const mid = (stats.min + stats.max) / 2;
         setSemanticState((s) => ({
           ...s,
           featureRange: { min: stats.min, max: stats.max },
-          semanticSliderValue: pointValue ?? s.semanticSliderValue ?? stats.min,
+          semanticSliderValue: pointValue ?? s.semanticSliderValue ?? mid,
         }));
       })
       .catch(() => {});
@@ -129,8 +133,9 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
 
   const handleSliderChange = (value: number) => {
     setSemanticState((s) => ({ ...s, semanticSliderValue: value }));
-    if (selectedPointIndex != null && onSemanticSliderChange) {
-      onSemanticSliderChange(selectedPointIndex, value);
+    const pointIndex = selectedPointIndex ?? 0;
+    if (onSemanticSliderChange) {
+      onSemanticSliderChange(pointIndex, value);
     }
   };
 
@@ -142,7 +147,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
   return (
     <div className="flex flex-wrap items-center justify-evenly gap-x-6 gap-y-3 w-full">
       {/* Point size */}
-      <div className={`flex items-center gap-3 px-4 py-2 rounded-lg ${controlBg} border border-white/[0.06]`}>
+      <div className={`flex items-center gap-3 px-4 py-2 rounded-lg shrink-0 ${controlBg} border border-white/[0.06]`}>
         <SlidersHorizontal size={16} className="text-white/50 shrink-0" />
         <label htmlFor="pointSize" className={`text-sm font-medium shrink-0 ${textClass}`}>
           Point size
@@ -165,10 +170,10 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
       <div className={divider} />
 
       {/* Drug filter */}
-      <div className="relative" ref={drugFilterRef}>
+      <div className="relative shrink-0" ref={drugFilterRef}>
         <button
           onClick={() => setDrugFilterOpen(!drugFilterOpen)}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${controlBg} border border-white/[0.06] ${
+          className={`flex items-center justify-center gap-2 min-w-[180px] px-4 py-2 rounded-lg text-sm font-medium transition-colors ${controlBg} border border-white/[0.06] ${
             selectedDrugs.size > 0
               ? 'bg-white/10 text-white border-white/20'
               : 'text-white/70 hover:text-white/90 hover:bg-white/[0.06]'
@@ -224,7 +229,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
       <div className={divider} />
 
       {/* Color by */}
-      <div className={`flex items-center gap-4 px-4 py-2 rounded-lg ${controlBg} border border-white/[0.06]`}>
+      <div className={`flex items-center gap-4 px-4 py-2 rounded-lg shrink-0 ${controlBg} border border-white/[0.06]`}>
         <Palette size={16} className="text-white/50 shrink-0" />
         <span className={`text-sm font-medium shrink-0 ${textClass}`}>Color by</span>
         <div className="flex gap-4">
@@ -254,7 +259,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
       {type === '4d' && (
         <>
           <div className={divider} />
-          <div className={`flex items-center gap-3 px-4 py-2 rounded-lg ${controlBg} border border-white/[0.06]`} data-tour="semantic-axis-toggle">
+          <div className={`flex items-center gap-3 px-4 py-2 rounded-lg shrink-0 ${controlBg} border border-white/[0.06]`} data-tour="semantic-axis-toggle">
             <label className="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
@@ -278,8 +283,8 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
           </div>
 
           {advancedMode && (
-            <div className={`flex flex-wrap items-center gap-4 px-4 py-2 rounded-lg ${controlBg} border border-white/[0.06]`} data-tour="semantic-feature-controls">
-              <div className="flex items-center gap-3">
+            <div className={`flex flex-wrap items-center gap-4 min-w-[420px] px-4 py-2 rounded-lg shrink-0 ${controlBg} border border-white/[0.06]`} data-tour="semantic-feature-controls">
+              <div className="flex items-center gap-3 shrink-0">
                 <label className={`text-sm font-medium shrink-0 ${textClass}`}>Feature</label>
                 <FeatureSelect
                   groups={FEATURE_GROUPS}
@@ -289,11 +294,10 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
                     setSemanticState((s) => ({
                       ...s,
                       selectedFeature: apiName,
-                      semanticSliderValue: null,
                       projectedPosition: null,
                       projectedConfidence: null,
-                      featureRange: null,
                       axisSamplesVisible: false,
+                      // Keep featureRange and semanticSliderValue until new data loads
                     }));
                   }}
                   disabled={featureLoading}
@@ -324,7 +328,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
                       axisSamplesVisible: !s.axisSamplesVisible,
                     }))
                   }
-                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                  className={`flex items-center gap-2 min-w-[240px] justify-center px-3 py-1.5 rounded-lg text-sm font-medium transition-colors shrink-0 ${
                     semanticState.axisSamplesVisible
                       ? 'bg-white/15 text-white'
                       : 'bg-white/5 hover:bg-white/10 text-white/80'
@@ -337,11 +341,8 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
             </div>
           )}
 
-          {advancedMode && selectedFeature && selectedPointIndex == null && (
-            <p className={`text-xs ${textMutedClass} italic`}>Click a point to enable axis slider</p>
-          )}
           {showSlider && featureRange && (
-            <div className={`flex items-center gap-4 flex-wrap px-4 py-2 rounded-lg ${controlBg} border border-white/[0.06]`} data-tour="semantic-axis-slider">
+            <div className={`flex items-center gap-4 flex-wrap min-w-[520px] px-4 py-2 rounded-lg shrink-0 ${controlBg} border border-white/[0.06] transition-opacity duration-200 ${featureLoading ? 'opacity-40 pointer-events-none' : ''}`} data-tour="semantic-axis-slider">
               <div className="flex items-center gap-2 min-w-[200px]">
                 <span className={`text-xs shrink-0 ${textMutedClass}`}>{featureRange.min.toFixed(3)}</span>
                 <input

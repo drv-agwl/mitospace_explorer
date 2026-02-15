@@ -133,7 +133,7 @@ const SamplePanel: React.FC = () => {
                   {selectedSample.videos ? (
                     <>
                       <Video size={13} strokeWidth={2} className="text-white/50" />
-                      4D Movie
+                      4D Cell Movie
                     </>
                   ) : (
                     <>

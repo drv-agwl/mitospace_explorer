@@ -66,13 +66,13 @@ const EXPLORER_STEPS: Step[] = [
   },
   {
     target: '[data-tour="controls-toolbar"]',
-    content: 'After enabling Semantic axis: select a feature (Motility, Segment Length, or Membrane Potential), then click any point in the 3D view. A slider will appear—drag it to see where cells with different values would lie. A golden sphere traces the learned axis through the cloud.',
+    content: 'After enabling Semantic axis: select a feature (Motility, Segment Length, or Membrane Potential). A slider appears—drag it to see where cells with different values would lie. A golden sphere traces the learned axis through the cloud. Click points to anchor the projection to a specific cell.',
     disableBeacon: true,
     placement: 'bottom',
   },
   {
     target: '[data-tour="visualizer-canvas"]',
-    content: '3D visualization: Drag to rotate, scroll to zoom, click points to select. After enabling Semantic axis and selecting a feature, click a point to activate the axis slider. Press F for fullscreen, R to reset view, ? for help.',
+    content: '3D visualization: Drag to rotate, scroll to zoom, click points to select. After enabling Semantic axis and selecting a feature, the slider appears—drag it to explore. Press F for fullscreen, R to reset view, ? for help.',
     disableBeacon: true,
     placement: 'right',
   },
@@ -90,7 +90,7 @@ const EXPLORER_STEPS: Step[] = [
   },
   {
     target: 'body',
-    content: 'You\'re all set! Enable Semantic axis, click a point, and drag the slider to explore. You can restart this tour anytime from the Take tour button.',
+    content: 'You\'re all set! Enable Semantic axis, select a feature, and drag the slider to explore. You can restart this tour anytime from the Take tour button.',
     disableBeacon: true,
     placement: 'center',
   },

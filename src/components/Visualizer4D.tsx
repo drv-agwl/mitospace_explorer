@@ -19,6 +19,7 @@ const Visualizer4D: React.FC = () => {
     filteredSamples4D,
     samples4D,
     selectedSample,
+    selectedPointIndex,
     setSelectedSample,
     setSelectedPointIndex,
     visualizerOptions,
@@ -53,6 +54,8 @@ const Visualizer4D: React.FC = () => {
   const [pointCount, setPointCount] = useState(0);
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const pointerDownRef = useRef<{ x: number; y: number } | null>(null);
+  const pointerMovedRef = useRef(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [copiedCoords, setCopiedCoords] = useState(false);
@@ -704,12 +707,13 @@ const Visualizer4D: React.FC = () => {
   }, [selectedSample]);
 
   const handleSemanticSliderChange = useCallback(
-    (_pointIndex: number, targetValue: number) => {
-      if (!selectedSample) return;
-      const embeddingIndex = samples4D.findIndex((s) => s.id === selectedSample.id);
-      if (embeddingIndex < 0) return;
+    (pointIndex: number, targetValue: number) => {
+      const embeddingIndex = selectedSample
+        ? samples4D.findIndex((s) => s.id === selectedSample.id)
+        : pointIndex;
+      const effectiveIndex = embeddingIndex >= 0 ? embeddingIndex : pointIndex;
       const maxIndex = apiEmbeddingCount ?? Infinity;
-      if (embeddingIndex >= maxIndex) return;
+      if (effectiveIndex < 0 || effectiveIndex >= maxIndex) return;
       const feature = semanticState.selectedFeature ?? 'Optical Flow (fg)';
       const center = getCenter();
       const options = {
@@ -718,10 +722,10 @@ const Visualizer4D: React.FC = () => {
         centerZ: center.z,
         scaleFactor: SCALE_FACTOR,
       };
-      const requestSampleId = selectedSample.id;
-      projectOnAxis(embeddingIndex, targetValue, feature, options)
+      const requestSampleId = selectedSample?.id ?? null;
+      projectOnAxis(effectiveIndex, targetValue, feature, options)
         .then((res) => {
-          if (selectedSampleIdRef.current !== requestSampleId) return;
+          if (requestSampleId != null && selectedSampleIdRef.current !== requestSampleId) return;
           const proj = { x: res.x, y: res.y, z: res.z };
           setSemanticState((s) => ({
             ...s,
@@ -737,9 +741,60 @@ const Visualizer4D: React.FC = () => {
     [selectedSample, samples4D, semanticState.selectedFeature, setSemanticState, apiEmbeddingCount, getCenter]
   );
 
+  // Initial projection when slider first appears (or feature/point changes) - show golden sphere
+  const lastProjKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (
+      !semanticState.advancedMode ||
+      !semanticState.selectedFeature ||
+      !semanticState.featureRange
+    )
+      return;
+    const key = `${semanticState.selectedFeature}-${selectedPointIndex ?? 'n'}`;
+    if (lastProjKeyRef.current === key) return;
+    lastProjKeyRef.current = key;
+    const val =
+      semanticState.semanticSliderValue ??
+      (semanticState.featureRange.min + semanticState.featureRange.max) / 2;
+    const idx =
+      selectedSample != null
+        ? samples4D.findIndex((s) => s.id === selectedSample.id)
+        : 0;
+    handleSemanticSliderChange(idx >= 0 ? idx : 0, val);
+  }, [
+    semanticState.advancedMode,
+    semanticState.selectedFeature,
+    semanticState.featureRange,
+    semanticState.semanticSliderValue,
+    selectedPointIndex,
+    selectedSample,
+    samples4D,
+    handleSemanticSliderChange,
+  ]);
+
+  const handlePointerDown = useCallback((e: React.PointerEvent) => {
+    pointerDownRef.current = { x: e.clientX, y: e.clientY };
+    pointerMovedRef.current = false;
+  }, []);
+
+  const handlePointerMove = useCallback((e: React.PointerEvent) => {
+    if (pointerDownRef.current && !pointerMovedRef.current) {
+      const dx = e.clientX - pointerDownRef.current.x;
+      const dy = e.clientY - pointerDownRef.current.y;
+      if (Math.sqrt(dx * dx + dy * dy) > 5) pointerMovedRef.current = true;
+    }
+  }, []);
+
+  const handlePointerUp = useCallback(() => {
+    pointerDownRef.current = null;
+  }, []);
+
   const handleClick = (event: React.MouseEvent) => {
     if (!containerRef.current || !cameraRef.current || !pointsRef.current) return;
-    if (isDragging) return;
+    if (isDragging || pointerMovedRef.current) {
+      pointerMovedRef.current = false;
+      return;
+    }
     const rect = containerRef.current.getBoundingClientRect();
     mouseRef.current.x = ((event.clientX - rect.left) / containerRef.current.clientWidth) * 2 - 1;
     mouseRef.current.y = -((event.clientY - rect.top) / containerRef.current.clientHeight) * 2 + 1;
@@ -863,6 +918,10 @@ const Visualizer4D: React.FC = () => {
         ref={containerRef}
         className="flex-1 min-h-0 relative overflow-hidden"
         data-tour="visualizer-canvas"
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerLeave={handlePointerUp}
         onClick={handleClick}
         style={{
           background: isDarkMode
