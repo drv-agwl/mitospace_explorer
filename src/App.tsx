@@ -9,6 +9,7 @@ import About from './components/About';
 import PasswordProtection from './components/PasswordProtection';
 import SpaceLanding from './components/SpaceLanding';
 import GlobalKeyboardShortcuts from './components/GlobalKeyboardShortcuts';
+import MobileBlocker from './components/MobileBlocker';
 import { OnboardingTour, hasCompletedOnboarding, resetOnboarding } from './components/OnboardingTour';
 import { SampleProvider } from './context/SampleContext';
 
@@ -79,14 +80,16 @@ function Explorer() {
 function App() {
   return (
     <PasswordProtection>
-      <Router>
-        <SampleProvider>
-          <Routes>
-            <Route path="/" element={<Explorer />} />
-            <Route path="/about" element={<About />} />
-          </Routes>
-        </SampleProvider>
-      </Router>
+      <MobileBlocker>
+        <Router>
+          <SampleProvider>
+            <Routes>
+              <Route path="/" element={<Explorer />} />
+              <Route path="/about" element={<About />} />
+            </Routes>
+          </SampleProvider>
+        </Router>
+      </MobileBlocker>
     </PasswordProtection>
   );
 }
