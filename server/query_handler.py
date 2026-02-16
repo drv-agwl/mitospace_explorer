@@ -33,13 +33,15 @@ FEATURE_ALIASES = {
     'segments': 'Segment Length',
     'seg length': 'Segment Length',
     'morphology': 'Segment Length',
-    # Motility / Optical Flow
+    # Motility / Optical Flow (fg and bg both mean motility)
     'motility': 'Optical Flow (fg)',
     'movement': 'Optical Flow (fg)',
     'motion': 'Optical Flow (fg)',
     'dynamics': 'Optical Flow (fg)',
     'dynamic': 'Optical Flow (fg)',
     'optical flow': 'Optical Flow (fg)',
+    'optical flow (fg)': 'Optical Flow (fg)',
+    'optical flow (bg)': 'Optical Flow (fg)',
     'flow': 'Optical Flow (fg)',
     'moving': 'Optical Flow (fg)',
     'mobility': 'Optical Flow (fg)',
@@ -611,10 +613,10 @@ def compute_feature_stats(feature: str, drug: Optional[str] = None) -> Dict[str,
 def get_feature_description(feature: str) -> Dict[str, Any]:
     """Get description of what a feature measures."""
     descriptions = {
-        'Fragment Length': 'Measures the average length of individual mitochondrial fragments. Higher values indicate more elongated/tubular mitochondria, while lower values indicate fragmentation.',
-        'Segment Length': 'Measures the length of continuous mitochondrial segments in the network. Reflects mitochondrial morphology and connectivity.',
-        'Optical Flow (fg)': 'Quantifies mitochondrial movement and motility. Higher values indicate more dynamic, mobile mitochondria.',
-        'TMRM Intensity': 'Measures mitochondrial membrane potential using TMRM fluorescence. Higher values indicate healthier, more polarized mitochondria with better function.',
+        'Fragment Length': 'Fragment length measures the average length of individual mitochondrial fragments. Higher values indicate more elongated/tubular mitochondria, while lower values indicate fragmentation.',
+        'Segment Length': 'Segment length measures the length of continuous mitochondrial segments in the network. Reflects mitochondrial morphology and connectivity.',
+        'Optical Flow (fg)': 'Motility (measured as Optical Flow) quantifies mitochondrial movement and dynamics. Higher values indicate more dynamic, mobile mitochondria.',
+        'TMRM Intensity': 'Membrane potential (measured as TMRM Intensity) reflects mitochondrial health and function. Higher values indicate healthier, more polarized mitochondria.',
         'Fusion Rate': 'Rate of mitochondrial fusion events. Fusion is important for maintaining mitochondrial health and exchanging contents between mitochondria.',
         'Fission Rate': 'Rate of mitochondrial fission (division) events. Fission is necessary for quality control and distribution of mitochondria.',
         'Node Count': 'Total number of nodes in the mitochondrial network graph. Reflects the overall complexity of the network.',
