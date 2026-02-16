@@ -343,21 +343,27 @@ class ChatResponse(BaseModel):
 def _extract_context_from_history(history: list[HistoryMessage]) -> dict:
     """
     Extract conversation context from history to help classify follow-up questions.
-    Returns dict with last_query_type, last_feature, last_drugs, etc.
+    Returns dict with last_query_type, last_feature, last_drugs, last_message (user).
     """
     context = {
         'last_query_type': None,
         'last_feature': None,
         'last_drugs': [],
+        'last_user_message': None,
     }
     
     # Walk backwards through history to find the last meaningful exchange
     for msg in reversed(history):
-        if msg.role == 'user' and context['last_feature'] is None:
-            # Try to extract feature from past user messages
+        # Extract features from both user AND assistant messages
+        if context['last_feature'] is None:
             feat = query_handler.extract_feature_name(msg.content)
             if feat:
                 context['last_feature'] = feat
+        
+        if msg.role == 'user':
+            # Track the last user message for re-run on confirmation
+            if context['last_user_message'] is None:
+                context['last_user_message'] = msg.content
             
             drugs = query_handler.extract_drug_names(msg.content)
             if drugs and not context['last_drugs']:
@@ -367,7 +373,7 @@ def _extract_context_from_history(history: list[HistoryMessage]) -> dict:
             context['last_query_type'] = msg.query_type
         
         # Stop once we have enough context
-        if context['last_feature'] and context['last_query_type']:
+        if context['last_feature'] and context['last_query_type'] and context['last_user_message']:
             break
     
     return context
@@ -409,15 +415,50 @@ async def chat(req: ChatRequest):
     query_info = classify_query(message, context=context)
     query_type = query_info['type']
     
-    # Step 2: Handle unsupported queries
+    # Step 2: Handle special conversational types (no stats needed)
+    if query_type == 'greeting':
+        return ChatResponse(
+            answer="Hi! I'm MitoSpace Chat — I can help you explore the mitochondrial dataset. "
+                   "Try asking things like:\n\n"
+                   "• \"Which drugs increase motility?\"\n"
+                   "• \"Compare Rotenone and CCCP\"\n"
+                   "• \"Is motility correlated with segment length?\"\n"
+                   "• \"What are the effects of TBHP?\"\n\n"
+                   "What would you like to know?",
+            data=None,
+            query_type="greeting"
+        )
+    
+    if query_type == 'thanks':
+        return ChatResponse(
+            answer="You're welcome! Feel free to ask more questions about the dataset anytime.",
+            data=None,
+            query_type="thanks"
+        )
+    
+    if query_type == 'help':
+        return ChatResponse(
+            answer="I can analyze this mitochondrial dataset for you. Here's what I can do:\n\n"
+                   "**Drug Rankings** — \"Which drugs increase motility the most?\"\n"
+                   "**Drug Comparisons** — \"Compare Rotenone and CCCP\" or \"What are the effects of TBHP?\"\n"
+                   "**Feature Correlations** — \"Is motility correlated with segment length?\"\n"
+                   "**Summary Statistics** — \"What is the mean fragment length for Rotenone?\"\n"
+                   "**Feature Info** — \"What is membrane potential?\"\n"
+                   "**Dataset Overview** — \"What features are available?\"\n\n"
+                   "You can also ask follow-up questions naturally — I'll remember the context!",
+            data=None,
+            query_type="help"
+        )
+    
     if query_type == 'unsupported':
         return ChatResponse(
-            answer="I can help answer questions about:\n"
-                   "• Drug comparisons (e.g., 'Compare Rotenone and DMSO')\n"
-                   "• Feature correlations (e.g., 'Is fragment length correlated with motility?')\n"
-                   "• Drug rankings (e.g., 'Which drugs increase fragmentation most?')\n"
-                   "• Summary statistics (e.g., 'What is the mean fragment length?')\n\n"
-                   "Could you rephrase your question?",
+            answer="I'm not sure I understood that. Here are some things I can help with:\n\n"
+                   "• \"Which drugs increase motility?\" — rank drugs by a feature\n"
+                   "• \"Compare Rotenone and CCCP\" — compare drug effects\n"
+                   "• \"Is motility correlated with segment length?\" — feature correlations\n"
+                   "• \"What are the effects of TBHP?\" — drug effects\n"
+                   "• \"What features are available?\" — dataset overview\n\n"
+                   "Try rephrasing, or just mention a drug or feature name!",
             data=None,
             query_type="unsupported"
         )
@@ -435,7 +476,8 @@ async def chat(req: ChatRequest):
     # Check for errors in computation
     if 'error' in computed_stats:
         return ChatResponse(
-            answer=f"Sorry, I couldn't process that query: {computed_stats['error']}",
+            answer=f"Sorry, I couldn't process that: {computed_stats['error']}. "
+                   f"Try mentioning a specific drug name or feature (like motility, fragment length, or membrane potential).",
             data=computed_stats,
             query_type=query_type
         )
