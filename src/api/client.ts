@@ -141,11 +141,14 @@ export interface ChatResponse {
   query_type?: string;
 }
 
-export async function sendChatMessage(message: string): Promise<ChatResponse> {
+export async function sendChatMessage(
+  message: string,
+  history?: { role: string; content: string; query_type?: string }[]
+): Promise<ChatResponse> {
   const res = await fetch(`${API_BASE}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message })
+    body: JSON.stringify({ message, history: history || [] })
   });
   
   if (!res.ok) {

@@ -98,12 +98,19 @@ const ChatPanel: React.FC = () => {
       timestamp: Date.now()
     };
 
-    setMessages(prev => [...prev, userMessage]);
+    const updatedMessages = [...messages, userMessage];
+    setMessages(updatedMessages);
     setInput('');
     setIsLoading(true);
 
     try {
-      const response = await sendChatMessage(userMessage.content);
+      // Send recent history for context (last 6 messages = 3 exchanges)
+      const history = updatedMessages.slice(-6).map(m => ({
+        role: m.role,
+        content: m.content,
+        query_type: m.data?.query_type
+      }));
+      const response = await sendChatMessage(userMessage.content, history);
       
       const assistantMessage: ChatMessage = {
         id: (Date.now() + 1).toString(),
