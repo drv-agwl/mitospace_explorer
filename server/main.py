@@ -15,6 +15,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
+# Chat system imports
+import query_handler
+import llm_client
+from query_handler import load_data, classify_query, compute_statistics
+from llm_client import initialize_llm_client, get_llm_client, is_llm_available
+
 # Load environment variables
 load_dotenv()
 
@@ -137,7 +143,6 @@ def startup():
     
     # Load complete dataset for chat system
     try:
-        from query_handler import load_data
         # Load full feature CSV
         feature_csv = DATA / "mitotnt_features.csv"
         # Load metadata JSON (contains drug/phenotype info)
@@ -149,7 +154,6 @@ def startup():
     
     # Initialize LLM client for chat
     try:
-        from llm_client import initialize_llm_client
         api_key = os.getenv("OPENROUTER_API_KEY")
         model = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3-70b-instruct")
         if api_key:
@@ -299,17 +303,13 @@ def get_feature_values(feature_name: str):
 def health():
     n = len(umap_points) if umap_points is not None else 0
     
-    # Check if chat system is available
-    from llm_client import is_llm_available
-    from query_handler import feature_table, sample_metadata
-    
     return {
         "umap_points_loaded": umap_points is not None,
         "point_count": n,
         "embedding_count": n,  # frontend uses this for "in range" check; axis works for all points
         "features": list(feature_values.keys()),
         "axes": list(feature_umap_model.keys()),
-        "chat_available": is_llm_available() and feature_table is not None,
+        "chat_available": is_llm_available() and query_handler.feature_table is not None,
     }
 
 
@@ -335,9 +335,6 @@ async def chat(req: ChatRequest):
     3. Send stats to LLM with strict prompt
     4. Return formatted natural language answer
     """
-    from llm_client import get_llm_client, is_llm_available
-    from query_handler import classify_query, compute_statistics, feature_table
-    
     # Check if chat is available
     if not is_llm_available():
         raise HTTPException(
@@ -345,7 +342,7 @@ async def chat(req: ChatRequest):
             detail="Chat system is not available. LLM client not initialized."
         )
     
-    if feature_table is None:
+    if query_handler.feature_table is None:
         raise HTTPException(
             status_code=503,
             detail="Chat system is not available. Dataset not loaded."

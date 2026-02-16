@@ -31,6 +31,12 @@ FEATURE_ALIASES = {
     'diffusivity': 'Node Diffusivity',
 }
 
+# Drug aliases (Control and DMSO are the same)
+DRUG_ALIASES = {
+    'control': 'DMSO',
+    'ctrl': 'DMSO',
+}
+
 # All numeric features
 NUMERIC_FEATURES = [
     'Node Count', 'Degree', 'Segment Length', 'Fragment Length', 'Fragment Diameter',
@@ -87,18 +93,24 @@ def extract_feature_name(text: str) -> Optional[str]:
 
 
 def extract_drug_names(text: str) -> List[str]:
-    """Extract drug names from user query"""
+    """Extract drug names from user query (normalizes Control → DMSO)"""
     if sample_metadata is None:
         return []
     
     drugs = []
     text_lower = text.lower()
     
+    # Check for aliases first (e.g., "control" → "DMSO")
+    for alias, canonical_name in DRUG_ALIASES.items():
+        if alias in text_lower:
+            if canonical_name not in drugs:
+                drugs.append(canonical_name)
+    
     # Get unique drugs from metadata
     unique_drugs = sample_metadata['drug'].unique() if sample_metadata is not None else []
     
     for drug in unique_drugs:
-        if drug.lower() in text_lower:
+        if drug.lower() in text_lower and drug not in drugs:
             drugs.append(drug)
     
     return drugs
@@ -172,25 +184,66 @@ def classify_query(message: str) -> Dict[str, Any]:
     return {'type': 'unsupported', 'params': {}}
 
 
+def _normalize_drug_name(drug: str) -> str:
+    """Normalize drug name - convert DMSO/Control to the canonical name that exists in dataset"""
+    if sample_metadata is None:
+        return drug
+    
+    available_drugs = set(sample_metadata['drug'].unique())
+    
+    # If asking for DMSO or Control, find which one (or both) exists
+    if drug in ['DMSO', 'Control']:
+        has_dmso = 'DMSO' in available_drugs
+        has_control = 'Control' in available_drugs
+        
+        # Return whichever exists, preferring DMSO for display
+        if has_dmso:
+            return 'DMSO'
+        elif has_control:
+            return 'Control'  # Will be displayed as "DMSO (control)" in results
+        else:
+            return drug  # Neither exists, will error later
+    
+    return drug
+
+
 def compute_drug_comparison(drugs: List[str]) -> Dict[str, Any]:
-    """Compare mean feature values between drugs"""
+    """Compare mean feature values between drugs (Control and DMSO are merged)"""
     if feature_table is None or sample_metadata is None:
         return {'error': 'Data not loaded'}
     
     results = {}
+    available_drugs = list(sample_metadata['drug'].unique())
+    
+    # Debug: print available drugs
+    print(f"[DEBUG] Available drugs in dataset: {available_drugs}")
+    print(f"[DEBUG] Requested drugs: {drugs}")
     
     for drug in drugs:
-        # Find samples for this drug
-        drug_samples = sample_metadata[sample_metadata['drug'] == drug]
+        # Normalize drug name (DMSO/Control handled together)
+        display_name = drug
+        
+        # Find samples for this drug (merge Control and DMSO)
+        # Case-insensitive check for DMSO/Control
+        if drug.upper() in ['DMSO', 'CONTROL']:
+            # Include both DMSO and Control samples (whichever exist, case-insensitive)
+            drug_samples = sample_metadata[
+                sample_metadata['drug'].str.upper().isin(['DMSO', 'CONTROL'])
+            ]
+            display_name = 'DMSO (control)'  # Clear display name
+            print(f"[DEBUG] Looking for DMSO/Control, found {len(drug_samples)} samples")
+        else:
+            drug_samples = sample_metadata[sample_metadata['drug'] == drug]
+            print(f"[DEBUG] Looking for {drug}, found {len(drug_samples)} samples")
         
         if len(drug_samples) == 0:
-            results[drug] = {'error': 'No samples found'}
+            results[display_name] = {'error': 'No samples found'}
             continue
         
         # Get indices (assuming feature_table rows align with metadata)
         indices = drug_samples.index.tolist()
         
-        results[drug] = {
+        results[display_name] = {
             'count': len(indices),
             'features': {}
         }
@@ -201,7 +254,7 @@ def compute_drug_comparison(drugs: List[str]) -> Dict[str, Any]:
             if feature in feature_table.columns:
                 values = feature_table.loc[indices, feature].dropna()
                 if len(values) > 0:
-                    results[drug]['features'][feature] = {
+                    results[display_name]['features'][feature] = {
                         'mean': float(values.mean()),
                         'std': float(values.std()),
                         'median': float(values.median()),
@@ -244,7 +297,7 @@ def compute_correlation(feature1: str, feature2: str) -> Dict[str, Any]:
 
 
 def compute_ranking(feature: str, direction: str = 'high', top_n: int = 10) -> Dict[str, Any]:
-    """Rank drugs by mean feature value"""
+    """Rank drugs by mean feature value (Control and DMSO are merged)"""
     if feature_table is None or sample_metadata is None:
         return {'error': 'Data not loaded'}
     
@@ -252,15 +305,35 @@ def compute_ranking(feature: str, direction: str = 'high', top_n: int = 10) -> D
         return {'error': f'Feature not found: {feature}'}
     
     rankings = []
+    processed_drugs = set()
     
     for drug in sample_metadata['drug'].unique():
-        drug_samples = sample_metadata[sample_metadata['drug'] == drug]
+        # Skip if we've already processed this drug
+        if drug.upper() in processed_drugs:
+            continue
+        
+        # Merge Control and DMSO (case-insensitive)
+        if drug.upper() in ['CONTROL', 'DMSO']:
+            if 'DMSO' in processed_drugs or 'CONTROL' in processed_drugs:
+                continue  # Already processed the merged group
+            
+            drug_samples = sample_metadata[
+                sample_metadata['drug'].str.upper().isin(['DMSO', 'CONTROL'])
+            ]
+            display_name = 'DMSO (control)'
+            processed_drugs.add('DMSO')
+            processed_drugs.add('CONTROL')
+        else:
+            drug_samples = sample_metadata[sample_metadata['drug'] == drug]
+            display_name = drug
+            processed_drugs.add(drug.upper())
+        
         indices = drug_samples.index.tolist()
         values = feature_table.loc[indices, feature].dropna()
         
         if len(values) > 0:
             rankings.append({
-                'drug': drug,
+                'drug': display_name,
                 'mean': float(values.mean()),
                 'std': float(values.std()),
                 'count': len(values)
@@ -277,7 +350,7 @@ def compute_ranking(feature: str, direction: str = 'high', top_n: int = 10) -> D
 
 
 def compute_feature_stats(feature: str, drug: Optional[str] = None) -> Dict[str, Any]:
-    """Get summary statistics for a feature"""
+    """Get summary statistics for a feature (Control and DMSO are merged)"""
     if feature_table is None:
         return {'error': 'Data not loaded'}
     
@@ -286,10 +359,18 @@ def compute_feature_stats(feature: str, drug: Optional[str] = None) -> Dict[str,
     
     # Filter by drug if specified
     if drug and sample_metadata is not None:
-        drug_samples = sample_metadata[sample_metadata['drug'] == drug]
+        # Merge Control and DMSO (case-insensitive)
+        if drug.upper() in ['CONTROL', 'DMSO']:
+            drug_samples = sample_metadata[
+                sample_metadata['drug'].str.upper().isin(['DMSO', 'CONTROL'])
+            ]
+            scope = f"for DMSO (control)"
+        else:
+            drug_samples = sample_metadata[sample_metadata['drug'] == drug]
+            scope = f"for {drug}"
+        
         indices = drug_samples.index.tolist()
         values = feature_table.loc[indices, feature].dropna()
-        scope = f"for {drug}"
     else:
         values = feature_table[feature].dropna()
         scope = "across all samples"
