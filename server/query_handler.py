@@ -93,7 +93,7 @@ def extract_feature_name(text: str) -> Optional[str]:
 
 
 def extract_drug_names(text: str) -> List[str]:
-    """Extract drug names from user query (normalizes Control → DMSO)"""
+    """Extract drug names from user query (case-insensitive, normalizes Control → DMSO)"""
     if sample_metadata is None:
         return []
     
@@ -106,19 +106,31 @@ def extract_drug_names(text: str) -> List[str]:
             if canonical_name not in drugs:
                 drugs.append(canonical_name)
     
-    # Get unique drugs from metadata
+    # Get unique drugs from metadata (case-insensitive matching)
     unique_drugs = sample_metadata['drug'].unique() if sample_metadata is not None else []
     
     for drug in unique_drugs:
         if drug.lower() in text_lower and drug not in drugs:
             drugs.append(drug)
     
+    # Also try matching words in the message against drugs (handles "TBHP" vs "tbhp")
+    # Split message into words and check each against known drugs
+    words = re.findall(r'[A-Za-z0-9]+', text)
+    for word in words:
+        for drug in unique_drugs:
+            if word.lower() == drug.lower() and drug not in drugs:
+                drugs.append(drug)
+    
     return drugs
 
 
-def classify_query(message: str) -> Dict[str, Any]:
+def classify_query(message: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
-    Classify user query into supported types
+    Classify user query into supported types, using conversation context for follow-ups.
+    
+    Args:
+        message: Current user message
+        context: Dict with last_query_type, last_feature, last_drugs from conversation history
     
     Returns:
         {
@@ -127,24 +139,49 @@ def classify_query(message: str) -> Dict[str, Any]:
         }
     """
     msg_lower = message.lower()
+    ctx = context or {}
+    last_feature = ctx.get('last_feature')
+    last_query_type = ctx.get('last_query_type')
+    last_drugs = ctx.get('last_drugs', [])
     
-    # Drug comparison
+    # ── 1. "What about X?" pattern ──
+    # Detect follow-up questions like "what about TBHP", "how about H2O2 and CCCP"
+    what_about_match = any(p in msg_lower for p in ['what about', 'how about', 'and what about', 'what of'])
+    
+    if what_about_match:
+        drugs = extract_drug_names(message)
+        feature = extract_feature_name(message)
+        
+        if drugs:
+            # User is asking about specific drugs → compare them (or get their stats)
+            if len(drugs) >= 2:
+                return {'type': 'drug_comparison', 'params': {'drugs': drugs[:5]}}
+            elif len(drugs) == 1:
+                # Single drug: get its feature stats using context feature
+                feat = feature or last_feature or 'Fragment Length'
+                return {'type': 'feature_stats', 'params': {'feature': feat, 'drug': drugs[0]}}
+        
+        if feature:
+            # User asking about a different feature
+            if last_query_type == 'ranking':
+                return {'type': 'ranking', 'params': {'feature': feature, 'direction': 'high', 'top_n': 10}}
+            else:
+                return {'type': 'feature_stats', 'params': {'feature': feature}}
+    
+    # ── 2. Drug comparison ──
     if any(word in msg_lower for word in ['compare', 'difference', 'versus', 'vs']):
         drugs = extract_drug_names(message)
         if len(drugs) >= 2:
-            return {'type': 'drug_comparison', 'params': {'drugs': drugs[:5]}}  # Max 5 drugs
+            return {'type': 'drug_comparison', 'params': {'drugs': drugs[:5]}}
         elif len(drugs) == 1:
-            # Compare to control (DMSO)
             return {'type': 'drug_comparison', 'params': {'drugs': [drugs[0], 'DMSO']}}
     
-    # Feature correlation
+    # ── 3. Feature correlation ──
     if 'correlat' in msg_lower:
-        # Try to extract two features
         features = []
         for feat in NUMERIC_FEATURES:
             if feat.lower() in msg_lower:
                 features.append(feat)
-        # Also check aliases
         for alias, feat in FEATURE_ALIASES.items():
             if alias in msg_lower and feat not in features:
                 features.append(feat)
@@ -152,8 +189,8 @@ def classify_query(message: str) -> Dict[str, Any]:
         if len(features) >= 2:
             return {'type': 'correlation', 'params': {'features': features[:2]}}
     
-    # Ranking queries
-    ranking_words_high = ['highest', 'most', 'increase', 'largest', 'maximum', 'top', 'more drugs', 'other drugs', 'which drugs', 'list', 'show', 'same', 'similar', 'else']
+    # ── 4. Ranking queries ──
+    ranking_words_high = ['highest', 'most', 'increase', 'largest', 'maximum', 'top', 'which drugs']
     ranking_words_low = ['lowest', 'least', 'decrease', 'smallest', 'minimum', 'bottom']
     
     is_ranking_high = any(word in msg_lower for word in ranking_words_high)
@@ -162,15 +199,15 @@ def classify_query(message: str) -> Dict[str, Any]:
     if is_ranking_high or is_ranking_low:
         feature = extract_feature_name(message)
         
-        # If no feature detected but it's clearly a follow-up, default to Fragment Length
-        if not feature and any(word in msg_lower for word in ['more', 'other', 'else', 'similar', 'same']):
-            feature = 'Fragment Length'  # Most common query
+        # Use context feature if not mentioned
+        if not feature:
+            feature = last_feature
         
         if feature:
             direction = 'high' if is_ranking_high else 'low'
             return {'type': 'ranking', 'params': {'feature': feature, 'direction': direction, 'top_n': 10}}
     
-    # Summary statistics
+    # ── 5. Summary statistics ──
     if any(word in msg_lower for word in ['mean', 'average', 'median', 'summary', 'statistics', 'stats']):
         feature = extract_feature_name(message)
         drug = extract_drug_names(message)
@@ -180,11 +217,42 @@ def classify_query(message: str) -> Dict[str, Any]:
                 params['drug'] = drug[0]
             return {'type': 'feature_stats', 'params': params}
     
-    # Simple feature query (e.g., "what is fragment length?")
+    # ── 6. Simple feature query ──
     if any(word in msg_lower for word in ['what is', 'tell me about', 'explain']):
         feature = extract_feature_name(message)
         if feature:
             return {'type': 'feature_description', 'params': {'feature': feature}}
+    
+    # ── 7. Fallback: check if message mentions drugs (context-aware) ──
+    drugs = extract_drug_names(message)
+    if drugs:
+        # User mentioned drug names without a clear intent — use context
+        if last_query_type == 'ranking' and last_feature:
+            # Previous was a ranking → show stats for these drugs on same feature
+            if len(drugs) >= 2:
+                return {'type': 'drug_comparison', 'params': {'drugs': drugs[:5]}}
+            else:
+                return {'type': 'feature_stats', 'params': {'feature': last_feature, 'drug': drugs[0]}}
+        elif last_query_type == 'drug_comparison':
+            # Previous was a comparison → compare these drugs
+            if len(drugs) >= 2:
+                return {'type': 'drug_comparison', 'params': {'drugs': drugs[:5]}}
+            else:
+                return {'type': 'drug_comparison', 'params': {'drugs': [drugs[0], 'DMSO']}}
+        else:
+            # Generic: compare to control
+            if len(drugs) >= 2:
+                return {'type': 'drug_comparison', 'params': {'drugs': drugs[:5]}}
+            else:
+                return {'type': 'drug_comparison', 'params': {'drugs': [drugs[0], 'DMSO']}}
+    
+    # ── 8. Fallback: check if message mentions a feature (context-aware) ──
+    feature = extract_feature_name(message)
+    if feature:
+        if last_query_type == 'ranking':
+            return {'type': 'ranking', 'params': {'feature': feature, 'direction': 'high', 'top_n': 10}}
+        else:
+            return {'type': 'feature_stats', 'params': {'feature': feature}}
     
     return {'type': 'unsupported', 'params': {}}
 

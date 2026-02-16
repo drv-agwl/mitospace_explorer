@@ -323,8 +323,15 @@ def health():
 
 
 # Chat endpoint
+class HistoryMessage(BaseModel):
+    role: str
+    content: str
+    query_type: str | None = None
+
+
 class ChatRequest(BaseModel):
     message: str
+    history: list[HistoryMessage] = []
 
 
 class ChatResponse(BaseModel):
@@ -333,13 +340,46 @@ class ChatResponse(BaseModel):
     query_type: str | None = None
 
 
+def _extract_context_from_history(history: list[HistoryMessage]) -> dict:
+    """
+    Extract conversation context from history to help classify follow-up questions.
+    Returns dict with last_query_type, last_feature, last_drugs, etc.
+    """
+    context = {
+        'last_query_type': None,
+        'last_feature': None,
+        'last_drugs': [],
+    }
+    
+    # Walk backwards through history to find the last meaningful exchange
+    for msg in reversed(history):
+        if msg.role == 'user' and context['last_feature'] is None:
+            # Try to extract feature from past user messages
+            feat = query_handler.extract_feature_name(msg.content)
+            if feat:
+                context['last_feature'] = feat
+            
+            drugs = query_handler.extract_drug_names(msg.content)
+            if drugs and not context['last_drugs']:
+                context['last_drugs'] = drugs
+        
+        if msg.query_type and context['last_query_type'] is None:
+            context['last_query_type'] = msg.query_type
+        
+        # Stop once we have enough context
+        if context['last_feature'] and context['last_query_type']:
+            break
+    
+    return context
+
+
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
     """
     Conversational Q&A endpoint for dataset queries
     
     Flow:
-    1. Classify query type
+    1. Classify query type (with conversation context for follow-ups)
     2. Compute relevant statistics from dataset
     3. Send stats to LLM with strict prompt
     4. Return formatted natural language answer
@@ -361,8 +401,12 @@ async def chat(req: ChatRequest):
     if not message:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
     
-    # Step 1: Classify query
-    query_info = classify_query(message)
+    # Extract context from conversation history
+    context = _extract_context_from_history(req.history)
+    print(f"[chat] Message: '{message}' | Context: {context}")
+    
+    # Step 1: Classify query (with context awareness)
+    query_info = classify_query(message, context=context)
     query_type = query_info['type']
     
     # Step 2: Handle unsupported queries
@@ -413,6 +457,6 @@ async def chat(req: ChatRequest):
     
     return ChatResponse(
         answer=answer,
-        data=computed_stats,  # Include raw data for debugging/transparency
+        data=computed_stats,
         query_type=query_type
     )
