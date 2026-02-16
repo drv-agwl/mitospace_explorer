@@ -13,6 +13,10 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Paths relative to project root (parent of server/)
 ROOT = Path(__file__).resolve().parent.parent
@@ -130,6 +134,30 @@ def startup():
                 print(f"[startup] Fitted axis model: {fname} -> UMAP (x,y,z)")
         except Exception as e:
             print(f"[startup] Axis model fit failed: {e}")
+    
+    # Load complete dataset for chat system
+    try:
+        from query_handler import load_data
+        # Load full feature CSV
+        feature_csv = DATA / "mitotnt_features.csv"
+        # Load metadata JSON (contains drug/phenotype info)
+        metadata_json = ROOT / "src" / "data" / "points4d.json"
+        if feature_csv.exists():
+            load_data(str(feature_csv), str(metadata_json) if metadata_json.exists() else None)
+    except Exception as e:
+        print(f"[startup] Chat data loading failed: {e}")
+    
+    # Initialize LLM client for chat
+    try:
+        from llm_client import initialize_llm_client
+        api_key = os.getenv("OPENROUTER_API_KEY")
+        model = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3-70b-instruct")
+        if api_key:
+            initialize_llm_client(api_key=api_key, model=model)
+        else:
+            print("[startup] Warning: OPENROUTER_API_KEY not set, chat will be disabled")
+    except Exception as e:
+        print(f"[startup] LLM initialization failed: {e}")
 
 
 class ProjectRequest(BaseModel):
@@ -270,10 +298,115 @@ def get_feature_values(feature_name: str):
 @app.get("/api/health")
 def health():
     n = len(umap_points) if umap_points is not None else 0
+    
+    # Check if chat system is available
+    from llm_client import is_llm_available
+    from query_handler import feature_table, sample_metadata
+    
     return {
         "umap_points_loaded": umap_points is not None,
         "point_count": n,
         "embedding_count": n,  # frontend uses this for "in range" check; axis works for all points
         "features": list(feature_values.keys()),
         "axes": list(feature_umap_model.keys()),
+        "chat_available": is_llm_available() and feature_table is not None,
     }
+
+
+# Chat endpoint
+class ChatRequest(BaseModel):
+    message: str
+
+
+class ChatResponse(BaseModel):
+    answer: str
+    data: dict | None = None
+    query_type: str | None = None
+
+
+@app.post("/api/chat", response_model=ChatResponse)
+async def chat(req: ChatRequest):
+    """
+    Conversational Q&A endpoint for dataset queries
+    
+    Flow:
+    1. Classify query type
+    2. Compute relevant statistics from dataset
+    3. Send stats to LLM with strict prompt
+    4. Return formatted natural language answer
+    """
+    from llm_client import get_llm_client, is_llm_available
+    from query_handler import classify_query, compute_statistics, feature_table
+    
+    # Check if chat is available
+    if not is_llm_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Chat system is not available. LLM client not initialized."
+        )
+    
+    if feature_table is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Chat system is not available. Dataset not loaded."
+        )
+    
+    message = req.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+    
+    # Step 1: Classify query
+    query_info = classify_query(message)
+    query_type = query_info['type']
+    
+    # Step 2: Handle unsupported queries
+    if query_type == 'unsupported':
+        return ChatResponse(
+            answer="I can help answer questions about:\n"
+                   "• Drug comparisons (e.g., 'Compare Rotenone and DMSO')\n"
+                   "• Feature correlations (e.g., 'Is fragment length correlated with motility?')\n"
+                   "• Drug rankings (e.g., 'Which drugs increase fragmentation most?')\n"
+                   "• Summary statistics (e.g., 'What is the mean fragment length?')\n\n"
+                   "Could you rephrase your question?",
+            data=None,
+            query_type="unsupported"
+        )
+    
+    # Step 3: Compute statistics
+    try:
+        computed_stats = compute_statistics(query_type, query_info['params'])
+    except Exception as e:
+        print(f"[chat] Statistics computation error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error computing statistics: {str(e)}"
+        )
+    
+    # Check for errors in computation
+    if 'error' in computed_stats:
+        return ChatResponse(
+            answer=f"Sorry, I couldn't process that query: {computed_stats['error']}",
+            data=computed_stats,
+            query_type=query_type
+        )
+    
+    # Step 4: Generate LLM response
+    try:
+        llm = get_llm_client()
+        answer = llm.generate_response(
+            user_question=message,
+            computed_stats=computed_stats,
+            query_type=query_type
+        )
+    except Exception as e:
+        print(f"[chat] LLM generation error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error generating response: {str(e)}"
+        )
+    
+    return ChatResponse(
+        answer=answer,
+        data=computed_stats,  # Include raw data for debugging/transparency
+        query_type=query_type
+    )

@@ -10,6 +10,7 @@ import PasswordProtection from './components/PasswordProtection';
 import SpaceLanding from './components/SpaceLanding';
 import GlobalKeyboardShortcuts from './components/GlobalKeyboardShortcuts';
 import MobileBlocker from './components/MobileBlocker';
+import ChatPanel from './components/ChatPanel';
 import { OnboardingTour, hasCompletedOnboarding, resetOnboarding } from './components/OnboardingTour';
 import { SampleProvider } from './context/SampleContext';
 
@@ -87,6 +88,7 @@ function App() {
               <Route path="/" element={<Explorer />} />
               <Route path="/about" element={<About />} />
             </Routes>
+            <ChatPanel />
           </SampleProvider>
         </Router>
       </MobileBlocker>

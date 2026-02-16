@@ -128,8 +128,30 @@ export async function healthCheck(): Promise<{
   embedding_count: number;
   features: string[];
   axes: string[];
+  chat_available?: boolean;
 }> {
   const res = await fetch(`${API_BASE}/api/health`);
   if (!res.ok) throw new Error(`Health check failed: ${res.status}`);
+  return res.json();
+}
+
+export interface ChatResponse {
+  answer: string;
+  data?: any;
+  query_type?: string;
+}
+
+export async function sendChatMessage(message: string): Promise<ChatResponse> {
+  const res = await fetch(`${API_BASE}/api/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message })
+  });
+  
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Chat request failed: ${res.status}`);
+  }
+  
   return res.json();
 }
