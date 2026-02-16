@@ -7,6 +7,7 @@ At startup we fit feature_umap_model per feature: MLP(feature_values) -> umap_po
 Slider targetValue is passed to the model; response is the 3D position on that curve.
 """
 import os
+import sys
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -15,11 +16,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-# Chat system imports
-import query_handler
-import llm_client
-from query_handler import load_data, classify_query, compute_statistics
-from llm_client import initialize_llm_client, get_llm_client, is_llm_available
+# Chat system imports - handle both package and direct execution
+try:
+    # Try relative imports first (for when run as: python -m uvicorn server.main:app)
+    from . import query_handler
+    from . import llm_client
+    from .query_handler import load_data, classify_query, compute_statistics
+    from .llm_client import initialize_llm_client, get_llm_client, is_llm_available
+except ImportError:
+    # Fall back to absolute imports (for when run from server/ directory)
+    import query_handler
+    import llm_client
+    from query_handler import load_data, classify_query, compute_statistics
+    from llm_client import initialize_llm_client, get_llm_client, is_llm_available
 
 # Load environment variables
 load_dotenv()
