@@ -153,7 +153,7 @@ def classify_query(message: str) -> Dict[str, Any]:
             return {'type': 'correlation', 'params': {'features': features[:2]}}
     
     # Ranking queries
-    ranking_words_high = ['highest', 'most', 'increase', 'largest', 'maximum', 'top']
+    ranking_words_high = ['highest', 'most', 'increase', 'largest', 'maximum', 'top', 'more drugs', 'other drugs', 'which drugs', 'list', 'show', 'same', 'similar', 'else']
     ranking_words_low = ['lowest', 'least', 'decrease', 'smallest', 'minimum', 'bottom']
     
     is_ranking_high = any(word in msg_lower for word in ranking_words_high)
@@ -161,9 +161,14 @@ def classify_query(message: str) -> Dict[str, Any]:
     
     if is_ranking_high or is_ranking_low:
         feature = extract_feature_name(message)
+        
+        # If no feature detected but it's clearly a follow-up, default to Fragment Length
+        if not feature and any(word in msg_lower for word in ['more', 'other', 'else', 'similar', 'same']):
+            feature = 'Fragment Length'  # Most common query
+        
         if feature:
             direction = 'high' if is_ranking_high else 'low'
-            return {'type': 'ranking', 'params': {'feature': feature, 'direction': direction}}
+            return {'type': 'ranking', 'params': {'feature': feature, 'direction': direction, 'top_n': 10}}
     
     # Summary statistics
     if any(word in msg_lower for word in ['mean', 'average', 'median', 'summary', 'statistics', 'stats']):
@@ -429,7 +434,11 @@ def compute_statistics(query_type: str, params: Dict[str, Any]) -> Dict[str, Any
     elif query_type == 'correlation':
         return compute_correlation(params['features'][0], params['features'][1])
     elif query_type == 'ranking':
-        return compute_ranking(params['feature'], params.get('direction', 'high'))
+        return compute_ranking(
+            params['feature'], 
+            params.get('direction', 'high'),
+            params.get('top_n', 10)
+        )
     elif query_type == 'feature_stats':
         return compute_feature_stats(params['feature'], params.get('drug'))
     elif query_type == 'feature_description':
