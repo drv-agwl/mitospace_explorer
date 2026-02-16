@@ -73,6 +73,9 @@ function Explorer() {
         </div>
       </main>
 
+      {/* Chat only on 4D MitoSpace */}
+      {activeTab === '4d' && <ChatPanel />}
+
       <Footer />
     </div>
   );
@@ -88,7 +91,6 @@ function App() {
               <Route path="/" element={<Explorer />} />
               <Route path="/about" element={<About />} />
             </Routes>
-            <ChatPanel />
           </SampleProvider>
         </Router>
       </MobileBlocker>

@@ -254,22 +254,22 @@ const ChatPanel: React.FC = () => {
             </p>
             <div className="w-full space-y-2">
               <button
-                onClick={() => setInput('Compare Rotenone and DMSO')}
+                onClick={() => setInput('Which drugs increase motility the most?')}
                 className="w-full text-left bg-white/[0.03] rounded-lg p-3 border border-white/[0.08] hover:border-white/20 hover:bg-white/[0.06] transition-all cursor-pointer group hover:scale-[1.02]"
               >
-                <p className="text-white/70 text-sm group-hover:text-white/90 transition-colors">Compare Rotenone and DMSO</p>
+                <p className="text-white/70 text-sm group-hover:text-white/90 transition-colors">Which drugs increase motility?</p>
               </button>
               <button
-                onClick={() => setInput('Which drugs increase fragmentation?')}
+                onClick={() => setInput('Is motility correlated with segment length?')}
                 className="w-full text-left bg-white/[0.03] rounded-lg p-3 border border-white/[0.08] hover:border-white/20 hover:bg-white/[0.06] transition-all cursor-pointer group hover:scale-[1.02]"
               >
-                <p className="text-white/70 text-sm group-hover:text-white/90 transition-colors">Which drugs increase fragmentation?</p>
+                <p className="text-white/70 text-sm group-hover:text-white/90 transition-colors">Is motility correlated with segment length?</p>
               </button>
               <button
-                onClick={() => setInput('Is segment length correlated with motility?')}
+                onClick={() => setInput('Compare Rotenone and CCCP effects on membrane potential')}
                 className="w-full text-left bg-white/[0.03] rounded-lg p-3 border border-white/[0.08] hover:border-white/20 hover:bg-white/[0.06] transition-all cursor-pointer group hover:scale-[1.02]"
               >
-                <p className="text-white/70 text-sm group-hover:text-white/90 transition-colors">Is length correlated with motility?</p>
+                <p className="text-white/70 text-sm group-hover:text-white/90 transition-colors">Compare Rotenone & CCCP on membrane potential</p>
               </button>
             </div>
           </div>
