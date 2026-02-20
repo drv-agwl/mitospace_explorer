@@ -5,6 +5,8 @@ import { getFeatureDisplayLabel } from '../constants/features';
 
 const AXIS_SAMPLE_COUNT = 9;
 
+// Drugs to deprioritize in semantic axis preview (will only use if no alternatives)
+const DEPRIORITIZED_DRUGS = ['Oligomycin', 'DNP'];
 
 function findNearestSampleIndex(
   targetValue: number,
@@ -38,16 +40,53 @@ function getAxisSamples(
   const limit = Math.min(featureValues.length, samples.length, maxIndex);
   if (limit === 0) return [];
 
+  const usedIndices = new Set<number>();
+  
   return targets.map((target) => {
-    let nearest = 0;
+    // First pass: find best match excluding deprioritized drugs and already used indices
+    let nearest = -1;
     let best = Infinity;
+    
     for (let i = 0; i < limit; i++) {
+      if (usedIndices.has(i)) continue;
+      const drug = samples[i]?.treatment?.drug || '';
+      const isDeprioritized = DEPRIORITIZED_DRUGS.some(d => 
+        drug.toLowerCase().includes(d.toLowerCase())
+      );
+      if (isDeprioritized) continue;
+      
       const d = Math.abs(featureValues[i] - target);
       if (d < best) {
         best = d;
         nearest = i;
       }
     }
+    
+    // Second pass: if no good match found, allow deprioritized drugs (but still avoid duplicates)
+    if (nearest === -1) {
+      for (let i = 0; i < limit; i++) {
+        if (usedIndices.has(i)) continue;
+        const d = Math.abs(featureValues[i] - target);
+        if (d < best) {
+          best = d;
+          nearest = i;
+        }
+      }
+    }
+    
+    // Last resort: allow duplicates if absolutely necessary
+    if (nearest === -1) {
+      for (let i = 0; i < limit; i++) {
+        const d = Math.abs(featureValues[i] - target);
+        if (d < best) {
+          best = d;
+          nearest = i;
+        }
+      }
+    }
+    
+    usedIndices.add(nearest);
+    
     return {
       sample: samples[nearest],
       index: nearest,
@@ -120,7 +159,14 @@ const SemanticAxisPreview: React.FC<SemanticAxisPreviewProps> = ({
     }
   }, [syncVideos]);
 
-  const videoCount = axisSamples.filter((s) => s.sample.videos?.[0]).length;
+  // Use TMRM video (index 1) for membrane potential, otherwise use MitoTracker (index 0)
+  const isMembranePotential = selectedFeature === 'TMRM Intensity' || 
+                               selectedFeature === 'tmrm_intensity' ||
+                               selectedFeature?.toLowerCase().includes('tmrm') ||
+                               selectedFeature?.toLowerCase().includes('membrane potential');
+  const videoIndex = isMembranePotential ? 1 : 0;
+  
+  const videoCount = axisSamples.filter((s) => s.sample.videos?.[videoIndex]).length;
   const canSync = videoCount > 1;
 
   if (axisSamples.length === 0) return null;
@@ -187,12 +233,12 @@ const SemanticAxisPreview: React.FC<SemanticAxisPreviewProps> = ({
             className="flex-1 min-w-[100px] max-w-[180px] rounded-xl overflow-hidden border border-white/[0.08] bg-white/[0.03] group hover:border-white/20 hover:ring-1 hover:ring-white/20 transition-all text-left focus:outline-none focus:ring-1 focus:ring-white/30"
           >
             <div className="aspect-video relative bg-white/[0.04]">
-              {sample.videos?.[0] ? (
+              {sample.videos?.[videoIndex] ? (
                 <video
                   ref={(el) => {
                     videoRefs.current[i] = el;
                   }}
-                  src={sample.videos[0]}
+                  src={sample.videos[videoIndex]}
                   className="w-full h-full object-cover"
                   muted
                   loop

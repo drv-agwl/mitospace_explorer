@@ -164,7 +164,7 @@ def startup():
     # Initialize LLM client for chat
     try:
         api_key = os.getenv("OPENROUTER_API_KEY")
-        model = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3-70b-instruct")
+        model = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
         if api_key:
             initialize_llm_client(api_key=api_key, model=model)
         else:

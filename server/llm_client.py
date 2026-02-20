@@ -43,18 +43,20 @@ STRICT DATA RULES:
 class LLMClient:
     """Wrapper for OpenRouter API calls (OpenAI-compatible)"""
     
-    def __init__(self, api_key: Optional[str] = None, model: str = "meta-llama/llama-3-70b-instruct"):
+    def __init__(self, api_key: Optional[str] = None, model: str = "openai/gpt-4o-mini"):
         """
         Initialize LLM client with OpenRouter
         
         Args:
             api_key: OpenRouter API key (or reads from OPENROUTER_API_KEY env var)
             model: Model to use via OpenRouter
-                   Examples:
+                   Recommended:
+                   - "openai/gpt-4o-mini" (excellent quality, cheap, ~$0.0002/query)
+                   Other options:
+                   - "openai/gpt-4o" (best quality, ~$0.003/query)
+                   - "deepseek/deepseek-chat" (great value, ~$0.0004/query)
+                   - "anthropic/claude-sonnet-4" (nuanced text, ~$0.004/query)
                    - "meta-llama/llama-3-70b-instruct" (cheapest, ~$0.0008/query)
-                   - "openai/gpt-3.5-turbo" (faster, ~$0.002/query)
-                   - "openai/gpt-4-turbo-preview" (best quality, ~$0.01-0.03/query)
-                   - "anthropic/claude-3-sonnet" (alternative, ~$0.015/query)
         """
         self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
         if not self.api_key:
@@ -145,7 +147,7 @@ Format your response as natural scientific text (not JSON).
 _llm_client: Optional[LLMClient] = None
 
 
-def initialize_llm_client(api_key: Optional[str] = None, model: str = "meta-llama/llama-3-70b-instruct"):
+def initialize_llm_client(api_key: Optional[str] = None, model: str = "openai/gpt-4o-mini"):
     """Initialize global LLM client at server startup"""
     global _llm_client
     try:
