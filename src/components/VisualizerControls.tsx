@@ -1,10 +1,22 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { SlidersHorizontal, Sparkles, LayoutList, ImageIcon, Filter, X } from 'lucide-react';
+import {
+  SlidersHorizontal,
+  Sparkles,
+  LayoutList,
+  Filter,
+  X,
+  Crosshair,
+  AlertTriangle,
+} from 'lucide-react';
 import { useSample } from '../context/SampleContext';
 import { getFeatureStats, getFeatureValues, healthCheck } from '../api/client';
 import { findNearestSampleIndex } from './SemanticAxisPreview';
 import FeatureSelect from './FeatureSelect';
-import { getFeatureGroups, getFeatureDisplayLabel, getInitialSemanticAxisFeature } from '../constants/features';
+import {
+  getFeatureGroups,
+  getFeatureDisplayLabel,
+  getInitialSemanticAxisFeature,
+} from '../constants/features';
 import { formatFeatureValue } from '../utils/formatFeature';
 import { buildSampleIdToIndex } from '../utils/sampleIndexMap';
 
@@ -15,6 +27,25 @@ interface VisualizerControlsProps {
 }
 
 const DEFAULT_FEATURE_RANGE = { min: 1, max: 5 };
+
+// ---------------------------------------------------------------------------
+// Visual primitives
+// ---------------------------------------------------------------------------
+// All toolbar controls share the same height / radius / border weight to
+// create a calm, consistent rhythm across the bar. Idle / hover / active
+// states differ only by background / border opacity, never by size.
+const PILL_BASE =
+  'inline-flex items-center gap-2 h-9 px-3 rounded-lg text-sm font-medium border transition-all duration-150 shrink-0';
+const PILL_IDLE =
+  'bg-white/[0.04] border-white/[0.08] text-white/85 hover:bg-white/[0.07] hover:border-white/[0.14]';
+const PILL_ACTIVE =
+  'bg-white/[0.12] border-white/[0.22] text-white';
+// Stronger treatment reserved for the semantic-axis toggle when ON, so the
+// primary mode is always recognizable at a glance.
+const PILL_PRIMARY_ACTIVE =
+  'bg-white/[0.16] border-white/[0.32] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]';
+
+// ---------------------------------------------------------------------------
 
 const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanticSliderChange }) => {
   const {
@@ -163,228 +194,318 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
     }
   };
 
-  const textClass = 'text-white/90';
-  const textMutedClass = 'text-white/50';
-  const controlBg = 'bg-white/[0.04]';
-  const divider = 'h-4 w-px bg-white/15';
+  const handleSemanticToggle = () => {
+    const next = !advancedMode;
+    const defaultFeature = getInitialSemanticAxisFeature(datasetVersion);
+    setSemanticState((s) => ({
+      ...s,
+      advancedMode: next,
+      selectedFeature: next ? s.selectedFeature || defaultFeature : null,
+      projectedPosition: null,
+      projectedConfidence: null,
+      semanticSliderValue: null,
+      axisSamplesVisible: next ? s.axisSamplesVisible : false,
+    }));
+  };
 
+  const featureLabel = selectedFeature
+    ? getFeatureDisplayLabel(selectedFeature, datasetVersion)
+    : null;
+
+  // -------------------------------------------------------------------------
+  // Render
+  // -------------------------------------------------------------------------
   return (
-    <div className="flex flex-wrap items-center justify-evenly gap-x-6 gap-y-3 w-full">
-      {/* Point size */}
-      <div className={`flex items-center gap-3 px-4 py-2 rounded-lg shrink-0 ${controlBg} border border-white/[0.06]`}>
-        <SlidersHorizontal size={16} className="text-white/50 shrink-0" />
-        <label htmlFor="pointSize" className={`text-sm font-medium shrink-0 ${textClass}`}>
-          Point size
-        </label>
-        <input
-          id="pointSize"
-          type="range"
-          min="0.1"
-          max="5"
-          step="0.1"
-          value={visualizerOptions.pointSize}
-          onChange={(e) => setPointSize(parseFloat(e.target.value))}
-          className="w-24 h-1.5 accent-white"
-        />
-        <span className={`text-xs tabular-nums font-mono w-8 ${textMutedClass}`}>
-          {visualizerOptions.pointSize.toFixed(1)}
-        </span>
-      </div>
+    <div className="w-full flex flex-col gap-2.5">
+      {/* ─────────────────────── PRIMARY ROW ─────────────────────── */}
+      {/* Always visible. Stable layout — adding/removing the semantic axis
+          never reflows this row. */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        {/* Left cluster: display + data */}
+        <div className="flex items-center gap-2 flex-wrap min-w-0">
+          {/* Point size pill */}
+          <div
+            className={`${PILL_BASE} ${PILL_IDLE}`}
+            title="Point size"
+          >
+            <SlidersHorizontal size={14} className="text-white/55 shrink-0" />
+            <input
+              id="pointSize"
+              aria-label="Point size"
+              type="range"
+              min="0.1"
+              max="5"
+              step="0.1"
+              value={visualizerOptions.pointSize}
+              onChange={(e) => setPointSize(parseFloat(e.target.value))}
+              className="w-24 h-1.5 accent-white"
+            />
+            <span className="text-[11px] tabular-nums font-mono text-white/55 w-7 text-right">
+              {visualizerOptions.pointSize.toFixed(1)}
+            </span>
+          </div>
 
-      <div className={divider} />
-
-      {/* Drug filter */}
-      <div className="relative shrink-0" ref={drugFilterRef}>
-        <button
-          onClick={() => setDrugFilterOpen(!drugFilterOpen)}
-          className={`flex items-center justify-center gap-2 min-w-[180px] px-4 py-2 rounded-lg text-sm font-medium transition-colors ${controlBg} border border-white/[0.06] ${
-            selectedDrugs.size > 0
-              ? 'bg-white/10 text-white border-white/20'
-              : 'text-white/70 hover:text-white/90 hover:bg-white/[0.06]'
-          }`}
-        >
-          <Filter size={16} className="text-white/50 shrink-0" />
-          <span>
-            {selectedDrugs.size === 0
-              ? 'All conditions'
-              : `${selectedDrugs.size} condition${selectedDrugs.size === 1 ? '' : 's'} selected`}
-          </span>
-        </button>
-        {drugFilterOpen && (
-          <div className="absolute top-full left-0 mt-1 z-50 min-w-[220px] max-h-[320px] overflow-y-auto rounded-xl border border-white/[0.12] bg-black/95 shadow-xl py-2 scrollbar-thin">
-            <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-white/10 mb-2">
-              <span className="text-xs font-medium text-white/60 uppercase tracking-wider">Filter by condition</span>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={selectAllDrugFilter}
-                  className="text-xs text-white/60 hover:text-white"
-                >
-                  Select all
-                </button>
-                <button
-                  onClick={clearDrugFilter}
-                  className="flex items-center gap-1 text-xs text-white/60 hover:text-white"
-                >
-                  <X size={12} />
-                  Clear all
-                </button>
+          {/* Drug filter pill */}
+          <div className="relative" ref={drugFilterRef}>
+            <button
+              onClick={() => setDrugFilterOpen(!drugFilterOpen)}
+              aria-haspopup="listbox"
+              aria-expanded={drugFilterOpen}
+              className={`${PILL_BASE} ${
+                selectedDrugs.size > 0 ? PILL_ACTIVE : PILL_IDLE
+              }`}
+            >
+              <Filter size={14} className="text-white/55 shrink-0" />
+              <span className="truncate max-w-[160px]">
+                {selectedDrugs.size === 0
+                  ? 'All conditions'
+                  : `${selectedDrugs.size} condition${selectedDrugs.size === 1 ? '' : 's'}`}
+              </span>
+              {selectedDrugs.size > 0 && (
+                <span className="ml-0.5 text-[10px] font-semibold tabular-nums bg-white/15 text-white px-1.5 py-0.5 rounded">
+                  {selectedDrugs.size}
+                </span>
+              )}
+            </button>
+            {drugFilterOpen && (
+              <div className="absolute top-full left-0 mt-1.5 z-50 min-w-[240px] max-h-[320px] overflow-y-auto rounded-xl border border-white/[0.12] bg-black/95 backdrop-blur-md shadow-elevated py-2 scrollbar-thin animate-slide-up origin-top">
+                <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-white/10 mb-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-white/55">
+                    Filter by condition
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={selectAllDrugFilter}
+                      className="text-xs text-white/60 hover:text-white"
+                    >
+                      Select all
+                    </button>
+                    <button
+                      onClick={clearDrugFilter}
+                      className="flex items-center gap-1 text-xs text-white/60 hover:text-white"
+                    >
+                      <X size={12} />
+                      Clear
+                    </button>
+                  </div>
+                </div>
+                <div className="px-2 space-y-0.5">
+                  {availableDrugs.map((drug) => (
+                    <label
+                      key={drug}
+                      className="flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer hover:bg-white/[0.06]"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedDrugs.has(drug)}
+                        onChange={() => toggleDrugFilter(drug)}
+                        className="w-4 h-4 rounded accent-white"
+                      />
+                      <span className="text-sm text-white/90">{drug}</span>
+                    </label>
+                  ))}
+                </div>
               </div>
-            </div>
-            <div className="px-2 space-y-0.5">
-              {availableDrugs.map((drug) => (
-                <label
-                  key={drug}
-                  className="flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer hover:bg-white/[0.06]"
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedDrugs.has(drug)}
-                    onChange={() => toggleDrugFilter(drug)}
-                    className="w-4 h-4 rounded accent-white"
-                  />
-                  <span className="text-sm text-white/90">{drug}</span>
-                </label>
-              ))}
-            </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right cluster: status + semantic axis (the primary mode switch) */}
+        {type === '4d' && (
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* API status — only when offline. Compact dot+pill, never grows. */}
+            {advancedMode && apiConnected === false && (
+              <span
+                className={`${PILL_BASE} bg-amber-500/10 border-amber-400/30 text-amber-200`}
+                title={
+                  typeof window !== 'undefined' &&
+                  (window.location.hostname === 'localhost' ||
+                    window.location.hostname === '127.0.0.1')
+                    ? 'API offline. From the project root run: uvicorn server.main:app --reload --port 8000'
+                    : 'API offline. Ensure the backend is deployed and VITE_API_URL is configured.'
+                }
+              >
+                <AlertTriangle size={14} className="shrink-0" />
+                <span>API offline</span>
+              </span>
+            )}
+
+            {/* Semantic axis toggle — primary action */}
+            <button
+              data-tour="semantic-axis-toggle"
+              onClick={handleSemanticToggle}
+              role="switch"
+              aria-pressed={advancedMode}
+              aria-label="Toggle semantic axis mode"
+              className={`${PILL_BASE} ${
+                advancedMode ? PILL_PRIMARY_ACTIVE : PILL_IDLE
+              } group`}
+            >
+              <Sparkles
+                size={14}
+                className={`shrink-0 transition-colors ${
+                  advancedMode ? 'text-white' : 'text-white/55 group-hover:text-white/75'
+                }`}
+              />
+              <span>Semantic axis</span>
+              {advancedMode && featureLabel && (
+                <span className="ml-1 px-1.5 py-0.5 text-[11px] font-medium rounded bg-white/15 text-white/85 max-w-[160px] truncate">
+                  {featureLabel}
+                </span>
+              )}
+              <span
+                className={`ml-1 inline-flex items-center justify-center w-7 h-5 rounded-full text-[10px] font-semibold tracking-wider uppercase transition-colors ${
+                  advancedMode
+                    ? 'bg-white text-black'
+                    : 'bg-white/10 text-white/60 group-hover:bg-white/15 group-hover:text-white/80'
+                }`}
+              >
+                {advancedMode ? 'On' : 'Off'}
+              </span>
+            </button>
           </div>
         )}
       </div>
 
-      {type === '4d' && (
-        <>
-          <div className={divider} />
-          <div className={`flex items-center gap-3 px-4 py-2 rounded-lg shrink-0 ${controlBg} border border-white/[0.06]`} data-tour="semantic-axis-toggle">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={advancedMode}
-                onChange={(e) => {
-                  const defaultFeature = getInitialSemanticAxisFeature(datasetVersion);
-                  setSemanticState((s) => ({
-                    ...s,
-                    advancedMode: e.target.checked,
-                    selectedFeature: e.target.checked
-                      ? s.selectedFeature || defaultFeature
-                      : null,
-                    projectedPosition: null,
-                    projectedConfidence: null,
-                    semanticSliderValue: null,
-                    axisSamplesVisible: e.target.checked ? s.axisSamplesVisible : false,
-                  }));
-                }}
-                className="w-4 h-4 rounded accent-white"
+      {/* ─────────────────────── SECONDARY ROW ─────────────────────── */}
+      {/* Only when semantic axis is ON. Animates in. Hairline separator above
+          makes it feel like a sub-toolbar without ever shifting the primary
+          row's controls. */}
+      {type === '4d' && advancedMode && (
+        <div
+          data-tour="semantic-feature-controls"
+          className="flex items-center gap-3 flex-wrap pt-2.5 border-t border-white/[0.06] animate-fade-in"
+        >
+          {/* Feature picker — the canonical way to choose the semantic axis */}
+          <div className="flex items-center shrink-0">
+            <FeatureSelect
+              groups={featureGroups}
+              value={selectedFeature}
+              onChange={(apiName) => {
+                if (apiName === selectedFeature) return;
+                setSemanticState((s) => ({
+                  ...s,
+                  selectedFeature: apiName,
+                  projectedPosition: null,
+                  projectedConfidence: null,
+                  axisSamplesVisible: false,
+                }));
+              }}
+              disabled={featureLoading}
+              placeholder="Select feature"
+            />
+            {featureLoading && (
+              <div
+                className="ml-2 w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin shrink-0"
+                aria-label="Loading feature"
               />
-              <Sparkles size={16} className="text-white/50 shrink-0" />
-              <span className={`text-sm font-medium ${textClass}`}>Semantic axis</span>
-            </label>
+            )}
           </div>
 
-          {advancedMode && (
-            <div className={`flex flex-wrap items-center gap-4 min-w-[420px] px-4 py-2 rounded-lg shrink-0 ${controlBg} border border-white/[0.06]`} data-tour="semantic-feature-controls">
-              <div className="flex items-center gap-3 shrink-0">
-                <label className={`text-sm font-medium shrink-0 ${textClass}`}>Feature</label>
-                <FeatureSelect
-                  groups={featureGroups}
-                  value={selectedFeature}
-                  onChange={(apiName) => {
-                    if (apiName === selectedFeature) return;
-                    setSemanticState((s) => ({
-                      ...s,
-                      selectedFeature: apiName,
-                      projectedPosition: null,
-                      projectedConfidence: null,
-                      axisSamplesVisible: false,
-                      // Keep featureRange and semanticSliderValue until new data loads
-                    }));
-                  }}
-                  disabled={featureLoading}
-                  placeholder="Select feature"
-                />
-                {featureLoading && (
-                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin shrink-0" />
+          {/* Show / hide samples-along-axis */}
+          {selectedFeature && (
+            <button
+              onClick={() =>
+                setSemanticState((s) => ({
+                  ...s,
+                  axisSamplesVisible: !s.axisSamplesVisible,
+                }))
+              }
+              aria-pressed={semanticState.axisSamplesVisible}
+              title={
+                semanticState.axisSamplesVisible
+                  ? 'Hide samples along axis'
+                  : 'Visualize samples along axis'
+              }
+              className={`${PILL_BASE} ${
+                semanticState.axisSamplesVisible ? PILL_ACTIVE : PILL_IDLE
+              }`}
+            >
+              <LayoutList size={14} className="shrink-0 text-white/65" />
+              <span>
+                {semanticState.axisSamplesVisible
+                  ? 'Hide samples along axis'
+                  : 'Samples along axis'}
+              </span>
+            </button>
+          )}
+
+          {/* Slider region — flex-grows to fill available space */}
+          {showSlider && featureRange && (
+            <div
+              data-tour="semantic-axis-slider"
+              className={`flex items-center gap-3 flex-1 min-w-[260px] h-9 px-3 rounded-lg bg-white/[0.04] border border-white/[0.08] transition-opacity duration-200 ${
+                featureLoading ? 'opacity-40 pointer-events-none' : ''
+              }`}
+            >
+              <span className="text-[11px] tabular-nums font-mono text-white/40 shrink-0">
+                {formatFeatureValue(featureRange.min)}
+              </span>
+              <input
+                type="range"
+                min={featureRange.min}
+                max={featureRange.max}
+                step={Math.max((featureRange.max - featureRange.min) / 200, 1e-9)}
+                value={typeof sliderValue === 'number' ? sliderValue : featureRange.min}
+                onChange={(e) => handleSliderChange(parseFloat(e.target.value))}
+                aria-label={`${featureLabel ?? 'Feature'} value`}
+                aria-valuetext={formatFeatureValue(
+                  typeof sliderValue === 'number' ? sliderValue : featureRange.min
                 )}
-              </div>
-              {apiConnected === false && (
-                <div className="text-xs text-amber-400 flex flex-col gap-1">
-                  <p className="flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />
-                    API offline — semantic mode needs the backend.
-                  </p>
-                  <p className="text-white/70 pl-4">
-                    {typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-                      ? 'Run from project root: uvicorn server.main:app --reload --port 8000'
-                      : 'If this is the deployed site, ensure the backend is deployed (e.g. Render) and VITE_API_URL is set in Netlify, then redeploy.'}
-                  </p>
-                </div>
-              )}
-              {selectedFeature && (
-                <button
-                  onClick={() =>
-                    setSemanticState((s) => ({
-                      ...s,
-                      axisSamplesVisible: !s.axisSamplesVisible,
-                    }))
-                  }
-                  className={`flex items-center gap-2 min-w-[240px] justify-center px-3 py-1.5 rounded-lg text-sm font-medium transition-colors shrink-0 ${
-                    semanticState.axisSamplesVisible
-                      ? 'bg-white/15 text-white'
-                      : 'bg-white/5 hover:bg-white/10 text-white/80'
-                  }`}
-                >
-                  <LayoutList size={14} />
-                  {semanticState.axisSamplesVisible ? 'Hide samples' : 'Visualize samples along axis'}
-                </button>
-              )}
+                className="flex-1 h-1.5 accent-white"
+              />
+              <span className="text-[11px] tabular-nums font-mono text-white/40 shrink-0">
+                {formatFeatureValue(featureRange.max)}
+              </span>
+              <span className="ml-1 px-2 py-0.5 text-[11px] font-mono tabular-nums rounded bg-white/[0.08] text-white/85 shrink-0">
+                {formatFeatureValue(
+                  typeof sliderValue === 'number' ? sliderValue : featureRange.min
+                )}
+              </span>
             </div>
           )}
 
-          {showSlider && featureRange && (
-            <div className={`flex items-center gap-4 flex-wrap min-w-[520px] px-4 py-2 rounded-lg shrink-0 ${controlBg} border border-white/[0.06] transition-opacity duration-200 ${featureLoading ? 'opacity-40 pointer-events-none' : ''}`} data-tour="semantic-axis-slider">
-              <div className="flex items-center gap-2 min-w-[200px]">
-                <span className={`text-xs shrink-0 ${textMutedClass}`}>{formatFeatureValue(featureRange.min)}</span>
-                <input
-                  type="range"
-                  min={featureRange.min}
-                  max={featureRange.max}
-                  step={Math.max((featureRange.max - featureRange.min) / 200, 1e-9)}
-                  value={typeof sliderValue === 'number' ? sliderValue : featureRange.min}
-                  onChange={(e) => handleSliderChange(parseFloat(e.target.value))}
-                  className="flex-1 h-1.5 accent-white"
-                />
-                <span className={`text-xs shrink-0 ${textMutedClass}`}>{formatFeatureValue(featureRange.max)}</span>
-              </div>
-              <span className={`text-xs tabular-nums ${textMutedClass}`}>
-                {getFeatureDisplayLabel(selectedFeature, datasetVersion)}: {formatFeatureValue(typeof sliderValue === 'number' ? sliderValue : featureRange.min)}
-              </span>
-              {semanticState.projectedConfidence != null && semanticState.projectedConfidence < 1 && (
-                <span className="text-xs text-amber-400">
-                  Confidence: {Math.round(semanticState.projectedConfidence * 100)}%
-                </span>
-              )}
-              {apiConnected === true && isPointOutOfRange && (
-                <span className="text-xs text-amber-400">
-                  Point outside API range ({apiEmbeddingCount?.toLocaleString()} points)
-                </span>
-              )}
-              <button
-                onClick={() => {
-                  const vals = featureValues[selectedFeature];
-                  if (!vals || !featureRange) return;
-                  const target = typeof sliderValue === 'number' ? sliderValue : featureRange.min;
-                  const maxIdx = apiEmbeddingCount ?? vals.length;
-                  const idx = findNearestSampleIndex(target, vals, maxIdx);
-                  const sample = samples4D[idx];
-                  if (sample) setSelectedSample(sample);
-                }}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white text-sm font-medium transition-colors"
-                title="Show sample at current axis position"
-              >
-                <ImageIcon size={14} />
-                Render
-              </button>
-            </div>
+          {/* Status chips: confidence + out-of-range — small, contextual,
+              never break the row layout. */}
+          {showSlider && semanticState.projectedConfidence != null && semanticState.projectedConfidence < 1 && (
+            <span
+              className="inline-flex items-center gap-1 px-2 py-1 text-[11px] tabular-nums rounded-md bg-amber-500/10 text-amber-300 border border-amber-400/25 shrink-0"
+              title="Projection confidence onto the semantic axis"
+            >
+              Confidence {Math.round(semanticState.projectedConfidence * 100)}%
+            </span>
           )}
-        </>
+          {showSlider && apiConnected === true && isPointOutOfRange && (
+            <span
+              className="inline-flex items-center gap-1 px-2 py-1 text-[11px] rounded-md bg-amber-500/10 text-amber-300 border border-amber-400/25 shrink-0"
+              title={`Selected point is outside the API embedding range (${apiEmbeddingCount?.toLocaleString()} points indexed)`}
+            >
+              Out of range
+            </span>
+          )}
+
+          {/* Snap-to-nearest-sample — icon-led, clear copy. Replaces the old
+              ambiguous "Render" button. */}
+          {showSlider && (
+            <button
+              onClick={() => {
+                const vals = featureValues[selectedFeature!];
+                if (!vals || !featureRange) return;
+                const target =
+                  typeof sliderValue === 'number' ? sliderValue : featureRange.min;
+                const maxIdx = apiEmbeddingCount ?? vals.length;
+                const idx = findNearestSampleIndex(target, vals, maxIdx);
+                const sample = samples4D[idx];
+                if (sample) setSelectedSample(sample);
+              }}
+              title="Open the nearest sample at the current axis value"
+              className={`${PILL_BASE} ${PILL_ACTIVE}`}
+            >
+              <Crosshair size={14} className="shrink-0" />
+              <span>Snap to sample</span>
+            </button>
+          )}
+        </div>
       )}
     </div>
   );

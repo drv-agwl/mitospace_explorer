@@ -60,7 +60,7 @@ const EXPLORER_STEPS: Step[] = [
   {
     target: '[data-tour="controls-toolbar"]',
     title: '🎛️ Basic Controls',
-    content: 'Adjust point size for better visibility, filter cells by drug treatment condition, and change color coding between drug and phenotype modes.',
+    content: 'Adjust point size for visibility on the left, filter cells by drug treatment condition in the middle, and toggle the semantic axis on the right to enter analysis mode.',
     disableBeacon: true,
     placement: 'bottom',
   },
@@ -88,7 +88,7 @@ const EXPLORER_STEPS: Step[] = [
   {
     target: 'body',
     title: '💡 Pro Tips',
-    content: 'Click "Visualize samples along axis" to see representative cells from low to high feature values—perfect for comparing phenotypes. Use the "Render" button to jump to a specific cell at any slider position.',
+    content: 'Click "Samples along axis" to reveal representative cells from low to high feature values—perfect for comparing phenotypes. Use "Snap to sample" to open the nearest cell at the current slider position.',
     disableBeacon: true,
     placement: 'center',
   },
