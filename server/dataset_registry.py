@@ -366,13 +366,15 @@ def register(ds: Dataset) -> None:
 
 
 def get(version: str) -> Dataset:
-    """Return dataset for a version, with a fallback to whatever is loaded."""
+    """Return the registered dataset for `version`, or an empty placeholder.
+
+    Important: there is intentionally **no cross-version fallback**. Returning v1
+    data for `?version=v3` produced 404/501 bugs on hosts where v3 failed to load
+    (e.g. missing pyarrow or missing parquet): the client kept asking v3/snake_case
+    feature names against v1-only columns.
+    """
     if version in _REGISTRY:
         return _REGISTRY[version]
-    # Fall back to any loaded dataset so old clients don't error out
-    for ds in _REGISTRY.values():
-        if ds.loaded:
-            return ds
     return Dataset(version=version)
 
 

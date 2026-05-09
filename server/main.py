@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
@@ -61,12 +62,75 @@ def _resolve_version(version):
 def _get_dataset(version):
     return dataset_registry.get(_resolve_version(version))
 
+
+def _require_api_dataset(version) -> Dataset:
+    """Fail fast when the requested version is missing or empty (better than v1 bait-and-switch)."""
+    v = _resolve_version(version)
+    if v not in dataset_registry.versions():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Dataset '{v}' is not registered on this server. Loaded versions: "
+                f"{dataset_registry.versions()}. Deploy data/v3_data/features_v3.parquet "
+                "and ensure `pyarrow` is installed so the parquet can be read."
+            ),
+        )
+    ds = dataset_registry.get(v)
+    if not ds.loaded:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Dataset '{v}' did not load (no UMAP / no features). Check startup logs "
+                "(parquet missing, unreadable path, or install pyarrow for read_parquet)."
+            ),
+        )
+    return ds
+
+
+def _resolve_feature_key(ds: Dataset, feature_name: str) -> Optional[str]:
+    """Map frontend/API names to ds.feature_values keys (v3 snake_case vs v1 spaced)."""
+    if feature_name in ds.feature_values:
+        return feature_name
+    spaced = feature_name.replace("_", " ")
+    if spaced in ds.feature_values:
+        return spaced
+    snake = feature_name.replace(" ", "_")
+    if snake in ds.feature_values:
+        return snake
+    lower_map = {k.lower(): k for k in ds.feature_values}
+    for cand in (feature_name, spaced, snake):
+        key = cand.lower()
+        if key in lower_map:
+            return lower_map[key]
+    return None
+
+
 app = FastAPI(title="MitoSpace Explorer API")
+
+
+@app.get("/")
+def root():
+    """Render/other platforms often probe `/` — return OK instead of 404."""
+    return {
+        "ok": True,
+        "service": "mitospace-explorer-api",
+        "health": "/api/health",
+        "docs": "/docs",
+    }
+
+
+@app.head("/")
+def root_head():
+    return Response(status_code=200)
 _cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
 if os.environ.get("CORS_ORIGINS"):
     _cors_origins.extend(s.strip() for s in os.environ["CORS_ORIGINS"].split(",") if s.strip())
-# Localhost regex + Netlify (*.netlify.app) for production frontend
-_cors_origin_regex = r"http://(localhost|127\.0\.0\.1)(:\d+)?$|https://[^.]+\.netlify\.app$"
+# Localhost + Netlify + Render (HTTPS) deploys unless overridden via env
+_cors_origin_regex = (
+    r"http://(localhost|127\.0\.0\.1)(:\d+)?$"
+    r"|https://[^.]+\.netlify\.app$"
+    r"|https://[^.]+\.onrender\.com$"
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
@@ -188,10 +252,11 @@ class ProjectResponse(BaseModel):
 
 @app.post("/api/project", response_model=ProjectResponse)
 def project(req: ProjectRequest):
-    ds = _get_dataset(req.version)
+    ds = _require_api_dataset(req.version)
     if ds.umap_points is None:
         raise HTTPException(status_code=503, detail=f"UMAP points not loaded for {ds.version}")
-    if req.feature not in ds.feature_values:
+    feat = _resolve_feature_key(ds, req.feature)
+    if feat is None:
         raise HTTPException(
             status_code=501,
             detail=f"Feature '{req.feature}' not loaded for {ds.version}",
@@ -205,14 +270,14 @@ def project(req: ProjectRequest):
                 status_code=400,
                 detail=f"pointIndex out of range (0 to {n_pts - 1}) for {ds.version}",
             )
-        x, y, z, pred = _project_spatial(ds, req.feature, req.targetValue)
+        x, y, z, pred = _project_spatial(ds, feat, req.targetValue)
     else:
-        if req.feature not in ds.feature_umap_model:
+        if feat not in ds.feature_umap_model:
             raise HTTPException(
                 status_code=501,
-                detail=f"Feature axis '{req.feature}' not available for {ds.version}",
+                detail=f"Feature axis '{req.feature}' (resolved '{feat}') not available for {ds.version}",
             )
-        coords = ds.feature_umap_model[req.feature].predict([[float(req.targetValue)]])
+        coords = ds.feature_umap_model[feat].predict([[float(req.targetValue)]])
         x = float(coords[0, 0])
         y = float(coords[0, 1])
         z = float(coords[0, 2])
@@ -245,29 +310,30 @@ def axis_trajectory(
     """Precomputed trajectory along the learnt curve. When center_x/y/z and scale_factor are
     provided, returns points in scene space (same as /api/project) so the frontend can draw
     the tube without any transform and it aligns with the scatter."""
-    ds = _get_dataset(version)
-    if feature not in ds.feature_umap_model:
+    ds = _require_api_dataset(version)
+    feat = _resolve_feature_key(ds, feature)
+    if feat is None or feat not in ds.feature_umap_model:
         raise HTTPException(
             status_code=501,
             detail=f"Feature axis '{feature}' not available for {ds.version}",
         )
-    if feature not in ds.feature_values:
+    if feat not in ds.feature_values:
         raise HTTPException(
             status_code=501,
             detail=f"Feature '{feature}' not loaded for {ds.version}",
         )
-    arr = ds.feature_values[feature]
+    arr = ds.feature_values[feat]
     valid = arr[~np.isnan(arr)]
     if len(valid) == 0:
         raise HTTPException(status_code=404, detail="No valid feature values")
     f_min, f_max = feature_bounds(arr)
     num_points = max(2, min(200, num_points))
     values = np.linspace(f_min, f_max, num_points, dtype=np.float64).reshape(-1, 1)
-    coords = ds.feature_umap_model[feature].predict(values)
+    coords = ds.feature_umap_model[feat].predict(values)
     x_min, x_max = float(coords[:, 0].min()), float(coords[:, 0].max())
     y_min, y_max = float(coords[:, 1].min()), float(coords[:, 1].max())
     z_min, z_max = float(coords[:, 2].min()), float(coords[:, 2].max())
-    print(f"[axis-trajectory][{ds.version}] {feature} raw UMAP bounds x=[{x_min:.3f}, {x_max:.3f}] y=[{y_min:.3f}, {y_max:.3f}] z=[{z_min:.3f}, {z_max:.3f}]")
+    print(f"[axis-trajectory][{ds.version}] {feat} raw UMAP bounds x=[{x_min:.3f}, {x_max:.3f}] y=[{y_min:.3f}, {y_max:.3f}] z=[{z_min:.3f}, {z_max:.3f}]")
     to_scene = (
         center_x is not None
         and center_y is not None
@@ -298,13 +364,14 @@ def feature_stats(
     feature: str = "Fragment Length",
     version: Optional[str] = Query(default=None),
 ):
-    ds = _get_dataset(version)
-    if feature not in ds.feature_values:
+    ds = _require_api_dataset(version)
+    feat = _resolve_feature_key(ds, feature)
+    if feat is None:
         raise HTTPException(
             status_code=404,
             detail=f"Feature '{feature}' not loaded for {ds.version}",
         )
-    arr = ds.feature_values[feature]
+    arr = ds.feature_values[feat]
     valid = arr[~np.isnan(arr)]
     if len(valid) == 0:
         return {"min": 0.0, "max": 1.0}
@@ -317,14 +384,9 @@ def get_feature_values(
     feature_name: str,
     version: Optional[str] = Query(default=None),
 ):
-    ds = _get_dataset(version)
-    # Try the name as-is (v3 columns are snake_case), then with spaces (v1 columns).
-    key = feature_name
-    if key not in ds.feature_values:
-        spaced = feature_name.replace("_", " ")
-        if spaced in ds.feature_values:
-            key = spaced
-    if key not in ds.feature_values:
+    ds = _require_api_dataset(version)
+    key = _resolve_feature_key(ds, feature_name)
+    if key is None:
         raise HTTPException(
             status_code=404,
             detail=f"Feature '{feature_name}' not loaded for {ds.version}",
@@ -334,10 +396,15 @@ def get_feature_values(
 
 @app.get("/api/health")
 def health(version: Optional[str] = Query(default=None)):
+    v = _resolve_version(version)
+    registered = v in dataset_registry.versions()
     ds = _get_dataset(version)
     n = len(ds.umap_points) if ds.umap_points is not None else 0
     return {
         "version": ds.version,
+        "requested_version": v,
+        "version_registered": registered,
+        "dataset_loaded": ds.loaded,
         "available_versions": dataset_registry.versions(),
         "umap_points_loaded": ds.umap_points is not None,
         "point_count": n,
