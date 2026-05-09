@@ -28,6 +28,7 @@ const Visualizer4D: React.FC = () => {
     featureValues,
     setSemanticState,
     apiEmbeddingCount,
+    datasetVersion,
   } = useSample();
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -407,7 +408,7 @@ const Visualizer4D: React.FC = () => {
       return;
     }
     const feature = semanticState.selectedFeature as string;
-    getAxisTrajectory(feature, 80)
+    getAxisTrajectory(feature, 80, { version: datasetVersion })
       .then((res) => {
         const count = res.points?.length ?? 0;
         if (count >= 2) {
@@ -420,7 +421,7 @@ const Visualizer4D: React.FC = () => {
         console.warn('[trajectory] fetch failed', err);
         setTrajectoryPoints(null);
       });
-  }, [semanticState.advancedMode, semanticState.selectedFeature]);
+  }, [semanticState.advancedMode, semanticState.selectedFeature, datasetVersion]);
 
   // Render trajectory (tube + direction arrows) in the same space as scatter
   useEffect(() => {
@@ -714,13 +715,14 @@ const Visualizer4D: React.FC = () => {
       const effectiveIndex = embeddingIndex >= 0 ? embeddingIndex : pointIndex;
       const maxIndex = apiEmbeddingCount ?? Infinity;
       if (effectiveIndex < 0 || effectiveIndex >= maxIndex) return;
-      const feature = semanticState.selectedFeature ?? 'Optical Flow (fg)';
+      const feature = semanticState.selectedFeature ?? 'fragment_length_mean';
       const center = getCenter();
       const options = {
         centerX: center.x,
         centerY: center.y,
         centerZ: center.z,
         scaleFactor: SCALE_FACTOR,
+        version: datasetVersion,
       };
       const requestSampleId = selectedSample?.id ?? null;
       projectOnAxis(effectiveIndex, targetValue, feature, options)
@@ -738,7 +740,7 @@ const Visualizer4D: React.FC = () => {
           console.error('[semantic] API error', err);
         });
     },
-    [selectedSample, samples4D, semanticState.selectedFeature, setSemanticState, apiEmbeddingCount, getCenter]
+    [selectedSample, samples4D, semanticState.selectedFeature, datasetVersion, setSemanticState, apiEmbeddingCount, getCenter]
   );
 
   // Initial projection when slider first appears (or feature/point changes) - show golden sphere
@@ -907,6 +909,7 @@ const Visualizer4D: React.FC = () => {
             selectedFeature={semanticState.selectedFeature}
             samples={samples4D}
             apiEmbeddingCount={apiEmbeddingCount}
+            datasetVersion={datasetVersion}
             onClose={() =>
               setSemanticState((s) => ({ ...s, axisSamplesVisible: false }))
             }

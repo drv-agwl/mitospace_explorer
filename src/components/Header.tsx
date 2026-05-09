@@ -2,6 +2,7 @@ import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import MitoSpaceLogo from './MitoSpaceLogo';
 import TabNavigation from './TabNavigation';
+import DatasetToggle from './DatasetToggle';
 
 interface HeaderProps {
   activeTab?: '2d' | '4d';
@@ -60,7 +61,8 @@ const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, onStartTour, s
             </div>
           )}
 
-          <nav className="flex items-center gap-1 shrink-0">
+          <nav className="flex items-center gap-2 shrink-0">
+            {showTabs && activeTab === '4d' && <DatasetToggle />}
             {showTourButton && onStartTour && (
               <button
                 type="button"

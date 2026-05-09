@@ -1,10 +1,10 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { SlidersHorizontal, Palette, Sparkles, LayoutList, ImageIcon, Filter, X } from 'lucide-react';
+import { SlidersHorizontal, Sparkles, LayoutList, ImageIcon, Filter, X } from 'lucide-react';
 import { useSample } from '../context/SampleContext';
 import { getFeatureStats, getFeatureValues, healthCheck } from '../api/client';
 import { findNearestSampleIndex } from './SemanticAxisPreview';
 import FeatureSelect from './FeatureSelect';
-import { FEATURE_GROUPS, getFeatureDisplayLabel } from '../constants/features';
+import { getFeatureGroups, getFeatureDisplayLabel } from '../constants/features';
 
 interface VisualizerControlsProps {
   type: '2d' | '4d';
@@ -18,7 +18,6 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
   const {
     visualizerOptions,
     setPointSize,
-    setColoringMode,
     selectedPointIndex,
     semanticState,
     setSemanticState,
@@ -34,7 +33,9 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
     toggleDrugFilter,
     selectAllDrugFilter,
     clearDrugFilter,
+    datasetVersion,
   } = useSample();
+  const featureGroups = getFeatureGroups(datasetVersion);
 
   const [drugFilterOpen, setDrugFilterOpen] = useState(false);
   const drugFilterRef = useRef<HTMLDivElement>(null);
@@ -69,7 +70,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
     setApiConnected(null);
     let cancelled = false;
     const tryHealth = (attempt = 0) => {
-      healthCheck()
+      healthCheck(datasetVersion)
         .then((h) => {
           if (!cancelled) {
             setApiConnected(true);
@@ -90,14 +91,14 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
     return () => {
       cancelled = true;
     };
-  }, [type, advancedMode, setApiEmbeddingCount]);
+  }, [type, advancedMode, datasetVersion, setApiEmbeddingCount]);
 
   useEffect(() => {
     if (type !== '4d' || !selectedFeature) return;
     setFeatureLoading(true);
     Promise.all([
-      getFeatureValues(selectedFeature).then((values) => setFeatureValues(selectedFeature, values)).catch(() => {}),
-      getFeatureStats(selectedFeature)
+      getFeatureValues(selectedFeature, datasetVersion).then((values) => setFeatureValues(selectedFeature, values)).catch(() => {}),
+      getFeatureStats(selectedFeature, datasetVersion)
         .then((stats) => {
           setApiConnected(true);
           setSemanticState((s) => ({
@@ -107,11 +108,11 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
         })
         .catch(() => {}),
     ]).finally(() => setFeatureLoading(false));
-  }, [type, selectedFeature, setFeatureValues, setSemanticState]);
+  }, [type, selectedFeature, datasetVersion, setFeatureValues, setSemanticState]);
 
   useEffect(() => {
     if (type !== '4d' || !advancedMode || !selectedFeature) return;
-    getFeatureStats(selectedFeature)
+    getFeatureStats(selectedFeature, datasetVersion)
       .then((stats) => {
         const values = featureValues[selectedFeature];
         const pointValue =
@@ -129,7 +130,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
         }));
       })
       .catch(() => {});
-  }, [type, advancedMode, selectedFeature, selectedPointIndex, setSemanticState, featureValues]);
+  }, [type, advancedMode, selectedFeature, datasetVersion, selectedPointIndex, setSemanticState, featureValues]);
 
   const handleSliderChange = (value: number) => {
     setSemanticState((s) => ({ ...s, semanticSliderValue: value }));
@@ -226,36 +227,6 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
         )}
       </div>
 
-      <div className={divider} />
-
-      {/* Color by */}
-      <div className={`flex items-center gap-4 px-4 py-2 rounded-lg shrink-0 ${controlBg} border border-white/[0.06]`}>
-        <Palette size={16} className="text-white/50 shrink-0" />
-        <span className={`text-sm font-medium shrink-0 ${textClass}`}>Color by</span>
-        <div className="flex gap-4">
-          <label className="flex items-center gap-2 cursor-pointer group">
-            <input
-              type="radio"
-              name="coloringMode"
-              checked={visualizerOptions.coloringMode === 'treatment'}
-              onChange={() => setColoringMode('treatment')}
-              className="w-4 h-4 accent-white"
-            />
-            <span className={`text-sm ${textClass} group-hover:text-white`}>Drug</span>
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer group">
-            <input
-              type="radio"
-              name="coloringMode"
-              checked={visualizerOptions.coloringMode === 'phenotype'}
-              onChange={() => setColoringMode('phenotype')}
-              className="w-4 h-4 accent-white"
-            />
-            <span className={`text-sm ${textClass} group-hover:text-white`}>Phenotype</span>
-          </label>
-        </div>
-      </div>
-
       {type === '4d' && (
         <>
           <div className={divider} />
@@ -264,17 +235,20 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
               <input
                 type="checkbox"
                 checked={advancedMode}
-                onChange={(e) =>
+                onChange={(e) => {
+                  const defaultFeature = featureGroups[0]?.features[0]?.apiName ?? null;
                   setSemanticState((s) => ({
                     ...s,
                     advancedMode: e.target.checked,
-                    selectedFeature: e.target.checked ? (s.selectedFeature || 'Optical Flow (fg)') : null,
+                    selectedFeature: e.target.checked
+                      ? s.selectedFeature || defaultFeature
+                      : null,
                     projectedPosition: null,
                     projectedConfidence: null,
                     semanticSliderValue: null,
                     axisSamplesVisible: e.target.checked ? s.axisSamplesVisible : false,
-                  }))
-                }
+                  }));
+                }}
                 className="w-4 h-4 rounded accent-white"
               />
               <Sparkles size={16} className="text-white/50 shrink-0" />
@@ -287,7 +261,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
               <div className="flex items-center gap-3 shrink-0">
                 <label className={`text-sm font-medium shrink-0 ${textClass}`}>Feature</label>
                 <FeatureSelect
-                  groups={FEATURE_GROUPS}
+                  groups={featureGroups}
                   value={selectedFeature}
                   onChange={(apiName) => {
                     if (apiName === selectedFeature) return;
@@ -357,7 +331,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
                 <span className={`text-xs shrink-0 ${textMutedClass}`}>{featureRange.max.toFixed(3)}</span>
               </div>
               <span className={`text-xs tabular-nums ${textMutedClass}`}>
-                {getFeatureDisplayLabel(selectedFeature)}: {(typeof sliderValue === 'number' ? sliderValue : featureRange.min).toFixed(3)}
+                {getFeatureDisplayLabel(selectedFeature, datasetVersion)}: {(typeof sliderValue === 'number' ? sliderValue : featureRange.min).toFixed(3)}
               </span>
               {semanticState.projectedConfidence != null && semanticState.projectedConfidence < 1 && (
                 <span className="text-xs text-amber-400">

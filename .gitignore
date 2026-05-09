@@ -26,3 +26,13 @@ server/.env
 *.njsproj
 *.sln
 *.sw?
+
+# Python build artifacts
+__pycache__/
+*.pyc
+
+# Heavy upstream v3 data (kept locally, not committed). The slim
+# features_v3.parquet IS committed because the backend needs it.
+data/v3_data/embeddings+metadata.parquet
+data/v3_data/points4d_v3.json
+

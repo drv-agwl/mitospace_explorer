@@ -64,28 +64,35 @@ const SamplePanel: React.FC = () => {
     setImageLoading((prev) => ({ ...prev, [index]: false }));
   };
 
+  const sampleColor = (() => {
+    if (!selectedSample) return null;
+    if (visualizerOptions.coloringMode === 'phenotype') {
+      // Phenotype color may not exist in v3; fall back to treatment color.
+      return selectedSample.color_phenotypic ?? selectedSample.color;
+    }
+    return selectedSample.color;
+  })();
+
   const getColorStyle = () => {
-    if (!selectedSample) return {};
-    const color = visualizerOptions.coloringMode === 'phenotype' ? selectedSample.color_phenotypic : selectedSample.color;
-    const r = (color?.r ?? 0) * 255;
-    const g = (color?.g ?? 0) * 255;
-    const b = (color?.b ?? 0) * 255;
+    if (!sampleColor) return {};
+    const r = (sampleColor.r ?? 0) * 255;
+    const g = (sampleColor.g ?? 0) * 255;
+    const b = (sampleColor.b ?? 0) * 255;
     return { backgroundColor: `rgb(${r}, ${g}, ${b})` };
   };
 
   const getAccentBorderStyle = () => {
-    if (!selectedSample) return {};
-    const color = visualizerOptions.coloringMode === 'phenotype' ? selectedSample.color_phenotypic : selectedSample.color;
-    const r = Math.round((color?.r ?? 0) * 255);
-    const g = Math.round((color?.g ?? 0) * 255);
-    const b = Math.round((color?.b ?? 0) * 255);
+    if (!sampleColor) return {};
+    const r = Math.round((sampleColor.r ?? 0) * 255);
+    const g = Math.round((sampleColor.g ?? 0) * 255);
+    const b = Math.round((sampleColor.b ?? 0) * 255);
     return { borderLeftWidth: 4, borderLeftColor: `rgb(${r}, ${g}, ${b})` };
   };
 
   const getContrastColor = () => {
-    if (!selectedSample) return 'text-black';
-    const color = visualizerOptions.coloringMode === 'phenotype' ? selectedSample.color_phenotypic : selectedSample.color;
-    const luminance = 0.299 * (color?.r ?? 0) + 0.587 * (color?.g ?? 0) + 0.114 * (color?.b ?? 0);
+    if (!sampleColor) return 'text-black';
+    const luminance =
+      0.299 * (sampleColor.r ?? 0) + 0.587 * (sampleColor.g ?? 0) + 0.114 * (sampleColor.b ?? 0);
     return luminance > 0.5 ? 'text-black' : 'text-white';
   };
 
@@ -150,8 +157,12 @@ const SamplePanel: React.FC = () => {
                       </button>
                     )}
                     {selectedSample.videos.map((video, index) => {
+                      // Only show channel labels when there are multiple videos.
                       const channelLabels = ['MitoTracker Green', 'TMRM'];
-                      const channelLabel = channelLabels[index] ?? null;
+                      const channelLabel =
+                        selectedSample.videos && selectedSample.videos.length > 1
+                          ? channelLabels[index] ?? null
+                          : null;
                       return (
                       <div key={index} className="rounded-xl overflow-hidden bg-white/[0.03] border border-white/[0.08]" style={getAccentBorderStyle()}>
                         <div className="relative aspect-video">
@@ -241,33 +252,37 @@ const SamplePanel: React.FC = () => {
                     <p className="text-sm font-medium text-white">{selectedSample.treatment.dose}</p>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 divide-x divide-t divide-white/10 border-t border-white/10">
-                  <div className="p-4">
-                    <p className="text-xs font-medium text-white/50 mb-0.5">SMILES</p>
-                    <p className="text-xs text-white/80 break-all">{selectedSample.treatment.smiles || 'N/A'}</p>
+                {(selectedSample.treatment.smiles || selectedSample.treatment.pubchem) && (
+                  <div className="grid grid-cols-2 divide-x divide-t divide-white/10 border-t border-white/10">
+                    <div className="p-4">
+                      <p className="text-xs font-medium text-white/50 mb-0.5">SMILES</p>
+                      <p className="text-xs text-white/80 break-all">{selectedSample.treatment.smiles || 'N/A'}</p>
+                    </div>
+                    <div className="p-4 flex flex-col justify-center items-center">
+                      <p className="text-xs font-medium text-white/50 mb-0.5">PubChem</p>
+                      {selectedSample.treatment.pubchem ? (
+                        <a
+                          href={`https://pubchem.ncbi.nlm.nih.gov/compound/${selectedSample.treatment.pubchem}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sm text-white hover:text-white/80 font-medium"
+                        >
+                          View
+                        </a>
+                      ) : (
+                        <span className="text-sm text-white/50">N/A</span>
+                      )}
+                    </div>
                   </div>
-                  <div className="p-4 flex flex-col justify-center items-center">
-                    <p className="text-xs font-medium text-white/50 mb-0.5">PubChem</p>
-                    {selectedSample.treatment.pubchem ? (
-                      <a
-                        href={`https://pubchem.ncbi.nlm.nih.gov/compound/${selectedSample.treatment.pubchem}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-sm text-white hover:text-white/80 font-medium"
-                      >
-                        View
-                      </a>
-                    ) : (
-                      <span className="text-sm text-white/50">N/A</span>
-                    )}
-                  </div>
-                </div>
+                )}
               </div>
             </section>
 
             <section>
-              <h4 className="text-[11px] font-semibold text-white/50 uppercase tracking-widest mb-3">Colors</h4>
-              <div className="grid grid-cols-2 gap-3">
+              <h4 className="text-[11px] font-semibold text-white/50 uppercase tracking-widest mb-3">Color</h4>
+              <div
+                className={`grid ${selectedSample.color_phenotypic ? 'grid-cols-2' : 'grid-cols-1'} gap-3`}
+              >
                 <div className="rounded-lg border border-white/[0.08] bg-white/[0.02] p-3">
                   <p className="text-xs font-medium text-white/50 mb-2">Treatment</p>
                   <div className="flex items-center gap-2">
@@ -282,20 +297,22 @@ const SamplePanel: React.FC = () => {
                     </span>
                   </div>
                 </div>
-                <div className="rounded-lg border border-white/[0.08] bg-white/[0.02] p-3">
-                  <p className="text-xs font-medium text-white/50 mb-2">Phenotype</p>
-                  <div className="flex items-center gap-2">
-                    <div
-                      className="w-8 h-8 rounded-lg border border-white/20"
-                      style={{
-                        backgroundColor: `rgb(${(selectedSample.color_phenotypic?.r ?? 0) * 255}, ${(selectedSample.color_phenotypic?.g ?? 0) * 255}, ${(selectedSample.color_phenotypic?.b ?? 0) * 255})`,
-                      }}
-                    />
-                    <span className="text-xs text-white/60 tabular-nums">
-                      RGB({Math.round((selectedSample.color_phenotypic?.r ?? 0) * 255)}, {Math.round((selectedSample.color_phenotypic?.g ?? 0) * 255)}, {Math.round((selectedSample.color_phenotypic?.b ?? 0) * 255)})
-                    </span>
+                {selectedSample.color_phenotypic && (
+                  <div className="rounded-lg border border-white/[0.08] bg-white/[0.02] p-3">
+                    <p className="text-xs font-medium text-white/50 mb-2">Phenotype</p>
+                    <div className="flex items-center gap-2">
+                      <div
+                        className="w-8 h-8 rounded-lg border border-white/20"
+                        style={{
+                          backgroundColor: `rgb(${(selectedSample.color_phenotypic?.r ?? 0) * 255}, ${(selectedSample.color_phenotypic?.g ?? 0) * 255}, ${(selectedSample.color_phenotypic?.b ?? 0) * 255})`,
+                        }}
+                      />
+                      <span className="text-xs text-white/60 tabular-nums">
+                        RGB({Math.round((selectedSample.color_phenotypic?.r ?? 0) * 255)}, {Math.round((selectedSample.color_phenotypic?.g ?? 0) * 255)}, {Math.round((selectedSample.color_phenotypic?.b ?? 0) * 255)})
+                      </span>
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
             </section>
 

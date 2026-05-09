@@ -1,8 +1,19 @@
 /**
  * API client for MitoSpace backend (projection and features).
+ *
+ * Every endpoint now optionally accepts a `version` parameter (`'v1' | 'v3'`)
+ * which the backend uses to route to the right dataset. When omitted, the
+ * backend defaults to v3.
  */
 
+import type { DatasetVersion } from '../types';
+
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:8000';
+
+function withVersion(params: URLSearchParams, version?: DatasetVersion): URLSearchParams {
+  if (version) params.set('version', version);
+  return params;
+}
 
 export interface ProjectResponse {
   x: number;
@@ -25,16 +36,19 @@ export interface ProjectOptions {
   centerY?: number;
   centerZ?: number;
   scaleFactor?: number;
+  /** Which dataset to query. */
+  version?: DatasetVersion;
 }
 
 export async function projectOnAxis(
   pointIndex: number,
   targetValue: number,
-  feature: string = 'Optical Flow (fg)',
+  feature: string = 'fragment_length_mean',
   options?: ProjectOptions
 ): Promise<ProjectResponse> {
   const body: Record<string, unknown> = { pointIndex, targetValue, feature };
   if (options?.method) body.method = options.method;
+  if (options?.version) body.version = options.version;
   if (
     options?.centerX != null &&
     options?.centerY != null &&
@@ -72,10 +86,11 @@ export interface AxisTrajectoryOptions {
   centerY?: number;
   centerZ?: number;
   scaleFactor?: number;
+  version?: DatasetVersion;
 }
 
 export async function getAxisTrajectory(
-  feature: string = 'Optical Flow (fg)',
+  feature: string = 'fragment_length_mean',
   numPoints: number = 80,
   options?: AxisTrajectoryOptions
 ): Promise<AxisTrajectoryResponse> {
@@ -83,6 +98,7 @@ export async function getAxisTrajectory(
     feature,
     num_points: String(numPoints),
   });
+  withVersion(params, options?.version);
   if (
     options?.centerX != null &&
     options?.centerY != null &&
@@ -105,32 +121,46 @@ export async function getAxisTrajectory(
   return { points, featureMin: data.featureMin, featureMax: data.featureMax };
 }
 
-export async function getFeatureStats(feature: string = 'Fragment Length'): Promise<FeatureStats> {
-  const url = `${API_BASE}/api/feature-stats?feature=${encodeURIComponent(feature)}`;
+export async function getFeatureStats(
+  feature: string = 'fragment_length_mean',
+  version?: DatasetVersion,
+): Promise<FeatureStats> {
+  const params = withVersion(new URLSearchParams({ feature }), version);
+  const url = `${API_BASE}/api/feature-stats?${params.toString()}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Feature stats failed: ${res.status}`);
   return res.json();
 }
 
-export async function getFeatureValues(featureName: string): Promise<number[]> {
-  // Backend accepts "Fragment Length" or "Fragment_Length"
+export async function getFeatureValues(
+  featureName: string,
+  version?: DatasetVersion,
+): Promise<number[]> {
+  // v1 column names have spaces; backend accepts both spaces and underscores.
   const name = featureName.replace(/\s+/g, '_');
-  const res = await fetch(`${API_BASE}/api/features/${encodeURIComponent(name)}`);
+  const params = withVersion(new URLSearchParams(), version);
+  const qs = params.toString();
+  const url = `${API_BASE}/api/features/${encodeURIComponent(name)}${qs ? `?${qs}` : ''}`;
+  const res = await fetch(url);
   if (!res.ok) throw new Error(`Feature values failed: ${res.status}`);
   const data = await res.json();
   return data.values ?? [];
 }
 
-export async function healthCheck(): Promise<{
-  embeddings_loaded: boolean;
+export async function healthCheck(version?: DatasetVersion): Promise<{
+  version?: string;
+  available_versions?: string[];
+  embeddings_loaded?: boolean;
   umap_points_loaded: boolean;
-  umap_reducer_loaded: boolean;
+  umap_reducer_loaded?: boolean;
   embedding_count: number;
   features: string[];
   axes: string[];
   chat_available?: boolean;
 }> {
-  const res = await fetch(`${API_BASE}/api/health`);
+  const params = withVersion(new URLSearchParams(), version);
+  const qs = params.toString();
+  const res = await fetch(`${API_BASE}/api/health${qs ? `?${qs}` : ''}`);
   if (!res.ok) throw new Error(`Health check failed: ${res.status}`);
   return res.json();
 }
@@ -143,18 +173,19 @@ export interface ChatResponse {
 
 export async function sendChatMessage(
   message: string,
-  history?: { role: string; content: string; query_type?: string }[]
+  history?: { role: string; content: string; query_type?: string }[],
+  version?: DatasetVersion,
 ): Promise<ChatResponse> {
   const res = await fetch(`${API_BASE}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, history: history || [] })
+    body: JSON.stringify({ message, history: history || [], version }),
   });
-  
+
   if (!res.ok) {
     const text = await res.text();
     throw new Error(text || `Chat request failed: ${res.status}`);
   }
-  
+
   return res.json();
 }

@@ -10,7 +10,8 @@ export interface Sample {
     g: number;
     b: number;
   };
-  color_phenotypic: {
+  // Optional: only present in v1 dataset. v3 dropped per-phenotype color.
+  color_phenotypic?: {
     r: number;
     g?: number;
     b: number;
@@ -26,6 +27,12 @@ export interface Sample {
   videos?: string[]; // Optional for 4D samples
   metadata: Record<string, string | number>;
 }
+
+/**
+ * Dataset version. v1 = 2024 LLSM (~13K pts, mtg+tmrm videos),
+ * v3 = 2025 expanded set (~36K pts, single mtg video, MOA labels).
+ */
+export type DatasetVersion = 'v1' | 'v3';
 
 export interface VisualizerProps {
   samples: Sample[];

@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useState, useCallback } from 'react';
 import { Video, X, Play, Pause } from 'lucide-react';
-import type { Sample } from '../types';
+import type { Sample, DatasetVersion } from '../types';
 import { getFeatureDisplayLabel } from '../constants/features';
 
 const AXIS_SAMPLE_COUNT = 9;
@@ -101,6 +101,7 @@ interface SemanticAxisPreviewProps {
   selectedFeature: string;
   samples: Sample[];
   apiEmbeddingCount: number | null;
+  datasetVersion: DatasetVersion;
   onClose: () => void;
   onSelectSample?: (sample: Sample) => void;
 }
@@ -111,6 +112,7 @@ const SemanticAxisPreview: React.FC<SemanticAxisPreviewProps> = ({
   selectedFeature,
   samples,
   apiEmbeddingCount,
+  datasetVersion,
   onClose,
   onSelectSample,
 }) => {
@@ -159,13 +161,17 @@ const SemanticAxisPreview: React.FC<SemanticAxisPreviewProps> = ({
     }
   }, [syncVideos]);
 
-  // Use TMRM video (index 1) for membrane potential, otherwise use MitoTracker (index 0)
-  const isMembranePotential = selectedFeature === 'TMRM Intensity' || 
-                               selectedFeature === 'tmrm_intensity' ||
-                               selectedFeature?.toLowerCase().includes('tmrm') ||
-                               selectedFeature?.toLowerCase().includes('membrane potential');
-  const videoIndex = isMembranePotential ? 1 : 0;
-  
+  // Use TMRM video (index 1) for membrane potential, otherwise use MitoTracker (index 0).
+  // In v3 each sample has only one video, so we always fall back to index 0.
+  const isMembranePotential =
+    selectedFeature === 'TMRM Intensity' ||
+    selectedFeature === 'tmrm_intensity' ||
+    selectedFeature === 'tmrm_last' ||
+    selectedFeature?.toLowerCase().includes('tmrm') ||
+    selectedFeature?.toLowerCase().includes('membrane potential');
+  const hasTMRMVideo = axisSamples.some((s) => (s.sample.videos?.length ?? 0) > 1);
+  const videoIndex = isMembranePotential && hasTMRMVideo ? 1 : 0;
+
   const videoCount = axisSamples.filter((s) => s.sample.videos?.[videoIndex]).length;
   const canSync = videoCount > 1;
 
@@ -175,7 +181,7 @@ const SemanticAxisPreview: React.FC<SemanticAxisPreviewProps> = ({
     <div className="shrink-0 border-b border-white/[0.08] bg-black/95 backdrop-blur-sm" data-tour="semantic-axis-preview">
       <div className="flex items-center justify-between px-6 py-3 gap-4">
         <p className="text-xs font-medium text-white/70 uppercase tracking-wider shrink-0">
-          Samples along {getFeatureDisplayLabel(selectedFeature)}
+          Samples along {getFeatureDisplayLabel(selectedFeature, datasetVersion)}
         </p>
         <div className="flex items-center gap-3 shrink-0">
           {canSync && (

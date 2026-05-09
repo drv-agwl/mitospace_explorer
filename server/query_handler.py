@@ -33,19 +33,30 @@ FEATURE_ALIASES = {
     'segments': 'Segment Length',
     'seg length': 'Segment Length',
     'morphology': 'Segment Length',
-    # Motility / Optical Flow (fg and bg both mean motility)
-    'motility': 'Optical Flow (fg)',
-    'movement': 'Optical Flow (fg)',
-    'motion': 'Optical Flow (fg)',
-    'dynamics': 'Optical Flow (fg)',
-    'dynamic': 'Optical Flow (fg)',
-    'optical flow': 'Optical Flow (fg)',
-    'optical flow (fg)': 'Optical Flow (fg)',
-    'optical flow (bg)': 'Optical Flow (fg)',
-    'flow': 'Optical Flow (fg)',
-    'moving': 'Optical Flow (fg)',
-    'mobility': 'Optical Flow (fg)',
-    'speed': 'Optical Flow (fg)',
+    # Motility / Diffusivity (v3 has no Optical Flow; we proxy with Fragment Diffusivity)
+    'motility': 'Fragment Diffusivity',
+    'movement': 'Fragment Diffusivity',
+    'motion': 'Fragment Diffusivity',
+    'dynamics': 'Fragment Diffusivity',
+    'dynamic': 'Fragment Diffusivity',
+    'optical flow': 'Fragment Diffusivity',
+    'optical flow (fg)': 'Fragment Diffusivity',
+    'optical flow (bg)': 'Fragment Diffusivity',
+    'flow': 'Fragment Diffusivity',
+    'moving': 'Fragment Diffusivity',
+    'mobility': 'Fragment Diffusivity',
+    'speed': 'Fragment Diffusivity',
+    'diffusivity': 'Fragment Diffusivity',
+    'diffusion': 'Fragment Diffusivity',
+    'fragment diffusivity': 'Fragment Diffusivity',
+    'segment diffusivity': 'Segment Diffusivity',
+    'node diffusivity': 'Node Diffusivity',
+    # Tortuosity (new in v3)
+    'tortuosity': 'Fragment Tortuosity',
+    'fragment tortuosity': 'Fragment Tortuosity',
+    'curvature': 'Fragment Tortuosity',
+    'curved': 'Fragment Tortuosity',
+    'curvy': 'Fragment Tortuosity',
     # Membrane Potential / TMRM
     'membrane potential': 'TMRM Intensity',
     'tmrm': 'TMRM Intensity',
@@ -59,6 +70,11 @@ FEATURE_ALIASES = {
     'health': 'TMRM Intensity',
     'healthy': 'TMRM Intensity',
     'function': 'TMRM Intensity',
+    # MitoTracker (mitochondrial mass)
+    'mitotracker': 'MitoTracker Intensity',
+    'mitotracker intensity': 'MitoTracker Intensity',
+    'mitochondrial mass': 'MitoTracker Intensity',
+    'mass': 'MitoTracker Intensity',
     # Diameter
     'diameter': 'Fragment Diameter',
     'width': 'Fragment Diameter',
@@ -79,8 +95,9 @@ FEATURE_ALIASES = {
     'network': 'Clustering Coefficient',
     'reticulated': 'Clustering Coefficient',
     'density': 'Graph Density',
-    'diffusivity': 'Node Diffusivity',
-    'diffusion': 'Node Diffusivity',
+    'efficiency': 'Graph Efficiency',
+    'graph efficiency': 'Graph Efficiency',
+    'graph density': 'Graph Density',
     'node count': 'Node Count',
     'nodes': 'Node Count',
     'complexity': 'Node Count',
@@ -95,25 +112,74 @@ DRUG_ALIASES = {
     'baseline': 'DMSO',
 }
 
-# All numeric features
+# All numeric features (v1 + v3 friendly names; v3 also adds Tortuosity)
 NUMERIC_FEATURES = [
     'Node Count', 'Degree', 'Segment Length', 'Fragment Length', 'Fragment Diameter',
+    'Fragment Tortuosity',
     'Graph Density', 'Graph Efficiency', 'Clustering Coefficient',
     'Node Diffusivity', 'Segment Diffusivity', 'Fragment Diffusivity',
+    'Fusion Rate', 'Fission Rate', 'TMRM Intensity', 'MitoTracker Intensity',
+    # Legacy v1 columns kept for backward-compat:
     'Node Diffusivity Std', 'Segment Diffusivity Std', 'Fragment Diffusivity Std',
-    'Fusion Rate', 'Fission Rate', 'TMRM Intensity', 'Optical Flow (fg)'
+    'Optical Flow (fg)',
 ]
 
 # Key features (the most commonly discussed ones)
-KEY_FEATURES = ['Fragment Length', 'Segment Length', 'TMRM Intensity', 'Optical Flow (fg)']
+KEY_FEATURES = [
+    'Fragment Length', 'Segment Length', 'Fragment Diameter', 'Fragment Tortuosity',
+    'Fragment Diffusivity', 'Fission Rate', 'Fusion Rate', 'TMRM Intensity',
+]
 
 
-def load_data(feature_csv_path: str, metadata_json_path: Optional[str] = None):
-    """Load complete dataset into memory"""
+def load_data(feature_path: str, metadata_json_path: Optional[str] = None):
+    """
+    Load the chat dataset into memory.
+
+    Accepts either:
+      - a .csv  (legacy v1 mitotnt_features.csv layout)
+      - a .parquet (v3 features_v3.parquet layout, with snake_case columns)
+
+    For v3 we also derive `TMRM Intensity` (last timepoint of `tmrm_intensities`)
+    and surface a small set of v1-friendly column aliases so the existing
+    NUMERIC_FEATURES / KEY_FEATURES list keeps working without per-column rewrites.
+    """
     global feature_table, sample_metadata
 
-    feature_table = pd.read_csv(feature_csv_path)
-    print(f"[QueryHandler] Loaded feature table: {len(feature_table)} samples, {len(feature_table.columns)} features")
+    path = str(feature_path)
+    if path.endswith('.parquet'):
+        df = pd.read_parquet(path)
+        # Derive scalar TMRM intensity (last timepoint) and morph intensity (last timepoint)
+        if 'tmrm_intensities' in df.columns:
+            df['TMRM Intensity'] = df['tmrm_intensities'].apply(
+                lambda a: float(np.asarray(a)[-1]) if a is not None and len(np.asarray(a)) > 0 else np.nan
+            )
+        if 'morph_intensities' in df.columns:
+            df['MitoTracker Intensity'] = df['morph_intensities'].apply(
+                lambda a: float(np.asarray(a)[-1]) if a is not None and len(np.asarray(a)) > 0 else np.nan
+            )
+        # v1-friendly aliases for the same features
+        v1_aliases = {
+            'Fragment Length': 'fragment_length_mean',
+            'Segment Length': 'segment_length_mean',
+            'Fragment Diameter': 'fragment_diameter_mean',
+            'Fragment Tortuosity': 'fragment_tortuosity_mean',
+            'Fragment Diffusivity': 'fragment_diffusivity_mean',
+            'Segment Diffusivity': 'segment_diffusivity_mean',
+            'Node Diffusivity': 'node_diffusivity_mean',
+            'Fission Rate': 'fission_rate_mean',
+            'Fusion Rate': 'fusion_rate_mean',
+            'Graph Density': 'graph_density_mean',
+            'Graph Efficiency': 'graph_efficiency_mean',
+            'Clustering Coefficient': 'graph_clustering_coefficient_mean',
+            'Node Count': 'total_node_count_mean',
+        }
+        for friendly, src in v1_aliases.items():
+            if src in df.columns and friendly not in df.columns:
+                df[friendly] = df[src]
+        feature_table = df
+    else:
+        feature_table = pd.read_csv(path)
+    print(f"[QueryHandler] Loaded feature table: {len(feature_table)} samples, {len(feature_table.columns)} features ({path})")
 
     if metadata_json_path:
         import json
@@ -122,15 +188,28 @@ def load_data(feature_csv_path: str, metadata_json_path: Optional[str] = None):
             if 'points' in data:
                 metadata_records = []
                 for point in data['points']:
+                    treatment = point.get('treatment', {}) or {}
                     metadata_records.append({
-                        'id': point['id'],
-                        'drug': point['treatment']['drug'],
-                        'dose': point['treatment']['dose'],
-                        'time': point['treatment']['time'],
-                        'phenotype': point['phenotype']
+                        'id': point.get('id'),
+                        'drug': treatment.get('drug', 'unknown'),
+                        'dose': treatment.get('dose', ''),
+                        'time': treatment.get('time', ''),
+                        'phenotype': point.get('phenotype', ''),
                     })
                 sample_metadata = pd.DataFrame(metadata_records)
                 print(f"[QueryHandler] Loaded sample metadata: {len(sample_metadata)} samples")
+    elif 'label_names' in feature_table.columns:
+        # v3 parquet has labels embedded — derive metadata from it
+        sample_metadata = pd.DataFrame({
+            'id': [f'p{i}' for i in range(len(feature_table))],
+            'drug': feature_table['label_names'].astype(str).values,
+            'dose': '10 nM',
+            'time': '1h',
+            'phenotype': feature_table['label_names'].astype(str).values,
+        })
+        if 'labels_moa' in feature_table.columns:
+            sample_metadata['moa'] = feature_table['labels_moa'].astype(str).values
+        print(f"[QueryHandler] Derived metadata from parquet labels: {len(sample_metadata)} samples")
 
 
 def extract_feature_name(text: str) -> Optional[str]:

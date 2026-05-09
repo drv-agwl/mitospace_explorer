@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { MessageCircle, X, Send, Loader2, ChevronDown, Sparkles, Move } from 'lucide-react';
 import { sendChatMessage } from '../api/client';
+import { useSample } from '../context/SampleContext';
 
 interface ChatMessage {
   id: string;
@@ -11,6 +12,7 @@ interface ChatMessage {
 }
 
 const ChatPanel: React.FC = () => {
+  const { datasetVersion } = useSample();
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -110,7 +112,7 @@ const ChatPanel: React.FC = () => {
         content: m.content,
         query_type: m.data?.query_type
       }));
-      const response = await sendChatMessage(userMessage.content, history);
+      const response = await sendChatMessage(userMessage.content, history, datasetVersion);
       
       const assistantMessage: ChatMessage = {
         id: (Date.now() + 1).toString(),

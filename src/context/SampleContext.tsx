@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useMemo, ReactNode } from 'react';
-import { Sample, ColoringMode, VisualizerOptions, RenderingMode, LabelVisibility, PerformanceMode, SemanticState } from '../types';
-import { samples2D, samples4D } from '../data/sampleData';
+import { Sample, ColoringMode, VisualizerOptions, RenderingMode, LabelVisibility, PerformanceMode, SemanticState, DatasetVersion } from '../types';
+import { samples2D, samples4D as samples4DV1, loadSamples4DV3 } from '../data/sampleData';
 
 const initialSemanticState: SemanticState = {
   advancedMode: false,
@@ -14,6 +14,11 @@ const initialSemanticState: SemanticState = {
 interface SampleContextType {
   samples2D: Sample[];
   samples4D: Sample[];
+  /** Active 4D dataset version. v1 is bundled; v3 is fetched on first use. */
+  datasetVersion: DatasetVersion;
+  /** True while v3 is being fetched after a toggle. */
+  datasetLoading: boolean;
+  setDatasetVersion: (v: DatasetVersion) => void;
   selectedSample: Sample | null;
   selectedPointIndex: number | null;
   searchQuery: string;
@@ -62,6 +67,14 @@ const defaultOptions: VisualizerOptions = {
 
 const SampleContext = createContext<SampleContextType | null>(null);
 
+// Persist user's last choice across reloads
+const DATASET_STORAGE_KEY = 'mitospace.datasetVersion';
+const initialDatasetVersion: DatasetVersion = (() => {
+  if (typeof window === 'undefined') return 'v3';
+  const saved = window.localStorage?.getItem(DATASET_STORAGE_KEY);
+  return saved === 'v1' || saved === 'v3' ? (saved as DatasetVersion) : 'v3';
+})();
+
 export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [selectedSample, setSelectedSample] = useState<Sample | null>(null);
   const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
@@ -74,6 +87,48 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const setFeatureValues = useCallback((feature: string, values: number[]) => {
     setFeatureValuesState(prev => ({ ...prev, [feature]: values }));
   }, []);
+
+  // Dataset version + 4D samples (v1 is bundled; v3 fetched on demand)
+  const [datasetVersion, setDatasetVersionState] = useState<DatasetVersion>(initialDatasetVersion);
+  const [samples4DV3, setSamples4DV3] = useState<Sample[] | null>(null);
+  const [datasetLoading, setDatasetLoading] = useState(false);
+
+  useEffect(() => {
+    if (datasetVersion !== 'v3') return;
+    if (samples4DV3) return;
+    let cancelled = false;
+    setDatasetLoading(true);
+    loadSamples4DV3()
+      .then((pts) => {
+        if (!cancelled) setSamples4DV3(pts);
+      })
+      .catch((err) => {
+        console.error('[dataset] failed to load v3 samples', err);
+      })
+      .finally(() => {
+        if (!cancelled) setDatasetLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [datasetVersion, samples4DV3]);
+
+  const setDatasetVersion = useCallback((v: DatasetVersion) => {
+    setDatasetVersionState(v);
+    try {
+      window.localStorage?.setItem(DATASET_STORAGE_KEY, v);
+    } catch {
+      // ignore
+    }
+    // When switching datasets, drop point-specific state (indices won't align)
+    setSelectedSample(null);
+    setSelectedPointIndex(null);
+    setSemanticState(initialSemanticState);
+    setFeatureValuesState({});
+    setApiEmbeddingCount(null);
+  }, []);
+
+  const samples4D: Sample[] = datasetVersion === 'v3' ? (samples4DV3 ?? []) : samples4DV1;
   
   const setColoringMode = (mode: ColoringMode) => {
     setVisualizerOptions(prev => ({ ...prev, coloringMode: mode }));
@@ -116,7 +171,7 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     samples2D.forEach(s => drugs.add(s.treatment.drug));
     samples4D.forEach(s => drugs.add(s.treatment.drug));
     return Array.from(drugs).sort((a, b) => a.localeCompare(b));
-  }, []);
+  }, [samples4D]);
 
   const toggleDrugFilter = useCallback((drug: string) => {
     setSelectedDrugs(prev => {
@@ -157,8 +212,8 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     return result;
   }, [selectedDrugs, searchQuery]);
 
-  const filteredSamples2D = filterSamples(samples2D);
-  const filteredSamples4D = filterSamples(samples4D);
+  const filteredSamples2D = useMemo(() => filterSamples(samples2D), [filterSamples]);
+  const filteredSamples4D = useMemo(() => filterSamples(samples4D), [filterSamples, samples4D]);
 
   useEffect(() => {
     if (!selectedSample) return;
@@ -176,6 +231,9 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       value={{
         samples2D,
         samples4D,
+        datasetVersion,
+        datasetLoading,
+        setDatasetVersion,
         selectedSample,
         selectedPointIndex,
         searchQuery,

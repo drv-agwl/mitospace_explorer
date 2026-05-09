@@ -15,7 +15,9 @@ function getUniqueItems(
   const map = new Map<string, { r: number; g: number; b: number }>();
   for (const s of samples) {
     const label = mode === 'treatment' ? s.treatment.drug : s.phenotype;
-    const color = mode === 'treatment' ? s.color : s.color_phenotypic;
+    // Phenotype color may not exist in v3; fall back to treatment color.
+    const color =
+      mode === 'treatment' ? s.color : s.color_phenotypic ?? s.color;
     if (label && !map.has(label)) {
       map.set(label, {
         r: (color?.r ?? 0) * 255,
