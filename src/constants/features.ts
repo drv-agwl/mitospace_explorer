@@ -31,15 +31,19 @@ export const FEATURE_GROUPS_V1: FeatureGroup[] = [
 
 // ─── v3 (2025) ────────────────────────────────────────────────────────────
 // Tied to data/v3_data/features_v3.parquet columns.
-// The v3 dataset has no Optical-Flow channel, so "Motility" is replaced with
-// Fragment Diffusivity (closest physical analogue: how much fragments move).
-// Membrane Potential = last timepoint of `tmrm_intensities` (computed in
-// the backend as feature `tmrm_last`).
+// "Motility" in v3 = diffusivity of mitochondrial structures (how much they
+// move). The dataset reports it at three structural scales — fragment, segment,
+// and node — and we expose all three because they capture different aspects of
+// mitochondrial movement.
+// Membrane Potential = last timepoint of `tmrm_intensities` (computed in the
+// backend as feature `tmrm_last`).
 export const FEATURE_GROUPS_V3: FeatureGroup[] = [
   {
     category: 'Mitochondria dynamics',
     features: [
-      { id: 'fragment_diffusivity_mean', label: 'Diffusivity', apiName: 'fragment_diffusivity_mean' },
+      { id: 'fragment_diffusivity_mean', label: 'Fragment Motility', apiName: 'fragment_diffusivity_mean' },
+      { id: 'segment_diffusivity_mean', label: 'Segment Motility', apiName: 'segment_diffusivity_mean' },
+      { id: 'node_diffusivity_mean', label: 'Node Motility', apiName: 'node_diffusivity_mean' },
       { id: 'fission_rate_mean', label: 'Fission Rate', apiName: 'fission_rate_mean' },
       { id: 'fusion_rate_mean', label: 'Fusion Rate', apiName: 'fusion_rate_mean' },
     ],

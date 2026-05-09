@@ -33,8 +33,14 @@ FEATURE_ALIASES = {
     'segments': 'Segment Length',
     'seg length': 'Segment Length',
     'morphology': 'Segment Length',
-    # Motility / Diffusivity (v3 has no Optical Flow; we proxy with Fragment Diffusivity)
+    # Motility (v3): the dataset reports "diffusivity" at three structural scales
+    # (fragment / segment / node). The UI now exposes all three as separate axes
+    # under the names "Fragment / Segment / Node Motility". Plain "motility"
+    # without a scale defaults to Fragment Motility (the canonical scale).
     'motility': 'Fragment Diffusivity',
+    'fragment motility': 'Fragment Diffusivity',
+    'segment motility': 'Segment Diffusivity',
+    'node motility': 'Node Diffusivity',
     'movement': 'Fragment Diffusivity',
     'motion': 'Fragment Diffusivity',
     'dynamics': 'Fragment Diffusivity',

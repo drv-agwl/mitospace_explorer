@@ -1,29 +1,82 @@
 import React from 'react';
 
-/** Plasma colormap gradient (matches featureColor.ts): dark purple → magenta → orange → yellow */
-const PLASMA_CSS =
-  'linear-gradient(to right, rgb(13, 8, 135), rgb(71, 5, 166), rgb(201, 28, 138), rgb(252, 120, 56), rgb(240, 242, 33))';
+import { useSample } from '../context/SampleContext';
+import { getFeatureDisplayLabel } from '../constants/features';
+import { plasmaGradientCss } from '../utils/featureColor';
+import { formatFeatureValue } from '../utils/formatFeature';
+import { estimatePlasmaParams } from '../utils/featureColorParams';
 
 interface FeatureColorBarProps {
   visible: boolean;
 }
 
+/**
+ * Bottom-left legend that explains the cloud's plasma gradient.
+ *
+ * It uses the exact same `plasmaGradientCss` that drives `featureToColorPlasmaAdaptive`,
+ * so the bar visually matches every cloud point and the trajectory tube. The
+ * marker tracks the semantic-axis slider so users can read off the current
+ * value position on the gradient.
+ */
 const FeatureColorBar: React.FC<FeatureColorBarProps> = ({ visible }) => {
+  const { semanticState, datasetVersion, featureValues } = useSample();
+
+  const plasmaParams = React.useMemo(() => {
+    const fname = semanticState.selectedFeature;
+    if (!fname) return { gamma: undefined, contrast: undefined } as const;
+    const fv = featureValues[fname];
+    if (!fv) return { gamma: undefined, contrast: undefined } as const;
+    const p = estimatePlasmaParams(fv);
+    return { gamma: p.gamma, contrast: p.contrast } as const;
+  }, [semanticState.selectedFeature, featureValues]);
+
+  const gradientCss = React.useMemo(
+    () => plasmaGradientCss(11, plasmaParams.gamma, plasmaParams.contrast),
+    [plasmaParams.gamma, plasmaParams.contrast]
+  );
+
   if (!visible) return null;
 
+  const featureLabel = getFeatureDisplayLabel(semanticState.selectedFeature, datasetVersion);
+  const range = semanticState.featureRange;
+  const sliderValue = typeof semanticState.semanticSliderValue === 'number'
+    ? semanticState.semanticSliderValue
+    : null;
+
+  let markerPercent: number | null = null;
+  if (range && sliderValue != null && Number.isFinite(sliderValue)) {
+    const span = range.max - range.min;
+    if (span > 0) {
+      const t = (sliderValue - range.min) / span;
+      markerPercent = Math.max(0, Math.min(1, t)) * 100;
+    }
+  }
+
   return (
-    <div className="rounded-xl border border-white/[0.08] bg-black/70 backdrop-blur-sm overflow-hidden px-4 py-2.5">
+    <div className="rounded-xl border border-white/[0.08] bg-black/70 backdrop-blur-sm overflow-hidden px-4 py-2.5 min-w-[240px]">
       <div className="flex flex-col gap-1.5">
-        <span className="text-xs font-medium text-white/80 uppercase tracking-wider">
-          Feature value
-        </span>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-white/60 shrink-0">Low</span>
-          <div
-            className="flex-1 h-3 rounded border border-white/20"
-            style={{ background: PLASMA_CSS }}
-          />
-          <span className="text-xs text-white/60 shrink-0">High</span>
+        <div className="flex items-baseline justify-between gap-3">
+          <span className="text-xs font-medium text-white/85 tracking-wide truncate">
+            {featureLabel || 'Feature value'}
+          </span>
+          {sliderValue != null && (
+            <span className="text-[11px] tabular-nums text-white/70 shrink-0">
+              {formatFeatureValue(sliderValue)}
+            </span>
+          )}
+        </div>
+        <div className="relative h-3 rounded border border-white/20" style={{ background: gradientCss }}>
+          {markerPercent != null && (
+            <div
+              className="absolute top-[-2px] bottom-[-2px] w-0.5 bg-white shadow-[0_0_4px_rgba(255,255,255,0.9)] pointer-events-none"
+              style={{ left: `${markerPercent}%`, transform: 'translateX(-50%)' }}
+              aria-hidden="true"
+            />
+          )}
+        </div>
+        <div className="flex items-center justify-between text-[10px] tabular-nums text-white/55">
+          <span>{range ? formatFeatureValue(range.min) : 'Low'}</span>
+          <span>{range ? formatFeatureValue(range.max) : 'High'}</span>
         </div>
       </div>
     </div>

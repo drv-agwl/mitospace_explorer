@@ -5,6 +5,8 @@ import { getFeatureStats, getFeatureValues, healthCheck } from '../api/client';
 import { findNearestSampleIndex } from './SemanticAxisPreview';
 import FeatureSelect from './FeatureSelect';
 import { getFeatureGroups, getFeatureDisplayLabel } from '../constants/features';
+import { formatFeatureValue } from '../utils/formatFeature';
+import { buildSampleIdToIndex } from '../utils/sampleIndexMap';
 
 interface VisualizerControlsProps {
   type: '2d' | '4d';
@@ -26,6 +28,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
     apiEmbeddingCount,
     featureValues,
     samples4D,
+    filteredSamples4D,
     selectedSample,
     setSelectedSample,
     selectedDrugs,
@@ -36,6 +39,11 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
     datasetVersion,
   } = useSample();
   const featureGroups = getFeatureGroups(datasetVersion);
+
+  const sampleIdToEmbeddingIndex = React.useMemo(
+    () => buildSampleIdToIndex(samples4D),
+    [samples4D]
+  );
 
   const [drugFilterOpen, setDrugFilterOpen] = useState(false);
   const drugFilterRef = useRef<HTMLDivElement>(null);
@@ -115,13 +123,18 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
     getFeatureStats(selectedFeature, datasetVersion)
       .then((stats) => {
         const values = featureValues[selectedFeature];
-        const pointValue =
+        let pointValue: number | null = null;
+        if (
           selectedPointIndex != null &&
-          values &&
-          selectedPointIndex < values.length &&
-          Number.isFinite(values[selectedPointIndex])
-            ? values[selectedPointIndex]
-            : null;
+          selectedPointIndex < filteredSamples4D.length &&
+          values
+        ) {
+          const emb =
+            sampleIdToEmbeddingIndex.get(filteredSamples4D[selectedPointIndex].id) ?? -1;
+          if (emb >= 0 && emb < values.length && Number.isFinite(values[emb])) {
+            pointValue = values[emb];
+          }
+        }
         const mid = (stats.min + stats.max) / 2;
         setSemanticState((s) => ({
           ...s,
@@ -130,7 +143,17 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
         }));
       })
       .catch(() => {});
-  }, [type, advancedMode, selectedFeature, datasetVersion, selectedPointIndex, setSemanticState, featureValues]);
+  }, [
+    type,
+    advancedMode,
+    selectedFeature,
+    datasetVersion,
+    selectedPointIndex,
+    setSemanticState,
+    featureValues,
+    filteredSamples4D,
+    sampleIdToEmbeddingIndex,
+  ]);
 
   const handleSliderChange = (value: number) => {
     setSemanticState((s) => ({ ...s, semanticSliderValue: value }));
@@ -318,20 +341,20 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
           {showSlider && featureRange && (
             <div className={`flex items-center gap-4 flex-wrap min-w-[520px] px-4 py-2 rounded-lg shrink-0 ${controlBg} border border-white/[0.06] transition-opacity duration-200 ${featureLoading ? 'opacity-40 pointer-events-none' : ''}`} data-tour="semantic-axis-slider">
               <div className="flex items-center gap-2 min-w-[200px]">
-                <span className={`text-xs shrink-0 ${textMutedClass}`}>{featureRange.min.toFixed(3)}</span>
+                <span className={`text-xs shrink-0 ${textMutedClass}`}>{formatFeatureValue(featureRange.min)}</span>
                 <input
                   type="range"
                   min={featureRange.min}
                   max={featureRange.max}
-                  step={Math.max(0.001, (featureRange.max - featureRange.min) / 200)}
+                  step={Math.max((featureRange.max - featureRange.min) / 200, 1e-9)}
                   value={typeof sliderValue === 'number' ? sliderValue : featureRange.min}
                   onChange={(e) => handleSliderChange(parseFloat(e.target.value))}
                   className="flex-1 h-1.5 accent-white"
                 />
-                <span className={`text-xs shrink-0 ${textMutedClass}`}>{featureRange.max.toFixed(3)}</span>
+                <span className={`text-xs shrink-0 ${textMutedClass}`}>{formatFeatureValue(featureRange.max)}</span>
               </div>
               <span className={`text-xs tabular-nums ${textMutedClass}`}>
-                {getFeatureDisplayLabel(selectedFeature, datasetVersion)}: {(typeof sliderValue === 'number' ? sliderValue : featureRange.min).toFixed(3)}
+                {getFeatureDisplayLabel(selectedFeature, datasetVersion)}: {formatFeatureValue(typeof sliderValue === 'number' ? sliderValue : featureRange.min)}
               </span>
               {semanticState.projectedConfidence != null && semanticState.projectedConfidence < 1 && (
                 <span className="text-xs text-amber-400">

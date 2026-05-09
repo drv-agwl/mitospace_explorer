@@ -151,9 +151,13 @@ const SamplePanel: React.FC = () => {
                 </h4>
                 {selectedSample.videos ? (
                   <div className="space-y-4">
-                    {selectedSample.videos.length > 1 && (
+                    {selectedSample.videos.length >= 1 && (
                       <button onClick={togglePlayPause} className="btn-primary w-full text-sm">
-                        {isPlaying ? <><Pause size={14} className="mr-2" />Pause</> : <><Play size={14} className="mr-2" />Play all</>}
+                        {isPlaying ? (
+                          <><Pause size={14} className="mr-2" />Pause</>
+                        ) : (
+                          <><Play size={14} className="mr-2" />{selectedSample.videos.length > 1 ? 'Play all' : 'Play'}</>
+                        )}
                       </button>
                     )}
                     {selectedSample.videos.map((video, index) => {

@@ -512,7 +512,75 @@ async def chat(req: ChatRequest):
             query_type=query_type
         )
     
-    # Step 4: Generate LLM response
+    def _fallback_answer(qtype: str, stats: dict) -> str:
+        """
+        Deterministic fallback for when the LLM is unavailable or errors.
+        This keeps chat usable (returns a useful answer) even if OpenRouter
+        credentials are missing / rate-limited / failing.
+        """
+        try:
+            if qtype == "ranking":
+                feature = stats.get("feature", "feature")
+                direction = stats.get("direction", "high")
+                rankings = stats.get("rankings") or []
+                if not rankings:
+                    return f"I computed the ranking for {feature}, but there were no valid drug values to rank."
+                lines = [f"Top drugs by {'higher' if direction == 'high' else 'lower'} {feature}:"]
+                for i, r in enumerate(rankings[:10], start=1):
+                    drug = r.get("drug", "unknown")
+                    mean = r.get("mean", None)
+                    std = r.get("std", None)
+                    n = r.get("count", None)
+                    lines.append(f"{i}. {drug}: mean={mean} (std={std}, n={n})")
+                return "\n".join(lines)
+
+            if qtype == "drug_comparison":
+                drugs = stats.get("drugs") or []
+                feats = stats.get("features") or []
+                lines = []
+                if drugs and feats:
+                    lines.append(f"Comparison for {', '.join(map(str, drugs))}:")
+                for f in feats:
+                    a = stats.get("comparison", {}).get(f, {})
+                    if not a:
+                        continue
+                    lines.append(
+                        f"- {f}: {drugs[0] if len(drugs)>0 else 'A'} mean={a.get('drug1_mean')} vs "
+                        f"{drugs[1] if len(drugs)>1 else 'B'} mean={a.get('drug2_mean')} "
+                        f"(Δ={a.get('difference')}, effect={a.get('effect')})"
+                    )
+                return "\n".join(lines) if lines else "I computed the comparison statistics, but couldn't format them."
+
+            if qtype == "correlation":
+                f1 = stats.get("feature1", "feature1")
+                f2 = stats.get("feature2", "feature2")
+                corr = stats.get("correlation", None)
+                n = stats.get("n_samples", None)
+                interp = stats.get("interpretation", "")
+                return f"Correlation between {f1} and {f2}: r={corr} (n={n}). Interpretation: {interp}."
+
+            if qtype == "feature_stats":
+                feature = stats.get("feature", "feature")
+                scope = stats.get("scope", "")
+                return (
+                    f"{feature} {scope}: mean={stats.get('mean')}, std={stats.get('std')}, "
+                    f"median={stats.get('median')}, min={stats.get('min')}, max={stats.get('max')} (n={stats.get('n')})."
+                )
+
+            if qtype == "feature_description":
+                return str(stats.get("description") or "No description available.")
+
+            if qtype == "dataset_overview":
+                return (
+                    f"Dataset overview: {stats.get('n_samples')} samples, {stats.get('n_features')} features. "
+                    f"Key features: {', '.join(stats.get('key_features') or [])}."
+                )
+        except Exception:
+            pass
+        return "I computed the statistics, but the language model response failed. The raw results are included in the response data."
+
+    # Step 4: Generate LLM response (with deterministic fallback)
+    answer = None
     try:
         llm = get_llm_client()
         answer = llm.generate_response(
@@ -520,12 +588,15 @@ async def chat(req: ChatRequest):
             computed_stats=computed_stats,
             query_type=query_type
         )
+        # Some LLM error paths return a generic apology string; treat that as a failure
+        # and fall back to a deterministic answer.
+        if isinstance(answer, str) and answer.strip().lower().startswith("sorry, there was an error processing your question"):
+            answer = None
     except Exception as e:
-        print(f"[chat] LLM generation error: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error generating response: {str(e)}"
-        )
+        print(f"[chat] LLM generation error (falling back): {e}")
+
+    if not answer:
+        answer = _fallback_answer(query_type, computed_stats)
     
     return ChatResponse(
         answer=answer,

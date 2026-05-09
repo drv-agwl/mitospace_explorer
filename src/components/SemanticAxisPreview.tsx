@@ -2,6 +2,7 @@ import React, { useMemo, useRef, useState, useCallback } from 'react';
 import { Video, X, Play, Pause } from 'lucide-react';
 import type { Sample, DatasetVersion } from '../types';
 import { getFeatureDisplayLabel } from '../constants/features';
+import { formatFeatureValue } from '../utils/formatFeature';
 
 const AXIS_SAMPLE_COUNT = 9;
 
@@ -270,7 +271,7 @@ const SemanticAxisPreview: React.FC<SemanticAxisPreviewProps> = ({
             </div>
             <div className="px-2.5 py-2">
               <p className="text-xs font-medium text-white/90 truncate">{sample.treatment.drug}</p>
-              <p className="text-[10px] text-white/50 tabular-nums">{value.toFixed(3)}</p>
+              <p className="text-[10px] text-white/50 tabular-nums">{formatFeatureValue(value)}</p>
             </div>
           </button>
         ))}
