@@ -4,7 +4,7 @@ import { useSample } from '../context/SampleContext';
 import { getFeatureStats, getFeatureValues, healthCheck } from '../api/client';
 import { findNearestSampleIndex } from './SemanticAxisPreview';
 import FeatureSelect from './FeatureSelect';
-import { getFeatureGroups, getFeatureDisplayLabel } from '../constants/features';
+import { getFeatureGroups, getFeatureDisplayLabel, getInitialSemanticAxisFeature } from '../constants/features';
 import { formatFeatureValue } from '../utils/formatFeature';
 import { buildSampleIdToIndex } from '../utils/sampleIndexMap';
 
@@ -259,7 +259,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
                 type="checkbox"
                 checked={advancedMode}
                 onChange={(e) => {
-                  const defaultFeature = featureGroups[0]?.features[0]?.apiName ?? null;
+                  const defaultFeature = getInitialSemanticAxisFeature(datasetVersion);
                   setSemanticState((s) => ({
                     ...s,
                     advancedMode: e.target.checked,

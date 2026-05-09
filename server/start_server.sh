@@ -1,5 +1,7 @@
 #!/bin/bash
-# Start MitoSpace Explorer backend server
+# Start MitoSpace Explorer backend server (uses conda env: deeplearning)
+
+set -euo pipefail
 
 echo "🚀 Starting MitoSpace Explorer backend..."
 echo ""
@@ -17,19 +19,24 @@ if [ ! -f ".env" ]; then
     echo ""
 fi
 
-# Check if virtual environment exists
-if [ ! -d "venv" ]; then
-    echo "📦 Creating virtual environment..."
-    python3 -m venv venv
-    echo "✅ Virtual environment created"
-    echo ""
+# Activate conda environment deeplearning
+if command -v conda >/dev/null 2>&1; then
+    eval "$(conda shell.bash hook)"
+elif [ -f "${HOME}/miniconda3/etc/profile.d/conda.sh" ]; then
+    # shellcheck source=/dev/null
+    source "${HOME}/miniconda3/etc/profile.d/conda.sh"
+elif [ -f "${HOME}/anaconda3/etc/profile.d/conda.sh" ]; then
+    # shellcheck source=/dev/null
+    source "${HOME}/anaconda3/etc/profile.d/conda.sh"
+else
+    echo "❌ Error: conda not found. Install Miniconda/Anaconda or add conda to PATH."
+    exit 1
 fi
 
-# Activate virtual environment
-echo "🔧 Activating virtual environment..."
-source venv/bin/activate
+echo "🔧 Activating conda env: deeplearning..."
+conda activate deeplearning
 
-# Install/upgrade dependencies
+# Install/upgrade dependencies into the active env
 echo "📥 Installing dependencies..."
 pip install -q --upgrade pip
 pip install -q -r requirements.txt
@@ -41,5 +48,4 @@ echo "🌐 Starting server on http://127.0.0.1:8000"
 echo "   Press Ctrl+C to stop"
 echo ""
 
-# Start server
 python -m uvicorn main:app --reload --port 8000

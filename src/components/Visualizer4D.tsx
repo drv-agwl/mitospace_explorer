@@ -18,6 +18,19 @@ import { estimatePlasmaParams } from '../utils/featureColorParams';
 
 const SCALE_FACTOR = 4;
 
+/**
+ * Default orbit camera for v3 — elevated “mostly top-down” view (main mass
+ * dominant, satellites visible along XZ like the UX reference screenshot).
+ * Slight X/Z offsets keep mild perspective instead of pure nadir Y.
+ */
+// ~11% closer to target than prior framing (same view direction).
+const V3_DEFAULT_CAMERA = { x: -25, y: -0, z: -100 };
+
+function v1DiagonalCameraCoord(): number {
+  const initDist = 1 + 0.26 * 299;
+  return initDist / Math.sqrt(3);
+}
+
 const Visualizer4D: React.FC = () => {
   const {
     filteredSamples4D,
@@ -224,9 +237,8 @@ const Visualizer4D: React.FC = () => {
     
     controlsRef.current = controls;
     
-    // Set initial camera position (~74% zoom: distance ~79 from origin)
-    const initDist = 1 + 0.26 * 299; // 74% zoom
-    const initCoord = initDist / Math.sqrt(3);
+    // Initial camera (v1-style diagonal); v3 overrides in datasetVersion effect
+    const initCoord = v1DiagonalCameraCoord();
     camera.position.set(initCoord, initCoord, initCoord);
     camera.lookAt(0, 0, 0);
     controls.target.set(0, 0, 0);
@@ -383,6 +395,20 @@ const Visualizer4D: React.FC = () => {
       }
     };
   }, []);
+
+  // Apply default camera when dataset version changes (v3 uses a tuned view).
+  useEffect(() => {
+    if (!cameraRef.current || !controlsRef.current) return;
+    if (datasetVersion === 'v3') {
+      cameraRef.current.position.set(V3_DEFAULT_CAMERA.x, V3_DEFAULT_CAMERA.y, V3_DEFAULT_CAMERA.z);
+    } else {
+      const c = v1DiagonalCameraCoord();
+      cameraRef.current.position.set(c, c, c);
+    }
+    cameraRef.current.lookAt(0, 0, 0);
+    controlsRef.current.target.set(0, 0, 0);
+    controlsRef.current.update();
+  }, [datasetVersion]);
 
   // Update scene background and lighting when dark mode changes
   useEffect(() => {
@@ -1082,15 +1108,16 @@ const Visualizer4D: React.FC = () => {
   };
 
   const handleResetView = useCallback(() => {
-    if (cameraRef.current) {
+    if (!cameraRef.current || !controlsRef.current) return;
+    if (datasetVersion === 'v3') {
+      cameraRef.current.position.set(V3_DEFAULT_CAMERA.x, V3_DEFAULT_CAMERA.y, V3_DEFAULT_CAMERA.z);
+    } else {
       cameraRef.current.position.set(25, 25, 25);
-      cameraRef.current.lookAt(new THREE.Vector3(0, 0, 0));
-      if (controlsRef.current) {
-        controlsRef.current.target.set(0, 0, 0);
-        controlsRef.current.update();
-      }
     }
-  }, []);
+    cameraRef.current.lookAt(new THREE.Vector3(0, 0, 0));
+    controlsRef.current.target.set(0, 0, 0);
+    controlsRef.current.update();
+  }, [datasetVersion]);
 
   const toggleFullscreen = useCallback(() => {
     const el = fullscreenContainerRef.current as HTMLElement & { webkitRequestFullscreen?: () => void };

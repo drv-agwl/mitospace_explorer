@@ -80,7 +80,10 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDrugs, setSelectedDrugs] = useState<Set<string>>(new Set());
-  const [visualizerOptions, setVisualizerOptions] = useState<VisualizerOptions>(defaultOptions);
+  const [visualizerOptions, setVisualizerOptions] = useState<VisualizerOptions>(() => ({
+    ...defaultOptions,
+    pointSize: initialDatasetVersion === 'v3' ? 1.0 : 1.5,
+  }));
   const [semanticState, setSemanticState] = useState<SemanticState>(initialSemanticState);
   const [featureValues, setFeatureValuesState] = useState<Record<string, number[]>>({});
   const [apiEmbeddingCount, setApiEmbeddingCount] = useState<number | null>(null);
@@ -120,6 +123,11 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     } catch {
       // ignore
     }
+    // Per-dataset defaults (camera is handled in Visualizer4D)
+    setVisualizerOptions((prev) => ({
+      ...prev,
+      pointSize: v === 'v3' ? 1.0 : 1.5,
+    }));
     // When switching datasets, drop point-specific state (indices won't align)
     setSelectedSample(null);
     setSelectedPointIndex(null);

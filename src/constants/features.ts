@@ -69,6 +69,19 @@ export function getFeatureGroups(version: DatasetVersion): FeatureGroup[] {
   return version === 'v3' ? FEATURE_GROUPS_V3 : FEATURE_GROUPS_V1;
 }
 
+/**
+ * Feature selected the first time the user enables Semantic axis (when nothing was chosen yet).
+ */
+export function getInitialSemanticAxisFeature(version: DatasetVersion): string | null {
+  const groups = getFeatureGroups(version);
+  if (version === 'v3') {
+    const morph = groups.find((g) => g.category === 'Mitochondrial Morphology');
+    const seg = morph?.features.find((f) => f.apiName === 'segment_length_mean');
+    if (seg) return seg.apiName;
+  }
+  return groups[0]?.features[0]?.apiName ?? null;
+}
+
 // Backwards-compat default export for any existing imports (defaults to v1).
 export const FEATURE_GROUPS: FeatureGroup[] = FEATURE_GROUPS_V1;
 
