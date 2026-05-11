@@ -88,7 +88,7 @@ const About: React.FC = () => {
             <div>
               <h2 className="text-2xl sm:text-3xl font-semibold text-white tracking-tight mb-6">Acknowledgments</h2>
               <p className="text-white/70 text-lg sm:text-xl leading-relaxed mb-6">
-                Dhruv Agarwal*, Zichen Wang*, Parth Natekar*, Hiroyuki Hakozaki, Andre Modolo, Mehul Arora, Siddharth Nahar, Manav Doshi, Gillian McMahon, and Johannes Schöneberg
+                Dhruv Agarwal*, Zichen Wang*, Eric Arkfeld*, Andre Modolo*, Parth Natekar*, Hiroyuki Hakozaki*, Mehul Arora, Siddharth Nahar, Manav Doshi, Gillian McMahon, Johannes Schöneberg
               </p>
               <a
                 href="https://www.schoeneberglab.org/team"
