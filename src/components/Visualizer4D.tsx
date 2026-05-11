@@ -15,6 +15,21 @@ import { buildSampleIdToIndex } from '../utils/sampleIndexMap';
 import { computeDistancesToPolyline, buildFadeFactors } from '../utils/axisDistance';
 import { smoothFeatureValuesKnn } from '../utils/featureSmooth';
 import { estimatePlasmaParams } from '../utils/featureColorParams';
+import {
+  computeQuantileBeads,
+  computeEndpointAnchors,
+  polylineSegmentDensities,
+  estimateDensityRadius,
+  type AxisBead,
+  type EndpointAnchors,
+} from '../utils/axisGeometry';
+import {
+  buildSmoothCursorPath,
+  buildTrajectorySnapPath,
+  evaluateCursorPath,
+  type CursorPath,
+} from '../utils/axisCursorPath';
+import type { AxisStyle } from '../types';
 
 const SCALE_FACTOR = 4;
 
@@ -453,9 +468,138 @@ const Visualizer4D: React.FC = () => {
     return { gamma: p.gamma, contrast: p.contrast } as const;
   }, [useFeatureColoring, semanticState.selectedFeature, featureValues]);
 
-  // Fetch trajectory whenever Advanced Semantic + feature are set (don't require points so request always runs)
+  // ─── New axis-style state (A/B switch) ────────────────────────────────
+  // We precompute quantile beads, endpoint anchors and a dense cursor path
+  // *once per feature* from the filtered cloud; the slider then cheaply
+  // interpolates positions without recomputing geometry.
+  const axisStyle: AxisStyle = semanticState.axisStyle ?? 'cursor-axis';
+  // Cursor-family modes share a common UI footprint: the cursor ball is
+  // the only 3D feedback element. `cursor` builds the path locally from
+  // density modes; `cursor-axis` builds it by snapping the backend's
+  // learnt trajectory onto real cells (smoother for most features).
+  const isCursorMode = axisStyle === 'cursor' || axisStyle === 'cursor-axis';
+
+  /**
+   * Sample-id → embedding-index lookup for the *filtered* cloud, in
+   * filtered-index order. Quantile beads / endpoint anchors need to
+   * dereference feature values by embedding index, so we pass this through.
+   */
+  const filteredEmbeddingIndexOf = useCallback(
+    (filteredIdx: number) => {
+      const s = filteredSamples4D[filteredIdx];
+      if (!s) return -1;
+      return sampleIdToEmbeddingIndex.get(s.id) ?? -1;
+    },
+    [filteredSamples4D, sampleIdToEmbeddingIndex]
+  );
+
+  /**
+   * Quantile beads in *raw UMAP coordinates*. Re-computed only when the
+   * feature, the filtered cloud, or the feature range changes — never on
+   * camera moves or slider drags.
+   */
+  const quantileBeads = React.useMemo<AxisBead[]>(() => {
+    if (!useFeatureColoring) return [];
+    const fname = semanticState.selectedFeature;
+    if (!fname) return [];
+    const fv = featureValues[fname];
+    const fr = semanticState.featureRange;
+    if (!fv || !fr) return [];
+    return computeQuantileBeads(filteredSamples4D, fv, filteredEmbeddingIndexOf, fr, 7, 24);
+  }, [
+    useFeatureColoring,
+    semanticState.selectedFeature,
+    semanticState.featureRange,
+    featureValues,
+    filteredSamples4D,
+    filteredEmbeddingIndexOf,
+  ]);
+
+  /**
+   * Endpoint anchor centroids for the `bare` style.
+   */
+  const endpointAnchors = React.useMemo<EndpointAnchors | null>(() => {
+    if (!useFeatureColoring) return null;
+    const fname = semanticState.selectedFeature;
+    if (!fname) return null;
+    const fv = featureValues[fname];
+    if (!fv) return null;
+    return computeEndpointAnchors(filteredSamples4D, fv, filteredEmbeddingIndexOf, 0.05);
+  }, [
+    useFeatureColoring,
+    semanticState.selectedFeature,
+    featureValues,
+    filteredSamples4D,
+    filteredEmbeddingIndexOf,
+  ]);
+
+  /**
+   * Hidden cell-anchored cursor path. Dispatches on axis style:
+   *
+   *   cursor       — mode-seeking over feature-value-nearest cells with a
+   *                  bucket-count tiebreak. Locates the densest cluster
+   *                  of cells matching each slider value, picks a core
+   *                  cell in that cluster.
+   *   cursor-axis  — snaps each backend trajectory point to its nearest
+   *                  real cell. Smoother through contiguous regions
+   *                  because the backend trajectory is sorted by feature
+   *                  value, so adjacent waypoints are spatially close.
+   *
+   * Both paths are consumed by the same `evaluateCursorPath`, which lerps
+   * within a cluster and snaps (teleports) across inter-cluster jumps.
+   */
+  const cursorPath = React.useMemo<CursorPath | null>(() => {
+    if (!useFeatureColoring) return null;
+    const fname = semanticState.selectedFeature;
+    if (!fname) return null;
+    const fv = featureValues[fname];
+    const fr = semanticState.featureRange;
+    if (!fv || !fr) return null;
+
+    if (axisStyle === 'cursor-axis') {
+      if (trajectoryPoints && trajectoryPoints.length >= 2) {
+        return buildTrajectorySnapPath(trajectoryPoints, filteredSamples4D, fr);
+      }
+      // Backend trajectory unavailable (e.g. offline). Fall through to
+      // the local density-mode path so the cursor still works.
+    }
+    if (axisStyle === 'cursor' || axisStyle === 'cursor-axis') {
+      return buildSmoothCursorPath(
+        filteredSamples4D,
+        fv,
+        filteredEmbeddingIndexOf,
+        fr,
+        200,
+        64
+      );
+    }
+    return null;
+  }, [
+    axisStyle,
+    useFeatureColoring,
+    semanticState.selectedFeature,
+    semanticState.featureRange,
+    featureValues,
+    filteredSamples4D,
+    filteredEmbeddingIndexOf,
+    trajectoryPoints,
+  ]);
+
+  // Fetch backend trajectory whenever Advanced Semantic + feature are set.
+  // In cursor mode we don't render the backend trajectory, but we still
+  // need to know "is the axis engaged" for the cloud dim — the cursorPath
+  // memo (computed entirely client-side) handles that without a network
+  // call, so we skip the fetch in cursor mode.
   useEffect(() => {
     if (!semanticState.advancedMode || !semanticState.selectedFeature) {
+      setTrajectoryPoints(null);
+      return;
+    }
+    if (axisStyle === 'cursor') {
+      // `cursor` is purely client-side; clear any stale trajectory so
+      // the legacy axis-distance fade and axisFadeFactors stay disabled.
+      // `cursor-axis` still needs the trajectory (we snap it onto real
+      // cells), so we fall through to the fetch for that style.
       setTrajectoryPoints(null);
       return;
     }
@@ -473,137 +617,438 @@ const Visualizer4D: React.FC = () => {
         console.warn('[trajectory] fetch failed', err);
         setTrajectoryPoints(null);
       });
-  }, [semanticState.advancedMode, semanticState.selectedFeature, datasetVersion]);
+  }, [semanticState.advancedMode, semanticState.selectedFeature, datasetVersion, axisStyle]);
 
-  // Render trajectory (tube + direction arrows) in the same space as scatter
+  // ─── Trajectory rendering ────────────────────────────────────────────
+  //
+  // Four representations are shipped behind a runtime switch (`axisStyle`)
+  // so the team can A/B them. All four dispose their geometries on cleanup
+  // and write into `trajectoryLineRef` so the rest of the visualizer can
+  // remain agnostic.
+  //
+  //   cursor       — NO path geometry. Only the slider-driven ball moves
+  //                  along a hidden density-grounded trajectory.
+  //                  (Handled by the marker effect below — this effect
+  //                  short-circuits.)
+  //   tube         — original Catmull-Rom plasma tube + arrow cones.
+  //   tube-masked  — same tube, but split into K sub-segments whose alpha
+  //                  is driven by local point density. The tube fades to
+  //                  invisible in empty UMAP regions.
+  //   beads        — discrete quantile waypoints anchored to cell
+  //                  centroids; bookend Low/High arrows at the chain
+  //                  endpoints; a thin connector whose per-segment alpha
+  //                  is again density-gated.
+  //   bare         — no path geometry. Two endpoint anchor spheres only;
+  //                  the colored cloud itself carries the gradient story.
+  //
   useEffect(() => {
     if (!sceneRef.current) return;
-    const prev = trajectoryLineRef.current;
-    if (prev && sceneRef.current) {
-      sceneRef.current.remove(prev);
-      prev.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          child.geometry?.dispose();
-          if (child.material) {
-            const mat = child.material as THREE.Material;
-            mat.dispose();
-          }
+
+    const disposeGroup = (g: THREE.Group | null) => {
+      if (!g || !sceneRef.current) return;
+      sceneRef.current.remove(g);
+      g.traverse((child) => {
+        const m = child as THREE.Mesh | THREE.LineSegments | THREE.Line;
+        // dispose geometry
+        if ('geometry' in m && m.geometry) {
+          (m.geometry as THREE.BufferGeometry).dispose();
+        }
+        // dispose material(s)
+        if ('material' in m && m.material) {
+          const mat = m.material as THREE.Material | THREE.Material[];
+          if (Array.isArray(mat)) mat.forEach((mm) => mm.dispose());
+          else mat.dispose();
         }
       });
-      trajectoryLineRef.current = null;
-    }
-    if (!trajectoryPoints?.length || trajectoryPoints.length < 2) return;
+    };
+
+    disposeGroup(trajectoryLineRef.current);
+    trajectoryLineRef.current = null;
+
+    // Cursor-family modes: render NO path geometry. The slider-marker
+    // effect is the sole source of axis feedback for both `cursor` and
+    // `cursor-axis`.
+    if (isCursorMode) return;
+
+    // Nothing to draw if semantic mode is off, no feature is selected, or
+    // we're in `bare` style (which intentionally renders no path geometry
+    // beyond the endpoint anchors handled later in this effect).
+    const hasTrajectory = !!(trajectoryPoints && trajectoryPoints.length >= 2);
+    const hasBeads = quantileBeads.length >= 2;
+    if (axisStyle !== 'bare' && !hasTrajectory && !hasBeads) return;
+
     const center =
       filteredSamples4D.length > 0
         ? getCenter()
         : new THREE.Vector3(0, 0, 0);
-    const vertices = trajectoryPoints.map((p) => {
-      const x = typeof p.x === 'number' ? p.x : (Array.isArray(p) ? p[0] : 0);
-      const y = typeof p.y === 'number' ? p.y : (Array.isArray(p) ? p[1] : 0);
-      const z = typeof p.z === 'number' ? p.z : (Array.isArray(p) ? p[2] : 0);
-      return new THREE.Vector3(
-        (x - center.x) * SCALE_FACTOR,
-        (y - center.y) * SCALE_FACTOR,
-        (z - center.z) * SCALE_FACTOR
+    const toScene = (p: { x: number; y: number; z: number }) =>
+      new THREE.Vector3(
+        (p.x - center.x) * SCALE_FACTOR,
+        (p.y - center.y) * SCALE_FACTOR,
+        (p.z - center.z) * SCALE_FACTOR
       );
-    });
-    const curve = new THREE.CatmullRomCurve3(vertices, false);
-    const tubeRadius = 0.38;
-    const tubeSegments = Math.max(vertices.length * 2, 64);
-    const radialSegments = 8;
-    const geometry = new THREE.TubeGeometry(curve, tubeSegments, tubeRadius, radialSegments, false);
-    const posAttr = geometry.getAttribute('position');
-    const vertexCount = posAttr.count;
-    // Tube color = plasma along its length. The backend trajectory points are
-    // generated by linearly spacing feature values from f_min to f_max, so
-    // a tube vertex at fraction t of the curve corresponds to feature value
-    // f_min + t * (f_max - f_min). featureToColorPlasmaAdaptive of that value
-    // reduces back to plasmaAtT(t) — meaning the tube renders with the exact
-    // same gradient the cloud points use.
-    const colorArray = new Float32Array(vertexCount * 3);
-    for (let i = 0; i < vertexCount; i++) {
-      const t = Math.floor(i / radialSegments) / tubeSegments;
-      const c = plasmaAtT(t, plasmaParams.gamma, plasmaParams.contrast);
-      const adapted = isDarkMode ? adaptColorForDarkTheme(c.r, c.g, c.b) : c;
-      colorArray[i * 3] = adapted.r;
-      colorArray[i * 3 + 1] = adapted.g;
-      colorArray[i * 3 + 2] = adapted.b;
-    }
-    geometry.setAttribute('color', new THREE.BufferAttribute(colorArray, 3));
-    const tubeMaterial = new THREE.MeshBasicMaterial({
-      vertexColors: true,
-      transparent: true,
-      opacity: 0.92,
-      side: THREE.DoubleSide,
-      depthTest: true,
-      polygonOffset: true,
-      polygonOffsetFactor: -1,
-      polygonOffsetUnits: 1,
-    });
-    const tube = new THREE.Mesh(geometry, tubeMaterial);
-    tube.renderOrder = 10;
 
     const group = new THREE.Group();
-    group.add(tube);
+    group.renderOrder = 10;
 
-    const arrowCount = 5;
-    const arrowRadius = 0.9;
-    const arrowHeight = 2.2;
-    const up = new THREE.Vector3(0, 1, 0);
-    for (let i = 1; i <= arrowCount; i++) {
-      const t = i / (arrowCount + 1);
-      const pos = curve.getPoint(t);
-      const tangent = curve.getTangent(t).normalize();
-      const arrowGeom = new THREE.ConeGeometry(arrowRadius, arrowHeight, 8);
-      // Arrow color matches the tube/cloud at its location along the axis.
-      const cArrow = plasmaAtT(t, plasmaParams.gamma, plasmaParams.contrast);
-      const cAdapted = isDarkMode ? adaptColorForDarkTheme(cArrow.r, cArrow.g, cArrow.b) : cArrow;
+    // ── Shared helpers ───────────────────────────────────────────────
+    const plasmaColor = (t: number) => {
+      const c = plasmaAtT(t, plasmaParams.gamma, plasmaParams.contrast);
+      return isDarkMode ? adaptColorForDarkTheme(c.r, c.g, c.b) : c;
+    };
+    const colorAtT = (t: number) => {
+      const c = plasmaColor(t);
+      return new THREE.Color(c.r, c.g, c.b);
+    };
+
+    // Place an arrow cone pointing along `tangent` at `position`, colored
+    // for axis fraction `t`. Used for bookend arrows in the beads style and
+    // for the inline arrows in the tube styles.
+    const addArrow = (
+      position: THREE.Vector3,
+      tangent: THREE.Vector3,
+      t: number,
+      radius = 0.9,
+      height = 2.2,
+      opacity = 0.95
+    ) => {
+      const arrowGeom = new THREE.ConeGeometry(radius, height, 10);
       const arrowMat = new THREE.MeshBasicMaterial({
-        color: new THREE.Color(cAdapted.r, cAdapted.g, cAdapted.b),
+        color: colorAtT(t),
         transparent: true,
-        opacity: 0.95,
+        opacity,
         depthTest: true,
       });
       const arrow = new THREE.Mesh(arrowGeom, arrowMat);
-      arrow.position.copy(pos);
+      arrow.position.copy(position);
       if (tangent.lengthSq() > 1e-6) {
-        const quat = new THREE.Quaternion().setFromUnitVectors(up, tangent);
+        const up = new THREE.Vector3(0, 1, 0);
+        const quat = new THREE.Quaternion().setFromUnitVectors(up, tangent.clone().normalize());
         arrow.applyQuaternion(quat);
       }
       arrow.renderOrder = 11;
       group.add(arrow);
+    };
+
+    // ── Style: tube / tube-masked ────────────────────────────────────
+    if ((axisStyle === 'tube' || axisStyle === 'tube-masked') && hasTrajectory) {
+      const vertices = trajectoryPoints!.map((p) => toScene(p));
+      const curve = new THREE.CatmullRomCurve3(vertices, false);
+
+      const tubeRadius = 0.38;
+      const radialSegments = 8;
+
+      if (axisStyle === 'tube') {
+        // ── One continuous tube, vertex-coloured plasma along its length.
+        const tubeSegments = Math.max(vertices.length * 2, 64);
+        const geometry = new THREE.TubeGeometry(
+          curve,
+          tubeSegments,
+          tubeRadius,
+          radialSegments,
+          false
+        );
+        const posAttr = geometry.getAttribute('position');
+        const vertexCount = posAttr.count;
+        const colorArray = new Float32Array(vertexCount * 3);
+        for (let i = 0; i < vertexCount; i++) {
+          const t = Math.floor(i / radialSegments) / tubeSegments;
+          const c = plasmaColor(t);
+          colorArray[i * 3] = c.r;
+          colorArray[i * 3 + 1] = c.g;
+          colorArray[i * 3 + 2] = c.b;
+        }
+        geometry.setAttribute('color', new THREE.BufferAttribute(colorArray, 3));
+        const tubeMaterial = new THREE.MeshBasicMaterial({
+          vertexColors: true,
+          transparent: true,
+          opacity: 0.92,
+          side: THREE.DoubleSide,
+          depthTest: true,
+          polygonOffset: true,
+          polygonOffsetFactor: -1,
+          polygonOffsetUnits: 1,
+        });
+        const tube = new THREE.Mesh(geometry, tubeMaterial);
+        tube.renderOrder = 10;
+        group.add(tube);
+
+        // 5 inline arrows along the tube
+        for (let i = 1; i <= 5; i++) {
+          const t = i / 6;
+          addArrow(curve.getPoint(t), curve.getTangent(t), t);
+        }
+      } else {
+        // ── tube-masked: split into K sub-tubes; each sub-tube's opacity
+        //                is driven by local point density. Where the tube
+        //                would pass through empty UMAP regions, that
+        //                section nearly disappears.
+        const K = 14;
+        const radius = estimateDensityRadius(filteredSamples4D);
+        const subSegments = 6;
+        for (let k = 0; k < K; k++) {
+          const t0 = k / K;
+          const t1 = (k + 1) / K;
+          const subStart = curve.getPoint(t0);
+          const subEnd = curve.getPoint(t1);
+          // Quick density at the midpoint (cheap, good enough for K=14).
+          const mid = curve.getPoint((t0 + t1) / 2);
+          // Count cells within `radius` of `mid` in RAW UMAP coords.
+          const radius2 = radius * radius;
+          let count = 0;
+          for (let s = 0; s < filteredSamples4D.length; s++) {
+            const sx = filteredSamples4D[s].x - (mid.x / SCALE_FACTOR + center.x);
+            const sy = filteredSamples4D[s].y - (mid.y / SCALE_FACTOR + center.y);
+            const sz = filteredSamples4D[s].z - (mid.z / SCALE_FACTOR + center.z);
+            if (sx * sx + sy * sy + sz * sz <= radius2) count++;
+          }
+          const density = Math.min(1, count / 30);
+          // Opacity envelope: empty → very faint hint, dense → solid.
+          const alpha = 0.08 + 0.84 * Math.pow(density, 0.7);
+
+          const subPath = new THREE.CatmullRomCurve3(
+            [subStart, curve.getPoint((t0 + t1) / 2), subEnd],
+            false
+          );
+          const subTubeGeom = new THREE.TubeGeometry(
+            subPath,
+            subSegments,
+            tubeRadius,
+            radialSegments,
+            false
+          );
+          const tColor = (t0 + t1) / 2;
+          const subTubeMat = new THREE.MeshBasicMaterial({
+            color: colorAtT(tColor),
+            transparent: true,
+            opacity: alpha,
+            side: THREE.DoubleSide,
+            depthTest: true,
+            depthWrite: false,
+            polygonOffset: true,
+            polygonOffsetFactor: -1,
+            polygonOffsetUnits: 1,
+          });
+          const subTube = new THREE.Mesh(subTubeGeom, subTubeMat);
+          subTube.renderOrder = 10;
+          group.add(subTube);
+        }
+        // Inline arrows — only where density is reasonable (avoid arrows
+        // marooned in empty space).
+        for (let i = 1; i <= 5; i++) {
+          const t = i / 6;
+          const pos = curve.getPoint(t);
+          // Re-evaluate density at this t (cheap).
+          const radius2 = radius * radius;
+          let count = 0;
+          for (let s = 0; s < filteredSamples4D.length; s++) {
+            const sx = filteredSamples4D[s].x - (pos.x / SCALE_FACTOR + center.x);
+            const sy = filteredSamples4D[s].y - (pos.y / SCALE_FACTOR + center.y);
+            const sz = filteredSamples4D[s].z - (pos.z / SCALE_FACTOR + center.z);
+            if (sx * sx + sy * sy + sz * sz <= radius2) count++;
+          }
+          if (count >= 6) {
+            addArrow(pos, curve.getTangent(t), t, 0.9, 2.2, 0.95);
+          }
+        }
+      }
     }
 
-    group.renderOrder = 10;
+    // ── Style: beads ────────────────────────────────────────────────
+    // Discrete plasma-colored spheres at quantile centroids (guaranteed to
+    // sit inside dense regions), a faint density-gated connector between
+    // neighbours, and bookend Low/High arrows at the chain endpoints.
+    if (axisStyle === 'beads' && hasBeads) {
+      const beadPositions = quantileBeads.map((b) => toScene(b));
+      const radius = estimateDensityRadius(filteredSamples4D);
+
+      // Density along the (raw-UMAP) connector segments — used to fade
+      // segments that cross empty regions.
+      const densities = polylineSegmentDensities(
+        quantileBeads.map((b) => ({ x: b.x, y: b.y, z: b.z })),
+        filteredSamples4D,
+        radius
+      );
+
+      // Connector: one thin Line per adjacent pair, opacity = density.
+      for (let i = 0; i < beadPositions.length - 1; i++) {
+        const a = beadPositions[i];
+        const b = beadPositions[i + 1];
+        const lineGeom = new THREE.BufferGeometry().setFromPoints([a, b]);
+        const density = densities[i] ?? 0;
+        const alpha = 0.05 + 0.55 * Math.pow(density, 0.7);
+        const tMid = (quantileBeads[i].t + quantileBeads[i + 1].t) / 2;
+        const lineMat = new THREE.LineBasicMaterial({
+          color: colorAtT(tMid),
+          transparent: true,
+          opacity: alpha,
+          depthTest: true,
+          depthWrite: false,
+        });
+        const line = new THREE.Line(lineGeom, lineMat);
+        line.renderOrder = 10;
+        group.add(line);
+      }
+
+      // Beads themselves — plasma spheres with a subtle bright ring for
+      // legibility against the dark cloud.
+      const beadRadius = 1.6;
+      for (let i = 0; i < beadPositions.length; i++) {
+        const pos = beadPositions[i];
+        const t = quantileBeads[i].t;
+        const sphereGeom = new THREE.SphereGeometry(beadRadius, 20, 20);
+        const sphereMat = new THREE.MeshBasicMaterial({
+          color: colorAtT(t),
+          transparent: true,
+          opacity: 0.95,
+          depthTest: true,
+          polygonOffset: true,
+          polygonOffsetFactor: -2,
+          polygonOffsetUnits: 1,
+        });
+        const sphere = new THREE.Mesh(sphereGeom, sphereMat);
+        sphere.position.copy(pos);
+        sphere.renderOrder = 11;
+        // Tag so the slider effect below can find + scale these.
+        (sphere as THREE.Object3D & { userData: Record<string, unknown> }).userData = {
+          type: 'axisBead',
+          t,
+          baseRadius: beadRadius,
+        };
+        group.add(sphere);
+
+        const ringGeom = new THREE.RingGeometry(beadRadius * 1.05, beadRadius * 1.18, 28);
+        const ringMat = new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.55,
+          side: THREE.DoubleSide,
+          depthTest: true,
+          depthWrite: false,
+        });
+        const ring = new THREE.Mesh(ringGeom, ringMat);
+        ring.position.copy(pos);
+        // Billboard the ring toward the camera each frame? Keep it simple:
+        // a flat XY ring reads as a "halo" from typical orbit angles.
+        ring.renderOrder = 11;
+        group.add(ring);
+      }
+
+      // Bookend arrows: outward at both ends so the direction is unambiguous.
+      const first = beadPositions[0];
+      const second = beadPositions[1];
+      const lastIdx = beadPositions.length - 1;
+      const last = beadPositions[lastIdx];
+      const penult = beadPositions[lastIdx - 1];
+
+      const lowDir = first.clone().sub(second).normalize();
+      const highDir = last.clone().sub(penult).normalize();
+      const arrowOffset = 3.0;
+      addArrow(
+        first.clone().add(lowDir.clone().multiplyScalar(arrowOffset)),
+        lowDir,
+        0,
+        1.1,
+        2.6,
+        0.95
+      );
+      addArrow(
+        last.clone().add(highDir.clone().multiplyScalar(arrowOffset)),
+        highDir,
+        1,
+        1.1,
+        2.6,
+        0.95
+      );
+    }
+
+    // ── Style: bare ─────────────────────────────────────────────────
+    // No path geometry at all. Two endpoint anchors (small plasma spheres
+    // with rings) sit on the centroids of the bottom-5%/top-5% cells.
+    if (axisStyle === 'bare' && endpointAnchors) {
+      const mkAnchor = (
+        rawPos: { x: number; y: number; z: number },
+        tFrac: number
+      ) => {
+        const pos = toScene(rawPos);
+        const r = 2.0;
+        const sphereGeom = new THREE.SphereGeometry(r, 20, 20);
+        const sphereMat = new THREE.MeshBasicMaterial({
+          color: colorAtT(tFrac),
+          transparent: true,
+          opacity: 0.95,
+          depthTest: true,
+          polygonOffset: true,
+          polygonOffsetFactor: -2,
+          polygonOffsetUnits: 1,
+        });
+        const sphere = new THREE.Mesh(sphereGeom, sphereMat);
+        sphere.position.copy(pos);
+        sphere.renderOrder = 11;
+        group.add(sphere);
+
+        const ringGeom = new THREE.RingGeometry(r * 1.15, r * 1.35, 36);
+        const ringMat = new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.7,
+          side: THREE.DoubleSide,
+          depthTest: true,
+          depthWrite: false,
+        });
+        const ring = new THREE.Mesh(ringGeom, ringMat);
+        ring.position.copy(pos);
+        ring.renderOrder = 11;
+        group.add(ring);
+      };
+      mkAnchor(endpointAnchors.low, 0);
+      mkAnchor(endpointAnchors.high, 1);
+    }
+
     sceneRef.current.add(group);
     trajectoryLineRef.current = group;
+
     return () => {
-      if (trajectoryLineRef.current && sceneRef.current) {
-        sceneRef.current.remove(trajectoryLineRef.current);
-        trajectoryLineRef.current.traverse((child) => {
-          if (child instanceof THREE.Mesh) {
-            child.geometry?.dispose();
-            if (child.material) (child.material as THREE.Material).dispose();
-          }
-        });
-        trajectoryLineRef.current = null;
-      }
+      disposeGroup(trajectoryLineRef.current);
+      trajectoryLineRef.current = null;
     };
   }, [
+    axisStyle,
     trajectoryPoints,
+    quantileBeads,
+    endpointAnchors,
     isDarkMode,
-    filteredSamples4D.length,
+    filteredSamples4D,
     getCenter,
     plasmaParams.gamma,
     plasmaParams.contrast,
   ]);
 
   /**
-   * Iso-disk: a translucent disk + bright ring perpendicular to the axis at
-   * the slider's current value. Created (and rebuilt) whenever the trajectory
-   * polyline changes; cheaply repositioned on slider drags by the second
-   * effect below. This visually anchors the abstract slider value to a
-   * concrete 3-D location on the gradient.
+   * Slider feedback marker (built once per style/data change).
+   *
+   * Strategy by `axisStyle`:
+   *   cursor
+   *     A prominent plasma-coloured ball with a white halo ring. There is
+   *     NO axis geometry in the scene — this ball is the only visual
+   *     indicator of "where the slider is". Its position is driven by a
+   *     hidden density-grounded trajectory (`cursorPath`) so it stays
+   *     inside the cloud at every slider value, not just at waypoints.
+   *   tube / tube-masked
+   *     A translucent iso-disk + ring, perpendicular to the tube at the
+   *     slider's current value. Re-uses the spline.
+   *   beads
+   *     A small floating sphere that interpolates along the bead chain
+   *     (linear between adjacent beads). The chain itself is what the eye
+   *     reads as the axis, so we don't draw a heavy disk — just a clean
+   *     "cursor" sphere.
+   *   bare
+   *     A small floating sphere interpolated along the (low → high)
+   *     anchor line. No path geometry exists, so the cursor's job is
+   *     mostly "you are here on the axis".
+   *
+   * The build effect creates geometry once per data change; the update
+   * effect below cheaply moves + recolors the marker on every slider drag.
    */
   useEffect(() => {
     if (!sceneRef.current) return;
@@ -619,45 +1064,145 @@ const Visualizer4D: React.FC = () => {
       isoDiskRef.current = null;
     };
     cleanupExisting();
-    if (!trajectoryPoints?.length || trajectoryPoints.length < 2) return;
     if (!semanticState.featureRange) return;
 
     const center =
       filteredSamples4D.length > 0 ? getCenter() : new THREE.Vector3(0, 0, 0);
-    const vertices = trajectoryPoints.map((p) => {
-      const px = typeof p.x === 'number' ? p.x : 0;
-      const py = typeof p.y === 'number' ? p.y : 0;
-      const pz = typeof p.z === 'number' ? p.z : 0;
-      return new THREE.Vector3(
-        (px - center.x) * SCALE_FACTOR,
-        (py - center.y) * SCALE_FACTOR,
-        (pz - center.z) * SCALE_FACTOR
+    const toScene = (p: { x: number; y: number; z: number }) =>
+      new THREE.Vector3(
+        (p.x - center.x) * SCALE_FACTOR,
+        (p.y - center.y) * SCALE_FACTOR,
+        (p.z - center.z) * SCALE_FACTOR
       );
-    });
-    const curve = new THREE.CatmullRomCurve3(vertices, false);
 
-    const diskRadius = 4.6;
-    const diskGeom = new THREE.CircleGeometry(diskRadius, 48);
-    const diskMat = new THREE.MeshBasicMaterial({
-      color: 0xffffff,
-      transparent: true,
-      opacity: 0.18,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    });
-    const disk = new THREE.Mesh(diskGeom, diskMat);
-    disk.renderOrder = 12;
+    // ── Cursor-family styles: build prominent plasma ball + halo +
+    // outer ring. Same geometry for both `cursor` and `cursor-axis`;
+    // only the underlying cursorPath differs. The ball is sized so it's
+    // clearly the focal point in a dense cloud but doesn't dominate the
+    // scene. Driven by the cursorPath in the update effect below.
+    if (isCursorMode) {
+      if (!cursorPath) return;
+      // Inner plasma ball
+      const ballRadius = 2.6;
+      const ballGeom = new THREE.SphereGeometry(ballRadius, 32, 32);
+      const ballMat = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.95,
+        depthTest: true,
+        polygonOffset: true,
+        polygonOffsetFactor: -3,
+        polygonOffsetUnits: 1,
+      });
+      const ball = new THREE.Mesh(ballGeom, ballMat);
+      ball.renderOrder = 14;
+      // Outer halo ring (face-camera billboard maintained in animate loop;
+      // here we just position it; rotation is handled per-frame in update).
+      const haloGeom = new THREE.RingGeometry(ballRadius * 1.5, ballRadius * 1.85, 48);
+      const haloMat = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.85,
+        side: THREE.DoubleSide,
+        depthTest: true,
+        depthWrite: false,
+      });
+      const halo = new THREE.Mesh(haloGeom, haloMat);
+      halo.renderOrder = 13;
 
-    const ringGeom = new THREE.RingGeometry(diskRadius * 0.965, diskRadius, 80);
-    const ringMat = new THREE.MeshBasicMaterial({
-      color: 0xffffff,
-      transparent: true,
-      opacity: 0.95,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    });
-    const ring = new THREE.Mesh(ringGeom, ringMat);
-    ring.renderOrder = 13;
+      const group = new THREE.Group();
+      group.add(ball);
+      group.add(halo);
+      group.visible = false;
+      group.renderOrder = 13;
+      sceneRef.current.add(group);
+      // We re-use the existing ref schema: `disk` = inner ball, `ring` =
+      // halo, `curve` is unused in cursor mode (we route around it).
+      const placeholderCurve = new THREE.CatmullRomCurve3(
+        [new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, 0)],
+        false
+      );
+      isoDiskRef.current = { group, disk: ball, ring: halo, curve: placeholderCurve };
+      return cleanupExisting;
+    }
+
+    // Pick the parametric path the slider rides on for the legacy styles.
+    let curve: THREE.CatmullRomCurve3 | null = null;
+    if ((axisStyle === 'tube' || axisStyle === 'tube-masked') && trajectoryPoints && trajectoryPoints.length >= 2) {
+      curve = new THREE.CatmullRomCurve3(trajectoryPoints.map(toScene), false);
+    } else if (axisStyle === 'beads' && quantileBeads.length >= 2) {
+      // Linear (Centripetal would over-shoot) chain through the beads.
+      curve = new THREE.CatmullRomCurve3(
+        quantileBeads.map((b) => toScene(b)),
+        false,
+        'catmullrom',
+        0
+      );
+    } else if (axisStyle === 'bare' && endpointAnchors) {
+      curve = new THREE.CatmullRomCurve3(
+        [toScene(endpointAnchors.low), toScene(endpointAnchors.high)],
+        false
+      );
+    }
+    if (!curve) return;
+
+    // Tube styles get the original heavyweight iso-disk; the new bead-based
+    // styles get a smaller floating sphere "cursor" instead.
+    const useDisk = axisStyle === 'tube' || axisStyle === 'tube-masked';
+    const diskRadius = useDisk ? 4.6 : 1.4;
+
+    let disk: THREE.Mesh;
+    let ring: THREE.Mesh;
+
+    if (useDisk) {
+      const diskGeom = new THREE.CircleGeometry(diskRadius, 48);
+      const diskMat = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.18,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+      disk = new THREE.Mesh(diskGeom, diskMat);
+      disk.renderOrder = 12;
+
+      const ringGeom = new THREE.RingGeometry(diskRadius * 0.965, diskRadius, 80);
+      const ringMat = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.95,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+      ring = new THREE.Mesh(ringGeom, ringMat);
+      ring.renderOrder = 13;
+    } else {
+      // Cursor sphere + bright outline ring (perpendicular ring kept so the
+      // depth cue is consistent across modes).
+      const sphereGeom = new THREE.SphereGeometry(diskRadius, 24, 24);
+      const sphereMat = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.95,
+        depthTest: true,
+        polygonOffset: true,
+        polygonOffsetFactor: -3,
+        polygonOffsetUnits: 1,
+      });
+      disk = new THREE.Mesh(sphereGeom, sphereMat);
+      disk.renderOrder = 13;
+
+      const ringGeom = new THREE.RingGeometry(diskRadius * 1.45, diskRadius * 1.7, 32);
+      const ringMat = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.9,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+      ring = new THREE.Mesh(ringGeom, ringMat);
+      ring.renderOrder = 13;
+    }
 
     const group = new THREE.Group();
     group.add(disk);
@@ -668,46 +1213,147 @@ const Visualizer4D: React.FC = () => {
     isoDiskRef.current = { group, disk, ring, curve };
 
     return cleanupExisting;
-  }, [trajectoryPoints, filteredSamples4D.length, getCenter, semanticState.featureRange]);
+  }, [
+    axisStyle,
+    trajectoryPoints,
+    quantileBeads,
+    endpointAnchors,
+    cursorPath,
+    filteredSamples4D.length,
+    getCenter,
+    semanticState.featureRange,
+  ]);
 
   /**
-   * Cheap update path: position + orient + recolor the iso-disk whenever the
-   * slider value changes. No geometry/material allocation here so dragging
-   * the slider is smooth.
+   * Cheap update path: position + orient + recolor the slider marker on
+   * every slider drag without allocating geometry/material.
+   *
+   * In `cursor` mode we don't use the ref's stored curve. The position
+   * is computed directly from the dense, hidden cursor path so the ball
+   * stays inside the cloud at every slider value (the path's centroids
+   * are guaranteed to live in dense regions).
+   *
+   * In `beads` mode we also scale the bead nearest to the slider so the
+   * user sees which waypoint they're sitting on. Other beads relax back
+   * to baseline size.
    */
   useEffect(() => {
     const ref = isoDiskRef.current;
-    if (!ref) return;
     const fr = semanticState.featureRange;
     const sliderValue = semanticState.semanticSliderValue;
-    if (!fr || sliderValue == null || !Number.isFinite(sliderValue)) {
-      ref.group.visible = false;
-      return;
+    const haveSlider = fr != null && sliderValue != null && Number.isFinite(sliderValue);
+    const span = fr ? fr.max - fr.min : 0;
+    const t = haveSlider && span > 0 ? Math.max(0, Math.min(1, (sliderValue! - fr!.min) / span)) : 0.5;
+
+    if (ref) {
+      if (!haveSlider) {
+        ref.group.visible = false;
+      } else if (isCursorMode) {
+        // Sample the hidden density-grounded path; transform to scene space.
+        const c = filteredSamples4D.length > 0 ? getCenter() : new THREE.Vector3(0, 0, 0);
+        const raw = cursorPath ? evaluateCursorPath(cursorPath, sliderValue!) : null;
+        if (!raw) {
+          ref.group.visible = false;
+        } else {
+          ref.group.position.set(
+            (raw.x - c.x) * SCALE_FACTOR,
+            (raw.y - c.y) * SCALE_FACTOR,
+            (raw.z - c.z) * SCALE_FACTOR
+          );
+          // Halo: billboard toward the camera so it always reads as a ring.
+          if (cameraRef.current) {
+            const lookAt = ref.group.position
+              .clone()
+              .add(cameraRef.current.position.clone().sub(ref.group.position));
+            ref.ring.lookAt(lookAt);
+          }
+          // Ball stays bright white (high contrast cursor); halo takes the
+          // plasma colour at the slider's normalised position so users can
+          // read the feature value off the cursor itself.
+          const cc = plasmaAtT(t, plasmaParams.gamma, plasmaParams.contrast);
+          const adapted = isDarkMode ? adaptColorForDarkTheme(cc.r, cc.g, cc.b) : cc;
+          (ref.disk.material as THREE.MeshBasicMaterial).color.setRGB(1, 1, 1);
+          (ref.ring.material as THREE.MeshBasicMaterial).color.setRGB(adapted.r, adapted.g, adapted.b);
+          ref.group.visible = true;
+        }
+      } else {
+        const pos = ref.curve.getPoint(t);
+        ref.group.position.copy(pos);
+        if (axisStyle === 'tube' || axisStyle === 'tube-masked') {
+          const tangent = ref.curve.getTangent(t).normalize();
+          if (tangent.lengthSq() > 1e-6) {
+            const up = new THREE.Vector3(0, 0, 1);
+            const quat = new THREE.Quaternion().setFromUnitVectors(up, tangent);
+            ref.group.quaternion.copy(quat);
+          }
+        } else {
+          // Billboard-ish: keep ring facing roughly the camera by clearing
+          // rotation; OrbitControls will reveal it fine for typical angles.
+          ref.group.quaternion.identity();
+        }
+        const c = plasmaAtT(t, plasmaParams.gamma, plasmaParams.contrast);
+        const adapted = isDarkMode ? adaptColorForDarkTheme(c.r, c.g, c.b) : c;
+        (ref.disk.material as THREE.MeshBasicMaterial).color.setRGB(adapted.r, adapted.g, adapted.b);
+        (ref.ring.material as THREE.MeshBasicMaterial).color.setRGB(adapted.r, adapted.g, adapted.b);
+        ref.group.visible = true;
+      }
     }
-    const span = fr.max - fr.min;
-    const t = span > 0 ? Math.max(0, Math.min(1, (sliderValue - fr.min) / span)) : 0.5;
-    const pos = ref.curve.getPoint(t);
-    const tangent = ref.curve.getTangent(t).normalize();
-    ref.group.position.copy(pos);
-    if (tangent.lengthSq() > 1e-6) {
-      const up = new THREE.Vector3(0, 0, 1);
-      const quat = new THREE.Quaternion().setFromUnitVectors(up, tangent);
-      ref.group.quaternion.copy(quat);
+
+    // Bead emphasis: in beads mode, scale the closest bead up and others
+    // back to normal so users see which waypoint they're aligned with.
+    const group = trajectoryLineRef.current;
+    if (group && axisStyle === 'beads' && quantileBeads.length > 0 && haveSlider) {
+      // Find the bead with the closest `t` to the slider's normalized value.
+      let bestIdx = 0;
+      let bestDist = Infinity;
+      for (let i = 0; i < quantileBeads.length; i++) {
+        const d = Math.abs(quantileBeads[i].t - t);
+        if (d < bestDist) {
+          bestDist = d;
+          bestIdx = i;
+        }
+      }
+      let beadCount = 0;
+      group.traverse((child) => {
+        const m = child as THREE.Mesh & { userData?: Record<string, unknown> };
+        if (m.userData?.type !== 'axisBead') return;
+        const isActive = beadCount === bestIdx;
+        m.scale.setScalar(isActive ? 1.45 : 0.9);
+        const mat = m.material as THREE.MeshBasicMaterial;
+        mat.opacity = isActive ? 1.0 : 0.55;
+        beadCount++;
+      });
+    } else if (group && axisStyle === 'beads') {
+      // No slider yet: relax all beads to baseline.
+      group.traverse((child) => {
+        const m = child as THREE.Mesh & { userData?: Record<string, unknown> };
+        if (m.userData?.type !== 'axisBead') return;
+        m.scale.setScalar(1);
+        const mat = m.material as THREE.MeshBasicMaterial;
+        mat.opacity = 0.95;
+      });
     }
-    const c = plasmaAtT(t, plasmaParams.gamma, plasmaParams.contrast);
-    const adapted = isDarkMode ? adaptColorForDarkTheme(c.r, c.g, c.b) : c;
-    (ref.disk.material as THREE.MeshBasicMaterial).color.setRGB(adapted.r, adapted.g, adapted.b);
-    (ref.ring.material as THREE.MeshBasicMaterial).color.setRGB(adapted.r, adapted.g, adapted.b);
-    ref.group.visible = true;
   }, [
     semanticState.semanticSliderValue,
     semanticState.featureRange,
+    axisStyle,
+    quantileBeads,
+    cursorPath,
+    filteredSamples4D.length,
+    getCenter,
     isDarkMode,
     plasmaParams.gamma,
     plasmaParams.contrast,
   ]);
 
+  // "Trajectory active" controls the slight cloud dim that helps axis
+  // elements (tube / beads / cursor ball) pop. In either cursor mode we
+  // have no path geometry — but we still want the dim while semantic
+  // mode is engaged on a feature, so the cursor ball reads as the focal
+  // element.
   const trajectoryActive =
+    (isCursorMode &&
+      Boolean(semanticState.advancedMode && semanticState.selectedFeature && cursorPath)) ||
     Boolean(semanticState.advancedMode && semanticState.selectedFeature && trajectoryPoints?.length) ||
     Boolean(selectedSample && semanticState.projectedPosition);
 
@@ -720,13 +1366,16 @@ const Visualizer4D: React.FC = () => {
    */
   const axisFadeFactors = React.useMemo<Float32Array | null>(() => {
     if (!useFeatureColoring) return null;
+    // Either cursor mode hides the axis polyline; fading the cloud by
+    // distance to a hidden polyline would be visually arbitrary.
+    if (isCursorMode) return null;
     if (!trajectoryPoints || trajectoryPoints.length < 2) return null;
     if (!filteredSamples4D.length) return null;
     const dist = computeDistancesToPolyline(filteredSamples4D, trajectoryPoints);
     // Tighter band: ~half the cloud closest to the axis stays at full
     // brightness; only the outermost ~5% reach the dimmest level.
     return buildFadeFactors(dist, 0.5, 0.95);
-  }, [trajectoryPoints, filteredSamples4D, useFeatureColoring]);
+  }, [trajectoryPoints, filteredSamples4D, useFeatureColoring, isCursorMode]);
 
   /**
    * Gentle k-NN spatial smoothing of the active feature's values across the
@@ -875,9 +1524,16 @@ const Visualizer4D: React.FC = () => {
     plasmaParams.contrast,
   ]);
 
-  // Highlight position: projected (semantic, already in scene space from API) or selected sample
+  // Highlight position: projected (semantic, already in scene space from API)
+  // or selected sample.
+  //
+  // In `cursor` axis style we deliberately ignore `projectedPosition`. The
+  // slider's 3D feedback is the dedicated cursor ball, so showing a
+  // separate projection-driven highlight here would double-up as two
+  // balls. We still honour `selectedSample` so click-to-select keeps
+  // working unchanged.
   useEffect(() => {
-    const proj = semanticState.projectedPosition;
+    const proj = isCursorMode ? null : semanticState.projectedPosition;
     const pos = proj
       ? new THREE.Vector3(proj.x, proj.y, proj.z)
       : selectedSample
@@ -962,6 +1618,7 @@ const Visualizer4D: React.FC = () => {
       }
     }
   }, [
+    axisStyle,
     semanticState.projectedPosition,
     semanticState.semanticSliderValue,
     semanticState.featureRange,
@@ -990,6 +1647,18 @@ const Visualizer4D: React.FC = () => {
 
   const handleSemanticSliderChange = useCallback(
     (_pointIndex: number, targetValue: number) => {
+      // Cursor-family styles: the slider's 3D feedback is the cursor
+      // ball, not a backend projection. Skip the API round-trip entirely
+      // AND clear any stale projectedPosition so the old highlight ball
+      // doesn't linger.
+      if (isCursorMode) {
+        setSemanticState((s) => ({
+          ...s,
+          projectedPosition: null,
+          projectedConfidence: null,
+        }));
+        return;
+      }
       let embeddingIndex = -1;
       if (selectedSample) {
         embeddingIndex = sampleIdToEmbeddingIndex.get(selectedSample.id) ?? -1;
@@ -1031,7 +1700,7 @@ const Visualizer4D: React.FC = () => {
           console.error('[semantic] API error', err);
         });
     },
-    [selectedSample, samples4D, semanticState.selectedFeature, datasetVersion, setSemanticState, apiEmbeddingCount, getCenter, sampleIdToEmbeddingIndex, selectedPointIndex, filteredSamples4D]
+    [isCursorMode, selectedSample, samples4D, semanticState.selectedFeature, datasetVersion, setSemanticState, apiEmbeddingCount, getCenter, sampleIdToEmbeddingIndex, selectedPointIndex, filteredSamples4D]
   );
 
   // Initial projection when the axis is enabled or the feature changes — once

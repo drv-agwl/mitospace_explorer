@@ -1,6 +1,25 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useMemo, ReactNode } from 'react';
-import { Sample, ColoringMode, VisualizerOptions, RenderingMode, LabelVisibility, PerformanceMode, SemanticState, DatasetVersion } from '../types';
+import { Sample, ColoringMode, VisualizerOptions, RenderingMode, LabelVisibility, PerformanceMode, SemanticState, AxisStyle, DatasetVersion } from '../types';
 import { samples2D, samples4D as samples4DV1, loadSamples4DV3 } from '../data/sampleData';
+
+// Persist the user's preferred 3D axis representation across reloads so the
+// A/B comparison sticks. Default = 'cursor' (no axis geometry; a smooth
+// ball traverses the cloud).
+// Key is versioned so that adding a new recommended default migrates users
+// off any prior pinned choice. Bump suffix when shipping a new default.
+const AXIS_STYLE_STORAGE_KEY = 'mitospace.axisStyle.v3';
+const initialAxisStyle: AxisStyle = (() => {
+  if (typeof window === 'undefined') return 'cursor-axis';
+  const saved = window.localStorage?.getItem(AXIS_STYLE_STORAGE_KEY);
+  return saved === 'cursor' ||
+    saved === 'cursor-axis' ||
+    saved === 'beads' ||
+    saved === 'tube' ||
+    saved === 'tube-masked' ||
+    saved === 'bare'
+    ? (saved as AxisStyle)
+    : 'cursor-axis';
+})();
 
 const initialSemanticState: SemanticState = {
   advancedMode: false,
@@ -9,6 +28,7 @@ const initialSemanticState: SemanticState = {
   projectedPosition: null,
   projectedConfidence: null,
   featureRange: null,
+  axisStyle: initialAxisStyle,
 };
 
 interface SampleContextType {
@@ -85,6 +105,18 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     pointSize: initialDatasetVersion === 'v3' ? 1.0 : 1.5,
   }));
   const [semanticState, setSemanticState] = useState<SemanticState>(initialSemanticState);
+  // Persist `axisStyle` changes to localStorage so the A/B preference survives
+  // reloads (only the field we care about — avoids churning storage on every
+  // slider drag).
+  useEffect(() => {
+    const style = semanticState.axisStyle;
+    if (!style) return;
+    try {
+      window.localStorage?.setItem(AXIS_STYLE_STORAGE_KEY, style);
+    } catch {
+      // ignore (private mode, quota, etc.)
+    }
+  }, [semanticState.axisStyle]);
   const [featureValues, setFeatureValuesState] = useState<Record<string, number[]>>({});
   const [apiEmbeddingCount, setApiEmbeddingCount] = useState<number | null>(null);
   const setFeatureValues = useCallback((feature: string, values: number[]) => {
@@ -131,7 +163,11 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     // When switching datasets, drop point-specific state (indices won't align)
     setSelectedSample(null);
     setSelectedPointIndex(null);
-    setSemanticState(initialSemanticState);
+    setSemanticState((prev) => ({
+      ...initialSemanticState,
+      // Preserve the user's chosen axis-style across dataset switches.
+      axisStyle: prev.axisStyle ?? initialSemanticState.axisStyle,
+    }));
     setFeatureValuesState({});
     setApiEmbeddingCount(null);
   }, []);

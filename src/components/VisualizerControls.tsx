@@ -7,7 +7,9 @@ import {
   X,
   Crosshair,
   AlertTriangle,
+  FlaskConical,
 } from 'lucide-react';
+import type { AxisStyle } from '../types';
 import { useSample } from '../context/SampleContext';
 import { getFeatureStats, getFeatureValues, healthCheck } from '../api/client';
 import { findNearestSampleIndex } from './SemanticAxisPreview';
@@ -212,6 +214,47 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
     ? getFeatureDisplayLabel(selectedFeature, datasetVersion)
     : null;
 
+  // ─── Axis-style A/B switch ─────────────────────────────────────────────
+  // Temporary control (behind a `BETA` chip) for picking the 3D
+  // representation of the semantic axis. Persisted via SampleContext
+  // (localStorage) so the choice survives reloads. Will be retired once we
+  // settle on one representation.
+  const axisStyle: AxisStyle = semanticState.axisStyle ?? 'cursor-axis';
+  const axisStyleOptions: Array<{ id: AxisStyle; label: string; tip: string }> = [
+    {
+      id: 'cursor',
+      label: 'Cursor',
+      tip: 'No axis geometry. A plasma-coloured ball traverses the cloud, riding a hidden density-grounded trajectory so it always stays inside dense regions.',
+    },
+    {
+      id: 'cursor-axis',
+      label: 'Cursor + Axis',
+      tip: 'Same ball UI, but its waypoints are the cells nearest to the backend\u2019s learnt feature axis. Adjacent waypoints are sorted by feature value, so motion through contiguous regions is noticeably smoother — fewer cluster-to-cluster jumps. (Recommended)',
+    },
+    {
+      id: 'beads',
+      label: 'Beads',
+      tip: 'Discrete waypoints anchored to cell centroids at evenly spaced quantiles. Connector fades through empty regions.',
+    },
+    {
+      id: 'tube-masked',
+      label: 'Faded curve',
+      tip: 'Original curve, but its opacity is gated by local cell density — segments that pass through empty UMAP regions fade out.',
+    },
+    {
+      id: 'tube',
+      label: 'Curve',
+      tip: 'Original Catmull-Rom spline through smoothed bin centroids. Can pass through empty regions.',
+    },
+    {
+      id: 'bare',
+      label: 'Minimal',
+      tip: 'No path geometry. Two endpoint anchors (low / high) + the point colors do all the talking.',
+    },
+  ];
+  const setAxisStyle = (next: AxisStyle) =>
+    setSemanticState((s) => ({ ...s, axisStyle: next }));
+
   // -------------------------------------------------------------------------
   // Render
   // -------------------------------------------------------------------------
@@ -401,6 +444,48 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
               />
             )}
           </div>
+
+          {/* ─── Axis-style A/B switcher (temporary BETA) ─────────────────
+              Segmented control to compare the four 3D representations of
+              the semantic axis. The current `Beads` style avoids the
+              "curve floating through empty UMAP regions" issue of the
+              original `Curve` style. */}
+          {selectedFeature && (
+            <div
+              className="inline-flex items-center gap-1.5 h-9 px-1.5 rounded-lg bg-white/[0.04] border border-white/[0.08] shrink-0"
+              role="radiogroup"
+              aria-label="Axis representation style (experimental)"
+              title="Pick how the semantic axis is drawn in 3D (experimental)"
+            >
+              <FlaskConical size={12} className="text-amber-300/80 shrink-0 ml-0.5" />
+              <span className="text-[10px] font-semibold tracking-wider uppercase text-amber-300/80 shrink-0">
+                Beta
+              </span>
+              <span className="text-[11px] text-white/45 shrink-0 ml-0.5">Style</span>
+              <div className="inline-flex items-center gap-0.5 ml-1">
+                {axisStyleOptions.map((opt) => {
+                  const active = axisStyle === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      onClick={() => setAxisStyle(opt.id)}
+                      title={opt.tip}
+                      className={`px-2 h-6 rounded-md text-[11px] font-medium transition-colors ${
+                        active
+                          ? 'bg-white/15 text-white border border-white/25'
+                          : 'text-white/65 hover:text-white hover:bg-white/[0.06] border border-transparent'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Show / hide samples-along-axis */}
           {selectedFeature && (

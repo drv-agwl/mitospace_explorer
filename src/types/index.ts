@@ -42,6 +42,20 @@ export interface VisualizerProps {
 export type ColoringMode = 'treatment' | 'phenotype';
 export type RenderingMode = 'points' | 'instanced';
 
+/**
+ * How the semantic axis is drawn in 3D space. Temporary A/B switch while we
+ * pick the best representation. Default is `cursor`: no path geometry at
+ * all — only a smoothly-moving plasma-coloured ball traverses the cloud,
+ * driven by a hidden density-grounded trajectory.
+ */
+export type AxisStyle =
+  | 'cursor'
+  | 'cursor-axis'
+  | 'beads'
+  | 'tube-masked'
+  | 'tube'
+  | 'bare';
+
 export interface SemanticState {
   advancedMode: boolean;
   selectedFeature: string | null;
@@ -52,6 +66,8 @@ export interface SemanticState {
   featureRange: { min: number; max: number } | null;
   /** Show 5 samples uniformly spread along the axis */
   axisSamplesVisible?: boolean;
+  /** Active 3D representation of the semantic axis. */
+  axisStyle?: AxisStyle;
 }
 
 export interface FeatureOption {
