@@ -407,7 +407,8 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({
                   selectedFeature: apiName,
                   projectedPosition: null,
                   projectedConfidence: null,
-                  axisSamplesVisible: false,
+                  // Same default as turning semantic axis on: show the strip for the new feature.
+                  axisSamplesVisible: true,
                 }));
               }}
               disabled={featureLoading}
