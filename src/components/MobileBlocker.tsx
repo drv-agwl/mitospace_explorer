@@ -87,14 +87,12 @@ const MobileBlocker: React.FC<{ children: React.ReactNode }> = ({ children }) =>
               <NarrowViewportMascot className="w-[200px] h-[100px] text-white" />
             </div>
             <h1 className="text-2xl font-bold text-white mb-2 leading-snug">
-              Your window got a little..... punctate :(
+              This window got a little... punctate :(
             </h1>
             <p className="text-white/65 text-sm leading-relaxed">
-              We only look at how wide the browser window is, not whether you are on a phone or a
-              computer. The 3D explorer and side panels need about{' '}
+              The 3D explorer needs at least{' '}
               <span className="text-white/90 font-medium tabular-nums">{MIN_VIEWPORT_WIDTH_PX}px</span>{' '}
-              across. Anything narrower hits this screen instead (a wide phone in landscape can pass; a
-              skinny window on a desktop will not).
+              of horizontal space. Widen the window, go full screen, or try a larger display.
             </p>
           </div>
 
@@ -106,36 +104,14 @@ const MobileBlocker: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                 </div>
               </div>
               <div>
-                <h2 className="text-white font-semibold mb-1">What to do</h2>
+                <h2 className="text-white font-semibold mb-1">Give it some space</h2>
                 <p className="text-white/55 text-sm leading-relaxed">
-                  Widen the window, pop out full screen, or switch to a display that’s at least{' '}
-                  {MIN_VIEWPORT_WIDTH_PX}px across. Come back when you’ve got room. We’ll load the same
-                  page.
+                  A wide tablet in landscape may work, but a skinny desktop window probably won’t.
+                  Your page will load normally once there’s enough room.
                 </p>
               </div>
             </div>
           </div>
-
-          <ul className="space-y-2 text-xs text-white/45 text-left list-none pl-0">
-            <li className="flex gap-2">
-              <span className="text-sky-400/80 shrink-0" aria-hidden>
-                →
-              </span>
-              <span>3D + side panels refuse the “postage stamp” lifestyle.</span>
-            </li>
-            <li className="flex gap-2">
-              <span className="text-sky-400/80 shrink-0" aria-hidden>
-                →
-              </span>
-              <span>Your thumb is talented; our sliders are needy.</span>
-            </li>
-            <li className="flex gap-2">
-              <span className="text-sky-400/80 shrink-0" aria-hidden>
-                →
-              </span>
-              <span>Bookmark this tab. Widening counts as self care.</span>
-            </li>
-          </ul>
         </div>
 
         <p className="text-center mt-8 text-white/35 text-xs">
