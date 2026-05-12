@@ -37,8 +37,10 @@ const SCALE_FACTOR = 4;
  * Default orbit camera for v3 — elevated “mostly top-down” view (main mass
  * dominant, satellites visible along XZ like the UX reference screenshot).
  * Slight X/Z offsets keep mild perspective instead of pure nadir Y.
+ *
+ * To match an Open3D Visualizer export later, see `open3dKeyframeToOrbitCamera`
+ * in `utils/open3dViewTrajectory.ts`.
  */
-// ~11% closer to target than prior framing (same view direction).
 const V3_DEFAULT_CAMERA = { x: -25, y: -0, z: -100 };
 
 function v1DiagonalCameraCoord(): number {
@@ -90,6 +92,8 @@ const Visualizer4D: React.FC = () => {
   } | null>(null);
   const gridRef = useRef<THREE.GridHelper | null>(null);
   const grid2Ref = useRef<THREE.GridHelper | null>(null);
+  /** Mean xyz (embedding space) from the last point-cloud build; used to pan camera when filtering re-centroids the cloud. */
+  const prevEmbeddingCentroidRef = useRef<THREE.Vector3 | null>(null);
 
   const [trajectoryPoints, setTrajectoryPoints] = useState<Array<{ x: number; y: number; z: number }> | null>(null);
 
@@ -447,6 +451,11 @@ const Visualizer4D: React.FC = () => {
     cameraRef.current.lookAt(0, 0, 0);
     controlsRef.current.target.set(0, 0, 0);
     controlsRef.current.update();
+  }, [datasetVersion]);
+
+  // New dataset → first filtered rebuild should not compensate camera against old centroid.
+  useEffect(() => {
+    prevEmbeddingCentroidRef.current = null;
   }, [datasetVersion]);
 
   // Update scene background and lighting when dark mode changes
@@ -1433,7 +1442,10 @@ const Visualizer4D: React.FC = () => {
   // Update visualization when samples or options change; fade points when trajectory/selection is active
   useEffect(() => {
     if (!sceneRef.current) return;
-    if (!filteredSamples4D?.length) return;
+    if (!filteredSamples4D?.length) {
+      prevEmbeddingCentroidRef.current = null;
+      return;
+    }
 
     setPointCount(filteredSamples4D.length);
     if (pointsRef.current && sceneRef.current) {
@@ -1442,6 +1454,18 @@ const Visualizer4D: React.FC = () => {
     }
 
     const center = getCenter();
+    // Re-centering the cloud in scene space when the filter changes is equivalent
+    // to translating all points by (prevCenter − center) * SCALE_FACTOR; move the
+    // camera + orbit target by the same vector so the framing stays stable.
+    const prevC = prevEmbeddingCentroidRef.current;
+    if (prevC && cameraRef.current && controlsRef.current) {
+      const shift = new THREE.Vector3().subVectors(prevC, center).multiplyScalar(SCALE_FACTOR);
+      cameraRef.current.position.add(shift);
+      controlsRef.current.target.add(shift);
+      controlsRef.current.update();
+    }
+    prevEmbeddingCentroidRef.current = center.clone();
+
     const geometry = new THREE.BufferGeometry();
     const positions = new Float32Array(filteredSamples4D.length * 3);
     const colors = new Float32Array(filteredSamples4D.length * 3);
