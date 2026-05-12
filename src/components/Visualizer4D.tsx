@@ -48,6 +48,85 @@ function v1DiagonalCameraCoord(): number {
   return initDist / Math.sqrt(3);
 }
 
+/** Reused for dense point picking (avoid per-click allocations). */
+const pickWorldP = new THREE.Vector3();
+const pickViewP = new THREE.Vector3();
+const pickNdc = new THREE.Vector3();
+
+/**
+ * Pick the point whose drawn sprite is closest to the click (CSS pixels).
+ *
+ * `PointsMaterial` + `sizeAttenuation: true` renders each sample at
+ *   gl_PointSize = pointSize * (canvasHeightDevice / 2) / -viewZ
+ * → CSS-pixel diameter = pointSize * cssHeight / (2 * viewZ).
+ *
+ * We compute that exact radius per point and accept any vertex whose
+ * **projected center** is within `radius + slack` CSS pixels of the click.
+ * Among candidates the **screen-closest** wins (matches the user's visual
+ * intent); ties within 1.5 px fall through to camera-near. This avoids the
+ * trap where the front-most point in a stack wins even when the user's
+ * click is clearly inside the back disk.
+ */
+function pickFilteredPointIndexFromPointer(
+  clientX: number,
+  clientY: number,
+  rect: DOMRect,
+  camera: THREE.PerspectiveCamera,
+  posAttr: THREE.BufferAttribute,
+  count: number,
+  pointSizeWorld: number
+): number {
+  const w = Math.max(1, rect.width);
+  const h = Math.max(1, rect.height);
+  const cx = clientX - rect.left;
+  const cy = clientY - rect.top;
+  camera.updateMatrixWorld();
+
+  // Empty-cursor slack so the user can miss the disk by a few pixels.
+  const SLACK_PX = 4;
+  // Tiny far-away sprites become hard to hit; clamp at 6 px floor.
+  const MIN_RADIUS_PX = 6;
+  // Treat near-zero-pointSize gracefully.
+  const sizeMul = pointSizeWorld * h * 0.25; // = pointSize * h / 4
+
+  let bestIdx = -1;
+  let bestScreenDist = Infinity;
+  let bestViewZ = Infinity;
+
+  for (let i = 0; i < count; i++) {
+    pickWorldP.fromBufferAttribute(posAttr, i);
+
+    // View-space Z drives BOTH culling AND the drawn pixel size.
+    pickViewP.copy(pickWorldP).applyMatrix4(camera.matrixWorldInverse);
+    const viewZ = -pickViewP.z;
+    if (viewZ < camera.near || viewZ > camera.far) continue;
+
+    // Project to NDC, then to CSS pixels.
+    pickNdc.copy(pickWorldP).project(camera);
+    if (pickNdc.x < -1.05 || pickNdc.x > 1.05 || pickNdc.y < -1.05 || pickNdc.y > 1.05) continue;
+    const sx = (pickNdc.x + 1) * 0.5 * w;
+    const sy = (1 - pickNdc.y) * 0.5 * h;
+    const dx = sx - cx;
+    const dy = sy - cy;
+    const screenDist = Math.hypot(dx, dy);
+
+    // Exact CSS-pixel radius of what's actually drawn at this depth.
+    const drawnRadiusPx = sizeMul / viewZ;
+    const hitRadius = Math.max(MIN_RADIUS_PX, drawnRadiusPx + SLACK_PX);
+    if (screenDist > hitRadius) continue;
+
+    if (
+      screenDist < bestScreenDist - 1.5 ||
+      (Math.abs(screenDist - bestScreenDist) <= 1.5 && viewZ < bestViewZ)
+    ) {
+      bestScreenDist = screenDist;
+      bestViewZ = viewZ;
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
+}
+
 const Visualizer4D: React.FC = () => {
   const {
     filteredSamples4D,
@@ -77,10 +156,12 @@ const Visualizer4D: React.FC = () => {
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
   const pointsRef = useRef<THREE.Points | null>(null);
-  const raycasterRef = useRef<THREE.Raycaster>(new THREE.Raycaster());
-  const mouseRef = useRef<THREE.Vector2>(new THREE.Vector2());
   const selectedPointMeshRef = useRef<THREE.Mesh | null>(null);
   const targetHighlightPosRef = useRef<THREE.Vector3 | null>(null);
+  /** Hover indicator ring: shows which point a click would select. */
+  const hoverRingRef = useRef<THREE.Mesh | null>(null);
+  const hoverFrameQueuedRef = useRef(false);
+  const lastPointerCssRef = useRef<{ x: number; y: number } | null>(null);
   const selectedSampleIdRef = useRef<string | null>(null);
   const trajectoryLineRef = useRef<THREE.Group | null>(null);
   // Iso-disk that hovers at the slider's position along the axis.
@@ -326,7 +407,25 @@ const Visualizer4D: React.FC = () => {
     grid2Mat.transparent = true;
     scene.add(grid2);
     grid2Ref.current = grid2;
-    
+
+    // Hover preview ring: thin wireframe circle billboarded toward the camera
+    // showing which point the next click will select. Lives forever, scaled
+    // per-frame to track sprite size.
+    const hoverGeom = new THREE.RingGeometry(0.85, 1, 48);
+    const hoverMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.95,
+      side: THREE.DoubleSide,
+      depthTest: false,
+      depthWrite: false,
+    });
+    const hoverRing = new THREE.Mesh(hoverGeom, hoverMat);
+    hoverRing.renderOrder = 20;
+    hoverRing.visible = false;
+    scene.add(hoverRing);
+    hoverRingRef.current = hoverRing;
+
     // FPS counter setup
     let frameCount = 0;
     let lastTime = performance.now();
@@ -435,6 +534,12 @@ const Visualizer4D: React.FC = () => {
         grid2Ref.current.geometry.dispose();
         (grid2Ref.current.material as THREE.Material).dispose();
         grid2Ref.current = null;
+      }
+      if (hoverRingRef.current && sceneRef.current) {
+        sceneRef.current.remove(hoverRingRef.current);
+        hoverRingRef.current.geometry.dispose();
+        (hoverRingRef.current.material as THREE.Material).dispose();
+        hoverRingRef.current = null;
       }
     };
   }, []);
@@ -1778,16 +1883,71 @@ const Visualizer4D: React.FC = () => {
     pointerMovedRef.current = false;
   }, []);
 
+  const updateHoverPreview = useCallback(() => {
+    hoverFrameQueuedRef.current = false;
+    const pos = lastPointerCssRef.current;
+    const container = containerRef.current;
+    const cam = cameraRef.current;
+    const pts = pointsRef.current;
+    const ring = hoverRingRef.current;
+    if (!pos || !container || !cam || !pts || !ring) return;
+
+    // While the user is rotating/dragging, hide hover — they aren't targeting.
+    if (pointerDownRef.current && pointerMovedRef.current) {
+      ring.visible = false;
+      return;
+    }
+    const rect = container.getBoundingClientRect();
+    const posAttr = pts.geometry.getAttribute('position') as THREE.BufferAttribute;
+    const count = Math.min(posAttr.count, filteredSamples4D.length);
+    const idx = pickFilteredPointIndexFromPointer(
+      pos.x,
+      pos.y,
+      rect,
+      cam,
+      posAttr,
+      count,
+      visualizerOptions.pointSize
+    );
+    if (idx < 0) {
+      ring.visible = false;
+      return;
+    }
+    ring.position.set(posAttr.getX(idx), posAttr.getY(idx), posAttr.getZ(idx));
+    // Scale ring with the drawn sprite size so it always frames the disk.
+    pickViewP.set(ring.position.x, ring.position.y, ring.position.z).applyMatrix4(cam.matrixWorldInverse);
+    const viewZ = Math.max(1e-3, -pickViewP.z);
+    const drawnRadiusPx = (visualizerOptions.pointSize * rect.height * 0.25) / viewZ;
+    // Convert pixels back to world units at this depth for the ring radius.
+    const worldPerPx = (2 * Math.tan(THREE.MathUtils.degToRad(cam.fov) * 0.5) * viewZ) / rect.height;
+    const ringWorldRadius = (drawnRadiusPx + 5) * worldPerPx;
+    ring.scale.setScalar(Math.max(0.4, ringWorldRadius));
+    // Billboard toward camera so the ring always reads as a circle.
+    ring.lookAt(cam.position);
+    ring.visible = true;
+  }, [filteredSamples4D.length, visualizerOptions.pointSize]);
+
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
     if (pointerDownRef.current && !pointerMovedRef.current) {
       const dx = e.clientX - pointerDownRef.current.x;
       const dy = e.clientY - pointerDownRef.current.y;
       if (Math.sqrt(dx * dx + dy * dy) > 5) pointerMovedRef.current = true;
     }
-  }, []);
+    lastPointerCssRef.current = { x: e.clientX, y: e.clientY };
+    if (!hoverFrameQueuedRef.current) {
+      hoverFrameQueuedRef.current = true;
+      requestAnimationFrame(updateHoverPreview);
+    }
+  }, [updateHoverPreview]);
 
   const handlePointerUp = useCallback(() => {
     pointerDownRef.current = null;
+  }, []);
+
+  const handlePointerLeave = useCallback(() => {
+    pointerDownRef.current = null;
+    lastPointerCssRef.current = null;
+    if (hoverRingRef.current) hoverRingRef.current.visible = false;
   }, []);
 
   const handleClick = (event: React.MouseEvent) => {
@@ -1796,26 +1956,33 @@ const Visualizer4D: React.FC = () => {
       pointerMovedRef.current = false;
       return;
     }
+
     const rect = containerRef.current.getBoundingClientRect();
-    mouseRef.current.x = ((event.clientX - rect.left) / containerRef.current.clientWidth) * 2 - 1;
-    mouseRef.current.y = -((event.clientY - rect.top) / containerRef.current.clientHeight) * 2 + 1;
-    raycasterRef.current.setFromCamera(mouseRef.current, cameraRef.current);
-    const intersects = raycasterRef.current.intersectObject(pointsRef.current);
-    if (intersects.length > 0) {
-      const index = intersects[0].index;
-      if (typeof index === 'number' && index < filteredSamples4D.length) {
-        setSelectedPointIndex(index);
-        setSelectedSample(filteredSamples4D[index]);
-        setSemanticState((s) => ({ ...s, projectedPosition: null, projectedConfidence: null }));
-      }
+    const geo = pointsRef.current.geometry;
+    const posAttr = geo.getAttribute('position') as THREE.BufferAttribute;
+    const count = Math.min(posAttr.count, filteredSamples4D.length);
+    const pointSizeWorld = visualizerOptions.pointSize;
+
+    const bestIdx = pickFilteredPointIndexFromPointer(
+      event.clientX,
+      event.clientY,
+      rect,
+      cameraRef.current,
+      posAttr,
+      count,
+      pointSizeWorld
+    );
+
+    if (bestIdx >= 0) {
+      setSelectedPointIndex(bestIdx);
+      setSelectedSample(filteredSamples4D[bestIdx]);
+      setSemanticState((s) => ({ ...s, projectedPosition: null, projectedConfidence: null }));
+    } else if (dropdownCloseInProgressRef.current) {
+      dropdownCloseInProgressRef.current = false;
     } else {
-      if (dropdownCloseInProgressRef.current) {
-        dropdownCloseInProgressRef.current = false;
-      } else {
-        setSelectedSample(null);
-        setSelectedPointIndex(null);
-        setSemanticState((s) => ({ ...s, projectedPosition: null, projectedConfidence: null }));
-      }
+      setSelectedSample(null);
+      setSelectedPointIndex(null);
+      setSemanticState((s) => ({ ...s, projectedPosition: null, projectedConfidence: null }));
     }
   };
 
@@ -1940,7 +2107,7 @@ const Visualizer4D: React.FC = () => {
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        onPointerLeave={handlePointerUp}
+        onPointerLeave={handlePointerLeave}
         onClick={handleClick}
         style={{
           background: isDarkMode
