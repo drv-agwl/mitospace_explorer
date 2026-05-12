@@ -5,8 +5,8 @@ import { Home, ZoomIn, ZoomOut, HelpCircle, Maximize2, Minimize2, Copy, Grid3X3 
 import { useSample } from '../context/SampleContext';
 import VisualizerControls from './VisualizerControls';
 import SemanticAxisPreview from './SemanticAxisPreview';
+import DrugConditionStrip from './DrugConditionStrip';
 import ColorLegend from './ColorLegend';
-import FeatureColorBar from './FeatureColorBar';
 import { projectOnAxis, getAxisTrajectory } from '../api/client';
 import { featureToColorPlasmaAdaptive, plasmaAtT } from '../utils/featureColor';
 import { adaptColorForDarkTheme } from '../utils/colorUtils';
@@ -103,6 +103,30 @@ const Visualizer4D: React.FC = () => {
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [copiedCoords, setCopiedCoords] = useState(false);
+
+  // Drug-conditions overview strip (renders above the canvas on first view).
+  // `drugStripVisible` toggles from the toolbar or the strip's close control.
+  // While semantic axis is on, `drugStripKilled` hides the strip (it conflicts
+  // with the "samples along axis" strip). Turning semantic axis off clears
+  // `drugStripKilled` so the overview can be opened again.
+  const [drugStripVisible, setDrugStripVisible] = useState(true);
+  const [drugStripKilled, setDrugStripKilled] = useState(false);
+
+  // Axis-samples strip and drug overview don't share the layout; hide drug
+  // strip whenever axis samples are shown.
+  useEffect(() => {
+    if (semanticState.axisSamplesVisible && !drugStripKilled) {
+      setDrugStripKilled(true);
+      setDrugStripVisible(false);
+    }
+  }, [semanticState.axisSamplesVisible, drugStripKilled]);
+
+  // Leaving semantic-axis mode restores the option to open the drug overview.
+  useEffect(() => {
+    if (!semanticState.advancedMode && drugStripKilled) {
+      setDrugStripKilled(false);
+    }
+  }, [semanticState.advancedMode, drugStripKilled]);
 
   const toggleHelp = () => {
     setShowHelp(!showHelp);
@@ -472,7 +496,7 @@ const Visualizer4D: React.FC = () => {
   // We precompute quantile beads, endpoint anchors and a dense cursor path
   // *once per feature* from the filtered cloud; the slider then cheaply
   // interpolates positions without recomputing geometry.
-  const axisStyle: AxisStyle = semanticState.axisStyle ?? 'cursor-axis';
+  const axisStyle: AxisStyle = semanticState.axisStyle ?? 'cursor';
   // Cursor-family modes share a common UI footprint: the cursor ball is
   // the only 3D feedback element. `cursor` builds the path locally from
   // density modes; `cursor-axis` builds it by snapping the backend's
@@ -1851,8 +1875,25 @@ const Visualizer4D: React.FC = () => {
         aria-label="Visualization controls"
         data-tour="controls-toolbar"
       >
-        <VisualizerControls type="4d" onSemanticSliderChange={handleSemanticSliderChange} dark={isDarkMode} />
+        <VisualizerControls
+          type="4d"
+          onSemanticSliderChange={handleSemanticSliderChange}
+          dark={isDarkMode}
+          drugOverviewStripAvailable={!drugStripKilled && samples4D.length > 0}
+          drugOverviewStripVisible={drugStripVisible}
+          onDrugOverviewStripToggle={() => setDrugStripVisible((v) => !v)}
+        />
       </div>
+
+      {/* Drug-conditions overview strip. Hidden while axis samples are visible
+          (see `drugStripKilled`); available again after semantic axis is off. */}
+      {drugStripVisible && !semanticState.axisSamplesVisible && samples4D.length > 0 && (
+        <DrugConditionStrip
+          samples={samples4D}
+          onClose={() => setDrugStripVisible(false)}
+          onSelectSample={setSelectedSample}
+        />
+      )}
 
       {/* Axis samples preview */}
       {semanticState.axisSamplesVisible &&
@@ -1893,7 +1934,7 @@ const Visualizer4D: React.FC = () => {
             <div className="w-10 h-10 border-2 border-mito-500 border-t-transparent rounded-full animate-spin" />
           </div>
         )}
-        
+
         {/* Floating controls */}
         <div className="absolute top-4 right-4 flex flex-col gap-2">
           <button
@@ -1966,10 +2007,11 @@ const Visualizer4D: React.FC = () => {
           </button>
         )}
         
-        {/* Bottom-left: legend or feature color bar + status */}
+        {/* Bottom-left: treatment legend (only when not in semantic mode —
+            the plasma slider in the toolbar doubles as the gradient legend)
+            + perf status. */}
         <div className="absolute bottom-4 left-4 flex flex-col gap-2">
           <ColorLegend visible={!useFeatureColoring} />
-          <FeatureColorBar visible={!!useFeatureColoring} />
           <div className={`px-3 py-2 rounded-xl text-xs font-medium backdrop-blur-sm border border-white/10 ${isDarkMode ? 'bg-black/70 text-white/80' : 'bg-white/90 text-gray-700'}`}>
             <div className="flex items-center gap-2">
               <span className={`w-1.5 h-1.5 rounded-full ${fps > 30 ? 'bg-emerald-500' : fps > 15 ? 'bg-amber-500' : 'bg-red-500'}`} />

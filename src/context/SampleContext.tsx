@@ -7,9 +7,9 @@ import { samples2D, samples4D as samples4DV1, loadSamples4DV3 } from '../data/sa
 // ball traverses the cloud).
 // Key is versioned so that adding a new recommended default migrates users
 // off any prior pinned choice. Bump suffix when shipping a new default.
-const AXIS_STYLE_STORAGE_KEY = 'mitospace.axisStyle.v3';
+const AXIS_STYLE_STORAGE_KEY = 'mitospace.axisStyle.v4';
 const initialAxisStyle: AxisStyle = (() => {
-  if (typeof window === 'undefined') return 'cursor-axis';
+  if (typeof window === 'undefined') return 'cursor';
   const saved = window.localStorage?.getItem(AXIS_STYLE_STORAGE_KEY);
   return saved === 'cursor' ||
     saved === 'cursor-axis' ||
@@ -18,7 +18,7 @@ const initialAxisStyle: AxisStyle = (() => {
     saved === 'tube-masked' ||
     saved === 'bare'
     ? (saved as AxisStyle)
-    : 'cursor-axis';
+    : 'cursor';
 })();
 
 const initialSemanticState: SemanticState = {
@@ -87,15 +87,20 @@ const defaultOptions: VisualizerOptions = {
 
 const SampleContext = createContext<SampleContextType | null>(null);
 
-// Persist user's last choice across reloads
+// Persisted key kept for migration; public UI no longer offers v1 (see `DatasetToggle.tsx`).
 const DATASET_STORAGE_KEY = 'mitospace.datasetVersion';
-const initialDatasetVersion: DatasetVersion = (() => {
-  if (typeof window === 'undefined') return 'v3';
-  const saved = window.localStorage?.getItem(DATASET_STORAGE_KEY);
-  return saved === 'v1' || saved === 'v3' ? (saved as DatasetVersion) : 'v3';
-})();
+const initialDatasetVersion: DatasetVersion = 'v3';
 
 export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  // Normalize stored preference now that only v3 is exposed in the UI.
+  useEffect(() => {
+    try {
+      window.localStorage?.setItem(DATASET_STORAGE_KEY, 'v3');
+    } catch {
+      // ignore
+    }
+  }, []);
+
   const [selectedSample, setSelectedSample] = useState<Sample | null>(null);
   const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');

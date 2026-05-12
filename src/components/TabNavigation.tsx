@@ -18,7 +18,7 @@ const TabNavigation: React.FC<TabNavigationProps> = ({ activeTab, setActiveTab }
         }`}
       >
         <Layers size={17} strokeWidth={2} />
-        <span>4D MitoSpace</span>
+        <span>MitoSpace</span>
       </button>
       <button
         onClick={() => setActiveTab('2d')}

@@ -9,7 +9,6 @@ import {
   AlertTriangle,
   FlaskConical,
 } from 'lucide-react';
-import type { AxisStyle } from '../types';
 import { useSample } from '../context/SampleContext';
 import { getFeatureStats, getFeatureValues, healthCheck } from '../api/client';
 import { findNearestSampleIndex } from './SemanticAxisPreview';
@@ -21,11 +20,17 @@ import {
 } from '../constants/features';
 import { formatFeatureValue } from '../utils/formatFeature';
 import { buildSampleIdToIndex } from '../utils/sampleIndexMap';
+import { plasmaGradientCss } from '../utils/featureColor';
+import { estimatePlasmaParams } from '../utils/featureColorParams';
 
 interface VisualizerControlsProps {
   type: '2d' | '4d';
   onSemanticSliderChange?: (pointIndex: number, targetValue: number) => void;
   dark?: boolean;
+  /** When true, show a toolbar toggle for the drug-condition overview strip (4D only). */
+  drugOverviewStripAvailable?: boolean;
+  drugOverviewStripVisible?: boolean;
+  onDrugOverviewStripToggle?: () => void;
 }
 
 const DEFAULT_FEATURE_RANGE = { min: 1, max: 5 };
@@ -49,7 +54,13 @@ const PILL_PRIMARY_ACTIVE =
 
 // ---------------------------------------------------------------------------
 
-const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanticSliderChange }) => {
+const VisualizerControls: React.FC<VisualizerControlsProps> = ({
+  type,
+  onSemanticSliderChange,
+  drugOverviewStripAvailable = false,
+  drugOverviewStripVisible = false,
+  onDrugOverviewStripToggle,
+}) => {
   const {
     visualizerOptions,
     setPointSize,
@@ -206,7 +217,11 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
       projectedPosition: null,
       projectedConfidence: null,
       semanticSliderValue: null,
-      axisSamplesVisible: next ? s.axisSamplesVisible : false,
+      // First-class behaviour: enabling the semantic axis immediately
+      // reveals the "samples along axis" strip so users see the
+      // representative cells alongside the 3D ball. The strip remains
+      // closable via the toolbar pill.
+      axisSamplesVisible: next ? true : false,
     }));
   };
 
@@ -214,46 +229,25 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
     ? getFeatureDisplayLabel(selectedFeature, datasetVersion)
     : null;
 
-  // ─── Axis-style A/B switch ─────────────────────────────────────────────
-  // Temporary control (behind a `BETA` chip) for picking the 3D
-  // representation of the semantic axis. Persisted via SampleContext
-  // (localStorage) so the choice survives reloads. Will be retired once we
-  // settle on one representation.
-  const axisStyle: AxisStyle = semanticState.axisStyle ?? 'cursor-axis';
-  const axisStyleOptions: Array<{ id: AxisStyle; label: string; tip: string }> = [
-    {
-      id: 'cursor',
-      label: 'Cursor',
-      tip: 'No axis geometry. A plasma-coloured ball traverses the cloud, riding a hidden density-grounded trajectory so it always stays inside dense regions.',
-    },
-    {
-      id: 'cursor-axis',
-      label: 'Cursor + Axis',
-      tip: 'Same ball UI, but its waypoints are the cells nearest to the backend\u2019s learnt feature axis. Adjacent waypoints are sorted by feature value, so motion through contiguous regions is noticeably smoother — fewer cluster-to-cluster jumps. (Recommended)',
-    },
-    {
-      id: 'beads',
-      label: 'Beads',
-      tip: 'Discrete waypoints anchored to cell centroids at evenly spaced quantiles. Connector fades through empty regions.',
-    },
-    {
-      id: 'tube-masked',
-      label: 'Faded curve',
-      tip: 'Original curve, but its opacity is gated by local cell density — segments that pass through empty UMAP regions fade out.',
-    },
-    {
-      id: 'tube',
-      label: 'Curve',
-      tip: 'Original Catmull-Rom spline through smoothed bin centroids. Can pass through empty regions.',
-    },
-    {
-      id: 'bare',
-      label: 'Minimal',
-      tip: 'No path geometry. Two endpoint anchors (low / high) + the point colors do all the talking.',
-    },
-  ];
-  const setAxisStyle = (next: AxisStyle) =>
-    setSemanticState((s) => ({ ...s, axisStyle: next }));
+  // Axis-style A/B switcher retired from the toolbar — we shipped
+  // `cursor` as canonical. Type `AxisStyle`, the persisted state field, and
+  // the rendering branches in Visualizer4D all remain so the picker can be
+  // revived behind a flag without re-implementation.
+
+  // Per-feature plasma calibration so the slider's track gradient matches
+  // the cloud's colouring exactly. Re-uses the same estimator that
+  // FeatureColorBar / SemanticAxisPreview do.
+  const plasmaParams = React.useMemo(() => {
+    if (!selectedFeature) return null;
+    const fv = featureValues[selectedFeature];
+    if (!fv || fv.length === 0) return null;
+    return estimatePlasmaParams(fv);
+  }, [selectedFeature, featureValues]);
+
+  const plasmaGradient = React.useMemo(
+    () => plasmaGradientCss(17, plasmaParams?.gamma, plasmaParams?.contrast, 'to right'),
+    [plasmaParams]
+  );
 
   // -------------------------------------------------------------------------
   // Render
@@ -351,6 +345,32 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
               </div>
             )}
           </div>
+
+          {/* One movie per treatment — distinct from the condition filter dropdown */}
+          {type === '4d' && drugOverviewStripAvailable && onDrugOverviewStripToggle && (
+            <button
+              type="button"
+              onClick={onDrugOverviewStripToggle}
+              role="switch"
+              aria-pressed={drugOverviewStripVisible}
+              aria-label={
+                drugOverviewStripVisible
+                  ? 'Hide representative movies per treatment'
+                  : 'Show representative movies per treatment'
+              }
+              title={
+                drugOverviewStripVisible
+                  ? 'Hide the strip of synchronized movies (one per treatment)'
+                  : 'Open the strip of synchronized movies — one representative cell per treatment'
+              }
+              className={`${PILL_BASE} ${
+                drugOverviewStripVisible ? PILL_ACTIVE : PILL_IDLE
+              }`}
+            >
+              <FlaskConical size={14} className="text-white/55 shrink-0" />
+              <span className="truncate max-w-[128px] sm:max-w-[200px]">Representative movies</span>
+            </button>
+          )}
         </div>
 
         {/* Right cluster: status + semantic axis (the primary mode switch) */}
@@ -445,47 +465,12 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
             )}
           </div>
 
-          {/* ─── Axis-style A/B switcher (temporary BETA) ─────────────────
-              Segmented control to compare the four 3D representations of
-              the semantic axis. The current `Beads` style avoids the
-              "curve floating through empty UMAP regions" issue of the
-              original `Curve` style. */}
-          {selectedFeature && (
-            <div
-              className="inline-flex items-center gap-1.5 h-9 px-1.5 rounded-lg bg-white/[0.04] border border-white/[0.08] shrink-0"
-              role="radiogroup"
-              aria-label="Axis representation style (experimental)"
-              title="Pick how the semantic axis is drawn in 3D (experimental)"
-            >
-              <FlaskConical size={12} className="text-amber-300/80 shrink-0 ml-0.5" />
-              <span className="text-[10px] font-semibold tracking-wider uppercase text-amber-300/80 shrink-0">
-                Beta
-              </span>
-              <span className="text-[11px] text-white/45 shrink-0 ml-0.5">Style</span>
-              <div className="inline-flex items-center gap-0.5 ml-1">
-                {axisStyleOptions.map((opt) => {
-                  const active = axisStyle === opt.id;
-                  return (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      role="radio"
-                      aria-checked={active}
-                      onClick={() => setAxisStyle(opt.id)}
-                      title={opt.tip}
-                      className={`px-2 h-6 rounded-md text-[11px] font-medium transition-colors ${
-                        active
-                          ? 'bg-white/15 text-white border border-white/25'
-                          : 'text-white/65 hover:text-white hover:bg-white/[0.06] border border-transparent'
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
+          {/* Axis-style segmented control is intentionally hidden. We
+              shipped the `cursor` style as canonical; the underlying A/B
+              code (axisStyleOptions, setAxisStyle, AxisStyle type, all
+              Three.js style branches in Visualizer4D) is retained so we
+              can revive the picker behind a developer flag without
+              re-implementation. */}
 
           {/* Show / hide samples-along-axis */}
           {selectedFeature && (
@@ -515,15 +500,21 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
             </button>
           )}
 
-          {/* Slider region — flex-grows to fill available space */}
+          {/* Plasma slider — the track is the feature's exact plasma gradient,
+              so dragging the thumb is also reading off the colour legend.
+              Replaces the older neutral slider + separate FeatureColorBar
+              overlay. */}
           {showSlider && featureRange && (
             <div
               data-tour="semantic-axis-slider"
-              className={`flex items-center gap-3 flex-1 min-w-[260px] h-9 px-3 rounded-lg bg-white/[0.04] border border-white/[0.08] transition-opacity duration-200 ${
+              className={`flex items-center gap-3 flex-1 min-w-[280px] h-9 transition-opacity duration-200 ${
                 featureLoading ? 'opacity-40 pointer-events-none' : ''
               }`}
             >
-              <span className="text-[11px] tabular-nums font-mono text-white/40 shrink-0">
+              <span
+                className="text-[11px] tabular-nums font-mono text-white/55 shrink-0 w-12 text-right"
+                title="Low"
+              >
                 {formatFeatureValue(featureRange.min)}
               </span>
               <input
@@ -537,12 +528,19 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({ type, onSemanti
                 aria-valuetext={formatFeatureValue(
                   typeof sliderValue === 'number' ? sliderValue : featureRange.min
                 )}
-                className="flex-1 h-1.5 accent-white"
+                className="plasma-slider flex-1"
+                style={{ backgroundImage: plasmaGradient }}
               />
-              <span className="text-[11px] tabular-nums font-mono text-white/40 shrink-0">
+              <span
+                className="text-[11px] tabular-nums font-mono text-white/55 shrink-0 w-12 text-left"
+                title="High"
+              >
                 {formatFeatureValue(featureRange.max)}
               </span>
-              <span className="ml-1 px-2 py-0.5 text-[11px] font-mono tabular-nums rounded bg-white/[0.08] text-white/85 shrink-0">
+              <span
+                className="px-2 h-7 inline-flex items-center text-[11px] font-mono tabular-nums rounded-md bg-white/[0.08] border border-white/[0.10] text-white shrink-0 min-w-[64px] justify-center"
+                title="Current value"
+              >
                 {formatFeatureValue(
                   typeof sliderValue === 'number' ? sliderValue : featureRange.min
                 )}

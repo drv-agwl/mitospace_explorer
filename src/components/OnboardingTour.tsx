@@ -18,42 +18,18 @@ export function setOnboardingCompleted(): void {
   localStorage.setItem(STORAGE_KEY, 'true');
 }
 
-const LANDING_STEPS: Step[] = [
+const EXPLORER_STEPS: Step[] = [
   {
     target: 'body',
     title: '👋 Welcome to MitoSpace Explorer',
-    content: 'This interactive platform lets you explore mitochondrial morphology and how it responds to drug treatments. Let\'s take a quick tour!',
+    content: 'Explore an AI-built atlas of mitochondrial phenotypes from LLSM time-lapse movies. Every point you see is one cell.',
     disableBeacon: true,
     placement: 'center',
   },
   {
-    target: '[data-tour="landing-title"]',
-    title: '🔬 Choose Your View',
-    content: 'Select between 4D or 2D MitoSpace. Each offers a unique perspective on mitochondrial phenotypes from microscopy data.',
-    disableBeacon: true,
-    placement: 'bottom',
-  },
-  {
-    target: '[data-tour="card-4d"]',
-    title: '✨ 4D MitoSpace',
-    content: 'AI-powered embedding from LLSM time-lapse movies. Explore drug clusters, phenotypic overlays, and semantic axis navigation—our most powerful feature.',
-    disableBeacon: true,
-    placement: 'top',
-  },
-  {
-    target: '[data-tour="card-2d"]',
-    title: '📊 2D MitoSpace',
-    content: 'Confocal microscopy embedding with traditional visualization. Click either card to start exploring!',
-    disableBeacon: true,
-    placement: 'top',
-  },
-];
-
-const EXPLORER_STEPS: Step[] = [
-  {
-    target: '[data-tour="header-tabs"]',
-    title: '🔄 Switch Views',
-    content: 'Use these tabs to switch between 4D and 2D MitoSpace visualizations.',
+    target: '[data-tour="drug-conditions-strip"]',
+    title: '🎞️ Drug condition overview',
+    content: 'One representative live-cell movie per drug condition, all playing in sync. Use this strip to get a quick feel for the phenotypic range before you dive into the 3D space.',
     disableBeacon: true,
     placement: 'bottom',
   },
@@ -95,7 +71,7 @@ const EXPLORER_STEPS: Step[] = [
   {
     target: '[data-tour="sample-panel"]',
     title: '📋 Sample Details Panel',
-    content: 'When you select a point, this panel shows 4D cell movies, treatment conditions, phenotype classifications, and detailed metadata. Play videos to see mitochondrial dynamics!',
+    content: 'When you select a point, this panel shows time-lapse cell movies, treatment conditions, phenotype classifications, and detailed metadata. Play videos to see mitochondrial dynamics!',
     disableBeacon: true,
     placement: 'left',
   },
@@ -110,13 +86,14 @@ const EXPLORER_STEPS: Step[] = [
 
 interface OnboardingTourProps {
   run: boolean;
-  variant: 'landing' | 'explorer';
+  /** Retained for API back-compat; only 'explorer' is rendered now. */
+  variant?: 'landing' | 'explorer';
   onComplete?: () => void;
 }
 
-export const OnboardingTour: React.FC<OnboardingTourProps> = ({ run, variant, onComplete }) => {
+export const OnboardingTour: React.FC<OnboardingTourProps> = ({ run, onComplete }) => {
   const [stepIndex, setStepIndex] = useState(0);
-  const steps = variant === 'landing' ? LANDING_STEPS : EXPLORER_STEPS;
+  const steps = EXPLORER_STEPS;
 
   const handleCallback = useCallback(
     (data: CallBackProps) => {
@@ -124,35 +101,30 @@ export const OnboardingTour: React.FC<OnboardingTourProps> = ({ run, variant, on
 
       if (type === EVENTS.STEP_AFTER) {
         if (action === ACTIONS.NEXT) {
-          // Move to next step
           if (index === steps.length - 1) {
-            // Completed the tour
-            if (variant === 'explorer') setOnboardingCompleted();
-            setStepIndex(0); // Reset for next time
+            setOnboardingCompleted();
+            setStepIndex(0);
             onComplete?.();
           } else {
             setStepIndex(index + 1);
           }
         } else if (action === ACTIONS.PREV) {
-          // Only go back if explicitly clicking Back button
           setStepIndex(index - 1);
         }
-        // Don't change step for CLOSE or other actions
       } else if (type === EVENTS.TOUR_END) {
-        // Tour ended (via close/skip/complete)
         if (status === 'finished' || status === 'skipped') {
-          if (variant === 'explorer') setOnboardingCompleted();
+          setOnboardingCompleted();
         }
-        setStepIndex(0); // Reset for next time
+        setStepIndex(0);
         onComplete?.();
       }
     },
-    [steps.length, variant, onComplete]
+    [steps.length, onComplete]
   );
 
   useEffect(() => {
     if (run) setStepIndex(0);
-  }, [run, variant]);
+  }, [run]);
 
   if (!run) return null;
 

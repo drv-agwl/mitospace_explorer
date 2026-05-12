@@ -1,46 +1,21 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import MitoSpaceLogo from './MitoSpaceLogo';
-import TabNavigation from './TabNavigation';
-import DatasetToggle from './DatasetToggle';
 
 interface HeaderProps {
-  activeTab?: '2d' | '4d';
-  setActiveTab?: (tab: '2d' | '4d') => void;
   onStartTour?: () => void;
   showTourButton?: boolean;
-  onLogoClick?: () => void;
 }
 
-const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, onStartTour, showTourButton, onLogoClick }) => {
+const Header: React.FC<HeaderProps> = ({ onStartTour, showTourButton }) => {
   const location = useLocation();
   const isAbout = location.pathname === '/about';
-  const showTabs = activeTab != null && setActiveTab != null;
 
   return (
     <header className="bg-black/90 backdrop-blur-md border-b border-white/[0.08] sticky top-0 z-50">
       <div className="max-w-[1920px] mx-auto px-6 py-3">
         <div className="flex items-center justify-between gap-6">
-          {onLogoClick ? (
-            <button
-              type="button"
-              onClick={onLogoClick}
-              className="flex items-center gap-3 group shrink-0 text-left focus:outline-none focus:ring-2 focus:ring-white/30 focus:ring-offset-2 focus:ring-offset-black rounded-lg"
-            >
-            <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-white text-black group-hover:bg-gray-100 transition-colors">
-              <MitoSpaceLogo size={20} variant="dark" />
-            </div>
-            <div>
-              <h1 className="text-lg font-semibold text-white tracking-tight">
-                MitoSpace Explorer
-              </h1>
-              <p className="text-xs text-white/45 hidden sm:block tracking-wide">
-                Mitochondrial phenotype atlas
-              </p>
-            </div>
-            </button>
-          ) : (
-            <Link to="/" className="flex items-center gap-3 group shrink-0">
+          <Link to="/" className="flex items-center gap-3 group shrink-0">
             <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-white text-black group-hover:bg-gray-100 transition-colors">
               <MitoSpaceLogo size={20} variant="dark" />
             </div>
@@ -53,16 +28,8 @@ const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, onStartTour, s
               </p>
             </div>
           </Link>
-          )}
-
-          {showTabs && (
-            <div className="flex-1 flex justify-center min-w-0" data-tour="header-tabs">
-              <TabNavigation activeTab={activeTab} setActiveTab={setActiveTab} />
-            </div>
-          )}
 
           <nav className="flex items-center gap-2 shrink-0">
-            {showTabs && activeTab === '4d' && <DatasetToggle />}
             {showTourButton && onStartTour && (
               <button
                 type="button"

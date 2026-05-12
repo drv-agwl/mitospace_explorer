@@ -1,15 +1,21 @@
 import React, { useMemo, useRef, useState, useCallback, useEffect } from 'react';
-import { Video, X, Play, Pause, Link2, Link2Off } from 'lucide-react';
+import { Video, X, Play, Pause } from 'lucide-react';
 import type { Sample, DatasetVersion } from '../types';
 import { getFeatureDisplayLabel } from '../constants/features';
 import { formatFeatureValue } from '../utils/formatFeature';
-import {
-  featureToColorPlasmaAdaptive,
-  plasmaGradientCss,
-} from '../utils/featureColor';
+import { featureToColorPlasmaAdaptive } from '../utils/featureColor';
 import { estimatePlasmaParams } from '../utils/featureColorParams';
 
-const AXIS_SAMPLE_COUNT = 9;
+// Baseline number of axis samples — used until the strip's width is measured
+// and on small viewports. The adaptive count below grows past this on wider
+// displays so the cards always fill the available width.
+const MIN_AXIS_SAMPLES = 9;
+// Cap to keep drug labels legible and the strip from feeling like a wall of
+// thumbnails on ultrawide / 4K displays.
+const MAX_AXIS_SAMPLES = 17;
+// Target horizontal budget per card (incl. its share of the gap). The strip
+// tries to fit as many cards as possible at this density before the cap.
+const AXIS_TARGET_CARD_PX = 160;
 
 // Drugs to deprioritize in semantic axis preview (will only use if no alternatives)
 const DEPRIORITIZED_DRUGS = ['Oligomycin', 'DNP'];
@@ -117,8 +123,6 @@ interface SemanticAxisPreviewProps {
 // ---------------------------------------------------------------------------
 const PILL_BASE =
   'inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg text-xs font-medium border transition-all duration-150 shrink-0';
-const PILL_IDLE =
-  'bg-white/[0.04] border-white/[0.08] text-white/85 hover:bg-white/[0.07] hover:border-white/[0.14]';
 const PILL_ACTIVE =
   'bg-white/[0.12] border-white/[0.22] text-white';
 
@@ -136,10 +140,41 @@ const SemanticAxisPreview: React.FC<SemanticAxisPreviewProps> = ({
   onClose,
   onSelectSample,
 }) => {
+  // Measure the cards container so we can grow the sample count to fill
+  // wider displays. Without this, the strip caps each card at 180px and
+  // leaves a wedge of empty space on ultrawide / 4K screens.
+  const cardsRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState<number>(0);
+  useEffect(() => {
+    const el = cardsRef.current;
+    if (!el) return;
+    if (typeof ResizeObserver === 'undefined') {
+      setContainerWidth(el.clientWidth);
+      return;
+    }
+    const obs = new ResizeObserver((entries) => {
+      for (const e of entries) {
+        // contentRect.width excludes the element's own padding, which is
+        // what we want when reasoning about card space.
+        setContainerWidth(e.contentRect.width);
+      }
+    });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
+
+  const targetSampleCount = useMemo(() => {
+    if (containerWidth <= 0) return MIN_AXIS_SAMPLES;
+    // contentRect already excludes our `px-6`, so don't subtract again.
+    const avail = Math.max(containerWidth, 200);
+    const ideal = Math.round(avail / AXIS_TARGET_CARD_PX);
+    return Math.max(MIN_AXIS_SAMPLES, Math.min(MAX_AXIS_SAMPLES, ideal));
+  }, [containerWidth]);
+
   const axisSamples = useMemo(() => {
     const max = apiEmbeddingCount ?? featureValues.length;
-    return getAxisSamples(featureRange, featureValues, samples, AXIS_SAMPLE_COUNT, max);
-  }, [featureRange, featureValues, samples, apiEmbeddingCount]);
+    return getAxisSamples(featureRange, featureValues, samples, targetSampleCount, max);
+  }, [featureRange, featureValues, samples, apiEmbeddingCount, targetSampleCount]);
 
   // Plasma parameters and per-sample colors (kept in lockstep with the canvas /
   // legend so cards visually align with the 3D scene's coloring).
@@ -161,11 +196,6 @@ const SemanticAxisPreview: React.FC<SemanticAxisPreviewProps> = ({
     [axisSamples, featureRange, plasmaParams]
   );
 
-  const gradientCss = useMemo(
-    () => plasmaGradientCss(17, plasmaParams.gamma, plasmaParams.contrast, 'to right'),
-    [plasmaParams]
-  );
-
   // Use TMRM video (index 1) for membrane potential, otherwise use MitoTracker (index 0).
   // In v3 each sample has only one video, so we always fall back to index 0.
   const isMembranePotential =
@@ -178,34 +208,29 @@ const SemanticAxisPreview: React.FC<SemanticAxisPreviewProps> = ({
   const videoIndex = isMembranePotential && hasTMRMVideo ? 1 : 0;
 
   const videoCount = axisSamples.filter((s) => s.sample.videos?.[videoIndex]).length;
-  const canSync = videoCount > 1;
   const hasVideos = videoCount > 0;
 
-  const [syncVideos, setSyncVideos] = useState(false);
-  // Videos autoplay when sync is OFF (see <video autoPlay={!syncVideos}>),
-  // so reflect that as the initial pause-button state.
+  // All videos play in lockstep by design. No user toggle.
   const [isPlaying, setIsPlaying] = useState(true);
   const videoRefs = useRef<(HTMLVideoElement | null)[]>([]);
 
-  const setAllPlaying = useCallback(
-    (next: boolean) => {
-      setIsPlaying(next);
-      videoRefs.current.forEach((v) => {
-        if (!v) return;
-        if (next) {
-          // play() returns a promise; ignore rejections from autoplay policy etc.
-          v.play().catch(() => {});
-        } else {
-          v.pause();
-        }
-      });
-    },
-    []
-  );
+  const setAllPlaying = useCallback((next: boolean) => {
+    setIsPlaying(next);
+    videoRefs.current.forEach((v) => {
+      if (!v) return;
+      if (next) {
+        v.play().catch(() => {});
+      } else {
+        v.pause();
+      }
+    });
+  }, []);
 
   const togglePlayPause = useCallback(() => {
     const next = !isPlaying;
-    if (next && syncVideos) {
+    if (next) {
+      // Align timelines to the first live video before resuming so the
+      // strip is coherent.
       const first = videoRefs.current.find((v) => v);
       if (first) {
         const t = first.currentTime;
@@ -215,48 +240,22 @@ const SemanticAxisPreview: React.FC<SemanticAxisPreviewProps> = ({
       }
     }
     setAllPlaying(next);
-  }, [isPlaying, syncVideos, setAllPlaying]);
+  }, [isPlaying, setAllPlaying]);
 
-  const handleSyncToggle = useCallback(() => {
-    const next = !syncVideos;
-    setSyncVideos(next);
-    if (next) {
-      // Pause everything and align timelines to the current leader.
-      setAllPlaying(false);
-      const first = videoRefs.current.find((v) => v);
-      if (first) {
-        const t = first.currentTime;
-        videoRefs.current.forEach((v) => {
-          if (v && v !== first) v.currentTime = t;
-        });
+  const handleTimeUpdate = useCallback((leader: HTMLVideoElement) => {
+    const t = leader.currentTime;
+    videoRefs.current.forEach((v) => {
+      if (v && v !== leader && Math.abs(v.currentTime - t) > 0.1) {
+        v.currentTime = t;
       }
-    } else {
-      // Returning to free-play. Resume so the strip "comes back to life".
-      setAllPlaying(true);
-    }
-  }, [syncVideos, setAllPlaying]);
-
-  const handleTimeUpdate = useCallback(
-    (leader: HTMLVideoElement) => {
-      if (!syncVideos) return;
-      const t = leader.currentTime;
-      videoRefs.current.forEach((v) => {
-        if (v && v !== leader && Math.abs(v.currentTime - t) > 0.1) {
-          v.currentTime = t;
-        }
-      });
-    },
-    [syncVideos]
-  );
+    });
+  }, []);
 
   const handleVideoEnded = useCallback(() => {
-    if (syncVideos) {
-      setIsPlaying(false);
-      videoRefs.current.forEach((v) => {
-        if (v) v.currentTime = 0;
-      });
-    }
-  }, [syncVideos]);
+    videoRefs.current.forEach((v) => {
+      if (v) v.currentTime = 0;
+    });
+  }, []);
 
   // Keep the button label honest if the browser blocks autoplay or any video
   // is paused/played individually.
@@ -291,22 +290,6 @@ const SemanticAxisPreview: React.FC<SemanticAxisPreviewProps> = ({
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          {canSync && (
-            <button
-              onClick={handleSyncToggle}
-              role="switch"
-              aria-pressed={syncVideos}
-              title={
-                syncVideos
-                  ? 'Free-play each video independently'
-                  : 'Lock all videos to the same timeline'
-              }
-              className={`${PILL_BASE} ${syncVideos ? PILL_ACTIVE : PILL_IDLE}`}
-            >
-              {syncVideos ? <Link2 size={12} /> : <Link2Off size={12} />}
-              <span>{syncVideos ? 'Synced' : 'Sync videos'}</span>
-            </button>
-          )}
           {hasVideos && (
             <button
               onClick={togglePlayPause}
@@ -329,41 +312,13 @@ const SemanticAxisPreview: React.FC<SemanticAxisPreviewProps> = ({
         </div>
       </div>
 
-      {/* ─── Plasma gradient ramp ───────────────────────────────────────── */}
-      {/* Visually links the strip to the canvas coloring and makes the
-          axis direction (low → high) immediately legible. */}
-      <div className="px-6 pb-2.5">
-        <div className="flex items-center gap-3">
-          <span className="text-[10px] font-mono tabular-nums text-white/45 shrink-0 w-14 text-right">
-            {formatFeatureValue(featureRange.min)}
-          </span>
-          <div
-            className="relative flex-1 h-1.5 rounded-full overflow-hidden ring-1 ring-white/10"
-            style={{ background: gradientCss }}
-            aria-hidden="true"
-          >
-            {/* Tick marks aligned to each card's center. With even spacing the
-                ticks visually anchor the cards below to their plasma colors. */}
-            {axisSamples.map((_, i) => {
-              const pct =
-                axisSamples.length === 1 ? 50 : (i / (axisSamples.length - 1)) * 100;
-              return (
-                <span
-                  key={i}
-                  className="absolute top-0 bottom-0 w-px bg-black/50"
-                  style={{ left: `${pct}%`, transform: 'translateX(-0.5px)' }}
-                />
-              );
-            })}
-          </div>
-          <span className="text-[10px] font-mono tabular-nums text-white/45 shrink-0 w-14 text-left">
-            {formatFeatureValue(featureRange.max)}
-          </span>
-        </div>
-      </div>
+      {/* Plasma gradient ramp removed: the toolbar's plasma-coloured slider
+          already serves as the canonical color legend, so duplicating the
+          ramp here added visual noise without information. The per-card
+          3px plasma accent (below) still ties each card to its value. */}
 
       {/* ─── Cards ──────────────────────────────────────────────────────── */}
-      <div className="px-6 pb-4 flex gap-3 overflow-x-auto">
+      <div ref={cardsRef} className="px-6 pb-4 flex gap-3 overflow-x-auto">
         {axisSamples.map(({ sample, value }, i) => (
           <button
             key={sample.id + i}
@@ -389,7 +344,7 @@ const SemanticAxisPreview: React.FC<SemanticAxisPreviewProps> = ({
                   muted
                   loop
                   playsInline
-                  autoPlay={!syncVideos}
+                  autoPlay
                   preload="metadata"
                   onTimeUpdate={(e) => handleTimeUpdate(e.currentTarget)}
                   onEnded={handleVideoEnded}

@@ -61,6 +61,77 @@ input[type="range"]::-webkit-slider-thumb {
          hover:bg-gray-200 transition-colors shadow-sm;
 }
 
+/* Plasma slider — the semantic-axis slider is painted with the same plasma
+   gradient as the 3D scene, so the track itself doubles as a color legend.
+   The track background is supplied inline via `style={{ backgroundImage }}`
+   to keep per-feature gamma/contrast in lockstep with the cloud's coloring.
+   A solid white thumb with a thin dark ring stays legible across the full
+   plasma range (deep purple → bright yellow).
+*/
+input[type="range"].plasma-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 14px;
+  border-radius: 9999px;
+  /* Halo + crisp edge so the gradient reads as a deliberate UI element
+     rather than a colorful overflow. */
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.18),
+    0 1px 2px rgba(0, 0, 0, 0.35);
+  background-color: transparent;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  background-position: center;
+  cursor: pointer;
+}
+input[type="range"].plasma-slider:focus {
+  outline: none;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.28),
+    0 0 0 2px rgba(255, 255, 255, 0.18),
+    0 1px 2px rgba(0, 0, 0, 0.35);
+}
+input[type="range"].plasma-slider::-webkit-slider-runnable-track {
+  height: 14px;
+  background: transparent;
+  border-radius: 9999px;
+}
+input[type="range"].plasma-slider::-moz-range-track {
+  height: 14px;
+  background: transparent;
+  border-radius: 9999px;
+}
+input[type="range"].plasma-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid rgba(0, 0, 0, 0.85);
+  margin-top: -2px; /* center vs 14px track */
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.6);
+  transition: transform 120ms ease;
+}
+input[type="range"].plasma-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.08);
+}
+input[type="range"].plasma-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid rgba(0, 0, 0, 0.85);
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.6);
+  transition: transform 120ms ease;
+}
+input[type="range"].plasma-slider::-moz-range-thumb:hover {
+  transform: scale(1.08);
+}
+
 /* Chat panel animations */
 @keyframes slide-up {
   from {

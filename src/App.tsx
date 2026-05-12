@@ -1,13 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import Header from './components/Header';
-import Visualizer2D from './components/Visualizer2D';
 import Visualizer4D from './components/Visualizer4D';
 import Footer from './components/Footer';
 import SamplePanel from './components/SamplePanel';
 import About from './components/About';
 import PasswordProtection from './components/PasswordProtection';
-import SpaceLanding from './components/SpaceLanding';
 import GlobalKeyboardShortcuts from './components/GlobalKeyboardShortcuts';
 import MobileBlocker from './components/MobileBlocker';
 import ChatPanel from './components/ChatPanel';
@@ -15,14 +13,7 @@ import { OnboardingTour, hasCompletedOnboarding, resetOnboarding } from './compo
 import { SampleProvider } from './context/SampleContext';
 
 function Explorer() {
-  const [viewMode, setViewMode] = useState<'landing' | 'explorer'>('landing');
-  const [activeTab, setActiveTab] = useState<'2d' | '4d'>('4d');
   const [runTour, setRunTour] = useState(false);
-
-  const handleSelectSpace = (space: '4d' | '2d') => {
-    setActiveTab(space);
-    setViewMode('explorer');
-  };
 
   const handleStartTour = () => {
     resetOnboarding();
@@ -31,24 +22,11 @@ function Explorer() {
 
   useEffect(() => {
     if (!hasCompletedOnboarding()) setRunTour(true);
-  }, [viewMode]);
-
-  if (viewMode === 'landing') {
-    return (
-      <div className="flex flex-col min-h-screen bg-black">
-        <Header onStartTour={handleStartTour} showTourButton onLogoClick={() => setViewMode('landing')} />
-        <OnboardingTour run={runTour} variant="landing" onComplete={() => setRunTour(false)} />
-        <main className="flex-grow">
-          <SpaceLanding onSelect={handleSelectSpace} />
-        </main>
-        <Footer />
-      </div>
-    );
-  }
+  }, []);
 
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-black">
-      <Header activeTab={activeTab} setActiveTab={setActiveTab} onStartTour={handleStartTour} showTourButton onLogoClick={() => setViewMode('landing')} />
+      <Header onStartTour={handleStartTour} showTourButton />
       <OnboardingTour run={runTour} variant="explorer" onComplete={() => setRunTour(false)} />
       <GlobalKeyboardShortcuts />
 
@@ -59,7 +37,7 @@ function Explorer() {
             className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden"
             aria-label="Visualization"
           >
-            {activeTab === '2d' ? <Visualizer2D /> : <Visualizer4D />}
+            <Visualizer4D />
           </section>
 
           {/* Right: independently scrollable sample panel */}
@@ -73,8 +51,7 @@ function Explorer() {
         </div>
       </main>
 
-      {/* Chat only on 4D MitoSpace */}
-      {activeTab === '4d' && <ChatPanel />}
+      <ChatPanel />
 
       <Footer />
     </div>
