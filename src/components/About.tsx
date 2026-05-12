@@ -10,7 +10,7 @@ import {
   Layers3,
   Sparkles,
   Clapperboard,
-  BookMarked,
+  Info,
 } from 'lucide-react';
 import Header from './Header';
 import Footer from './Footer';
@@ -115,23 +115,19 @@ const About: React.FC = () => {
                 </div>
               </div>
 
-              {/* UMAP + manuscript — same panel idiom as toolbar chips / side panel callouts */}
+              {/* UMAP: how the plot relates to embeddings */}
               <div className={`mt-4 ${PANEL} p-4 flex gap-3`}>
                 <div className="shrink-0 w-9 h-9 rounded-lg bg-white/[0.06] border border-white/[0.08] flex items-center justify-center">
-                  <BookMarked size={16} className="text-white/50" strokeWidth={1.75} />
+                  <Info size={16} className="text-white/50" strokeWidth={1.75} />
                 </div>
                 <div className="min-w-0 text-sm text-white/55 leading-relaxed">
                   <p className="font-medium text-white/80 mb-1.5">Visualization note</p>
                   <p>
-                    The scatter plot shows a UMAP projection of cell embeddings intended only as a{' '}
-                    <span className="text-white/75">human navigation aid</span>—to browse neighbourhoods
-                    and open movies—not as a quantitative map for conclusive biological interpretation.
-                    Definitive results, statistics, and claims appear in the accompanying manuscript.
-                  </p>
-                  <p className="mt-3 text-xs text-white/40 border-t border-white/[0.08] pt-3">
-                    <span className="text-white/50 font-medium">Manuscript</span>
-                    {' — '}
-                    <span className="text-white/45">TBA</span>
+                    One marker per cell. The layout is{' '}
+                    <span className="text-white/75">UMAP</span>: for each cell, coordinates come from
+                    projecting its <span className="text-white/75">2048 dimensional</span> embedding into
+                    the <span className="text-white/75">low dimensional</span> space you see in the
+                    explorer.
                   </p>
                 </div>
               </div>

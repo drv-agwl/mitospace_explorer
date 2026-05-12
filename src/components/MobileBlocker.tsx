@@ -87,13 +87,14 @@ const MobileBlocker: React.FC<{ children: React.ReactNode }> = ({ children }) =>
               <NarrowViewportMascot className="w-[200px] h-[100px] text-white" />
             </div>
             <h1 className="text-2xl font-bold text-white mb-2 leading-snug">
-              Your window got a little..... Mitochondrial
+              Your window got a little..... punctate :(
             </h1>
             <p className="text-white/65 text-sm leading-relaxed">
-              This is not a “no phones” rule. The 3D explorer and side panels need real horizontal
-              space. If the browser is narrower than{' '}
-              <span className="text-white/90 font-medium tabular-nums">{MIN_VIEWPORT_WIDTH_PX}px</span>,
-              we bail before the UI stages a protest.
+              We only look at how wide the browser window is, not whether you are on a phone or a
+              computer. The 3D explorer and side panels need about{' '}
+              <span className="text-white/90 font-medium tabular-nums">{MIN_VIEWPORT_WIDTH_PX}px</span>{' '}
+              across. Anything narrower hits this screen instead (a wide phone in landscape can pass; a
+              skinny window on a desktop will not).
             </p>
           </div>
 
