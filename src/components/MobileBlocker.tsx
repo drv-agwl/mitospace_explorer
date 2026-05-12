@@ -87,7 +87,7 @@ const MobileBlocker: React.FC<{ children: React.ReactNode }> = ({ children }) =>
               <NarrowViewportMascot className="w-[200px] h-[100px] text-white" />
             </div>
             <h1 className="text-2xl font-bold text-white mb-2 leading-snug">
-              Your window got a little cramped
+              Your window got a little..... Mitochondrial
             </h1>
             <p className="text-white/65 text-sm leading-relaxed">
               This is not a “no phones” rule. The 3D explorer and side panels need real horizontal
