@@ -215,7 +215,6 @@ const SamplePanel: React.FC = () => {
             <div className="mt-2 flex items-center gap-1.5 text-[11px] text-white/45">
               <MapPin size={11} strokeWidth={2} className="text-white/40 shrink-0" />
               <span className="font-mono tabular-nums">({coordsString})</span>
-              <CopyChip value={`(${coordsString})`} label="Copy coordinates" />
             </div>
           </div>
         </div>

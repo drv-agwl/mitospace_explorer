@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { Home, ZoomIn, ZoomOut, HelpCircle, Maximize2, Minimize2, Copy, Grid3X3 } from 'lucide-react';
+import { Home, ZoomIn, ZoomOut, HelpCircle, Maximize2, Minimize2, Grid3X3 } from 'lucide-react';
 import { useSample } from '../context/SampleContext';
 import VisualizerControls from './VisualizerControls';
 import ColorLegend from './ColorLegend';
@@ -38,8 +38,6 @@ const Visualizer2D: React.FC = () => {
   const [selectedPointMesh, setSelectedPointMesh] = useState<THREE.Mesh | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [copiedCoords, setCopiedCoords] = useState(false);
-
   const toggleHelp = () => {
     setShowHelp(!showHelp);
   };
@@ -540,15 +538,6 @@ const Visualizer2D: React.FC = () => {
     }
   }, []);
 
-  const handleCopyCoords = () => {
-    if (!selectedSample) return;
-    const text = `(${selectedSample.x.toFixed(4)}, ${selectedSample.y.toFixed(4)}, ${selectedSample.z.toFixed(4)})`;
-    navigator.clipboard.writeText(text).then(() => {
-      setCopiedCoords(true);
-      setTimeout(() => setCopiedCoords(false), 1500);
-    });
-  };
-
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
@@ -668,18 +657,7 @@ const Visualizer2D: React.FC = () => {
             <HelpCircle size={18} strokeWidth={2} />
           </button>
         </div>
-        
-        {selectedSample && (
-          <button
-            onClick={handleCopyCoords}
-            className="absolute top-4 left-4 bg-white/10 hover:bg-white/15 text-white/90 px-3 py-2 rounded-xl text-xs font-medium flex items-center gap-2 transition-colors border border-white/10"
-            title="Copy coordinates"
-          >
-            <Copy size={14} strokeWidth={2} />
-            {copiedCoords ? 'Copied!' : 'Copy coordinates'}
-          </button>
-        )}
-        
+
         <div className="absolute bottom-4 left-4 flex flex-col gap-2">
           <ColorLegend visible={true} />
           <div className={`px-3 py-2 rounded-xl text-xs font-medium backdrop-blur-sm border border-white/10 ${isDarkMode ? 'bg-black/70 text-white/80' : 'bg-white/90 text-gray-700'}`}>

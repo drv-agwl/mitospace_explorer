@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { Home, ZoomIn, ZoomOut, HelpCircle, Maximize2, Minimize2, Copy, Grid3X3 } from 'lucide-react';
+import { Home, ZoomIn, ZoomOut, HelpCircle, Maximize2, Minimize2, Grid3X3 } from 'lucide-react';
 import { useSample } from '../context/SampleContext';
 import VisualizerControls from './VisualizerControls';
 import SemanticAxisPreview from './SemanticAxisPreview';
@@ -187,8 +187,6 @@ const Visualizer4D: React.FC = () => {
   const pointerMovedRef = useRef(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [copiedCoords, setCopiedCoords] = useState(false);
-
   // Drug-conditions overview strip (renders above the canvas on first view).
   // `drugStripVisible` toggles from the toolbar or the strip's close control.
   // While semantic axis is on, `drugStripKilled` hides the strip (it conflicts
@@ -2020,16 +2018,6 @@ const Visualizer4D: React.FC = () => {
     return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
   }, []);
 
-  const handleCopyCoords = () => {
-    if (!selectedSample) return;
-    const s = selectedSample;
-    const text = `(${s.x.toFixed(4)}, ${s.y.toFixed(4)}, ${s.z.toFixed(4)})`;
-    navigator.clipboard.writeText(text).then(() => {
-      setCopiedCoords(true);
-      setTimeout(() => setCopiedCoords(false), 1500);
-    });
-  };
-
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
@@ -2180,19 +2168,7 @@ const Visualizer4D: React.FC = () => {
             <HelpCircle size={18} strokeWidth={2} />
           </button>
         </div>
-        
-        {/* Copy coords - when sample selected */}
-        {selectedSample && (
-          <button
-            onClick={handleCopyCoords}
-            className="absolute top-4 left-4 bg-white/10 hover:bg-white/15 text-white/90 px-3 py-2 rounded-xl text-xs font-medium flex items-center gap-2 transition-colors border border-white/10"
-            title="Copy coordinates"
-          >
-            <Copy size={14} strokeWidth={2} />
-            {copiedCoords ? 'Copied!' : 'Copy coordinates'}
-          </button>
-        )}
-        
+
         {/* Bottom-left: treatment legend (only when not in semantic mode —
             the plasma slider in the toolbar doubles as the gradient legend)
             + perf status. */}
