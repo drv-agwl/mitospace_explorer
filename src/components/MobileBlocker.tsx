@@ -87,7 +87,7 @@ const MobileBlocker: React.FC<{ children: React.ReactNode }> = ({ children }) =>
               <NarrowViewportMascot className="w-[200px] h-[100px] text-white" />
             </div>
             <h1 className="text-2xl font-bold text-white mb-2 leading-snug">
-              This window got a little... punctate :(
+              Your window got a little... punctate :(
             </h1>
             <p className="text-white/65 text-sm leading-relaxed">
               The 3D explorer needs at least{' '}
