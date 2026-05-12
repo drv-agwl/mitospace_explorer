@@ -423,7 +423,7 @@ const Visualizer4D: React.FC = () => {
     hoverRing.visible = false;
     scene.add(hoverRing);
     hoverRingRef.current = hoverRing;
-
+    
     // FPS counter setup
     let frameCount = 0;
     let lastTime = performance.now();
@@ -799,7 +799,7 @@ const Visualizer4D: React.FC = () => {
     };
 
     disposeGroup(trajectoryLineRef.current);
-    trajectoryLineRef.current = null;
+      trajectoryLineRef.current = null;
 
     // Cursor-family modes: render NO path geometry. The slider-marker
     // effect is the sole source of axis feedback for both `cursor` and
@@ -869,10 +869,10 @@ const Visualizer4D: React.FC = () => {
     // ── Style: tube / tube-masked ────────────────────────────────────
     if ((axisStyle === 'tube' || axisStyle === 'tube-masked') && hasTrajectory) {
       const vertices = trajectoryPoints!.map((p) => toScene(p));
-      const curve = new THREE.CatmullRomCurve3(vertices, false);
+    const curve = new THREE.CatmullRomCurve3(vertices, false);
 
-      const tubeRadius = 0.38;
-      const radialSegments = 8;
+    const tubeRadius = 0.38;
+    const radialSegments = 8;
 
       if (axisStyle === 'tube') {
         // ── One continuous tube, vertex-coloured plasma along its length.
@@ -884,30 +884,30 @@ const Visualizer4D: React.FC = () => {
           radialSegments,
           false
         );
-        const posAttr = geometry.getAttribute('position');
-        const vertexCount = posAttr.count;
-        const colorArray = new Float32Array(vertexCount * 3);
-        for (let i = 0; i < vertexCount; i++) {
-          const t = Math.floor(i / radialSegments) / tubeSegments;
+    const posAttr = geometry.getAttribute('position');
+    const vertexCount = posAttr.count;
+    const colorArray = new Float32Array(vertexCount * 3);
+    for (let i = 0; i < vertexCount; i++) {
+      const t = Math.floor(i / radialSegments) / tubeSegments;
           const c = plasmaColor(t);
           colorArray[i * 3] = c.r;
           colorArray[i * 3 + 1] = c.g;
           colorArray[i * 3 + 2] = c.b;
-        }
-        geometry.setAttribute('color', new THREE.BufferAttribute(colorArray, 3));
-        const tubeMaterial = new THREE.MeshBasicMaterial({
-          vertexColors: true,
-          transparent: true,
-          opacity: 0.92,
-          side: THREE.DoubleSide,
-          depthTest: true,
+    }
+    geometry.setAttribute('color', new THREE.BufferAttribute(colorArray, 3));
+    const tubeMaterial = new THREE.MeshBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.92,
+      side: THREE.DoubleSide,
+      depthTest: true,
           polygonOffset: true,
           polygonOffsetFactor: -1,
           polygonOffsetUnits: 1,
-        });
-        const tube = new THREE.Mesh(geometry, tubeMaterial);
-        tube.renderOrder = 10;
-        group.add(tube);
+    });
+    const tube = new THREE.Mesh(geometry, tubeMaterial);
+    tube.renderOrder = 10;
+    group.add(tube);
 
         // 5 inline arrows along the tube
         for (let i = 1; i <= 5; i++) {
@@ -973,7 +973,7 @@ const Visualizer4D: React.FC = () => {
         // marooned in empty space).
         for (let i = 1; i <= 5; i++) {
           const t = i / 6;
-          const pos = curve.getPoint(t);
+      const pos = curve.getPoint(t);
           // Re-evaluate density at this t (cheap).
           const radius2 = radius * radius;
           let count = 0;
@@ -1035,9 +1035,9 @@ const Visualizer4D: React.FC = () => {
         const sphereGeom = new THREE.SphereGeometry(beadRadius, 20, 20);
         const sphereMat = new THREE.MeshBasicMaterial({
           color: colorAtT(t),
-          transparent: true,
-          opacity: 0.95,
-          depthTest: true,
+        transparent: true,
+        opacity: 0.95,
+        depthTest: true,
           polygonOffset: true,
           polygonOffsetFactor: -2,
           polygonOffsetUnits: 1,
@@ -1146,7 +1146,7 @@ const Visualizer4D: React.FC = () => {
 
     return () => {
       disposeGroup(trajectoryLineRef.current);
-      trajectoryLineRef.current = null;
+        trajectoryLineRef.current = null;
     };
   }, [
     axisStyle,
@@ -1974,7 +1974,7 @@ const Visualizer4D: React.FC = () => {
     if (bestIdx >= 0) {
       setSelectedPointIndex(bestIdx);
       setSelectedSample(filteredSamples4D[bestIdx]);
-      setSemanticState((s) => ({ ...s, projectedPosition: null, projectedConfidence: null }));
+        setSemanticState((s) => ({ ...s, projectedPosition: null, projectedConfidence: null }));
     } else if (dropdownCloseInProgressRef.current) {
       dropdownCloseInProgressRef.current = false;
     } else {
@@ -1991,9 +1991,9 @@ const Visualizer4D: React.FC = () => {
     } else {
       cameraRef.current.position.set(25, 25, 25);
     }
-    cameraRef.current.lookAt(new THREE.Vector3(0, 0, 0));
-    controlsRef.current.target.set(0, 0, 0);
-    controlsRef.current.update();
+      cameraRef.current.lookAt(new THREE.Vector3(0, 0, 0));
+        controlsRef.current.target.set(0, 0, 0);
+        controlsRef.current.update();
   }, [datasetVersion]);
 
   const toggleFullscreen = useCallback(() => {
@@ -2108,7 +2108,7 @@ const Visualizer4D: React.FC = () => {
             <div className="w-10 h-10 border-2 border-mito-500 border-t-transparent rounded-full animate-spin" />
           </div>
         )}
-
+        
         {/* Floating controls */}
         <div className="absolute top-4 right-4 flex flex-col gap-2">
           <button
@@ -2168,7 +2168,7 @@ const Visualizer4D: React.FC = () => {
             <HelpCircle size={18} strokeWidth={2} />
           </button>
         </div>
-
+        
         {/* Bottom-left: treatment legend (only when not in semantic mode —
             the plasma slider in the toolbar doubles as the gradient legend)
             + perf status. */}
