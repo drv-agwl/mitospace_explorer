@@ -75,9 +75,9 @@ export function getFeatureGroups(version: DatasetVersion): FeatureGroup[] {
 export function getInitialSemanticAxisFeature(version: DatasetVersion): string | null {
   const groups = getFeatureGroups(version);
   if (version === 'v3') {
-    const morph = groups.find((g) => g.category === 'Mitochondrial Morphology');
-    const seg = morph?.features.find((f) => f.apiName === 'segment_length_mean');
-    if (seg) return seg.apiName;
+    const dyn = groups.find((g) => g.category === 'Mitochondria dynamics');
+    const frag = dyn?.features.find((f) => f.apiName === 'fragment_diffusivity_mean');
+    if (frag) return frag.apiName;
   }
   return groups[0]?.features[0]?.apiName ?? null;
 }

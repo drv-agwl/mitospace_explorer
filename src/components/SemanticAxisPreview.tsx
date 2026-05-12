@@ -5,6 +5,10 @@ import { getFeatureDisplayLabel } from '../constants/features';
 import { formatFeatureValue } from '../utils/formatFeature';
 import { featureToColorPlasmaAdaptive } from '../utils/featureColor';
 import { estimatePlasmaParams } from '../utils/featureColorParams';
+import {
+  isAxisStripExcludedDrug,
+  isAxisStripExcludedSampleId,
+} from '../constants/axisSampleExclusions';
 
 // Baseline number of axis samples — used until the strip's width is measured
 // and on small viewports. The adaptive count below grows past this on wider
@@ -19,6 +23,18 @@ const AXIS_TARGET_CARD_PX = 160;
 
 // Drugs to deprioritize in semantic axis preview (will only use if no alternatives)
 const DEPRIORITIZED_DRUGS = ['Oligomycin', 'DNP'];
+
+function isSoftDeprioritizedDrug(drug: string): boolean {
+  return DEPRIORITIZED_DRUGS.some((d) => drug.toLowerCase().includes(d.toLowerCase()));
+}
+
+function isHardAxisStripExcluded(samples: Sample[], i: number): boolean {
+  const s = samples[i];
+  if (!s) return true;
+  if (isAxisStripExcludedSampleId(s.id)) return true;
+  const drug = s.treatment?.drug || '';
+  return isAxisStripExcludedDrug(drug);
+}
 
 function findNearestSampleIndex(
   targetValue: number,
@@ -38,6 +54,68 @@ function findNearestSampleIndex(
   return nearest;
 }
 
+function indicesByIncreasingDistance(
+  target: number,
+  featureValues: number[],
+  limit: number,
+  usedIndices: Set<number>
+): number[] {
+  const scored: { i: number; d: number }[] = [];
+  for (let i = 0; i < limit; i++) {
+    if (usedIndices.has(i)) continue;
+    const v = featureValues[i];
+    if (!Number.isFinite(v)) continue;
+    scored.push({ i, d: Math.abs(v - target) });
+  }
+  scored.sort((a, b) => (a.d === b.d ? a.i - b.i : a.d - b.d));
+  return scored.map((x) => x.i);
+}
+
+function pickUnusedIndexForTarget(
+  target: number,
+  featureValues: number[],
+  samples: Sample[],
+  limit: number,
+  usedIndices: Set<number>
+): number {
+  const ranked = indicesByIncreasingDistance(target, featureValues, limit, usedIndices);
+
+  const tryPick = (predicate: (i: number) => boolean): number => {
+    for (const i of ranked) {
+      if (predicate(i)) return i;
+    }
+    return -1;
+  };
+
+  // Prefer: not hard-excluded, not soft-deprioritized
+  let pick = tryPick(
+    (i) => !isHardAxisStripExcluded(samples, i) && !isSoftDeprioritizedDrug(samples[i]?.treatment?.drug || '')
+  );
+  if (pick >= 0) return pick;
+
+  // Then: not hard-excluded (allows oligomycin / DNP when they are closest)
+  pick = tryPick((i) => !isHardAxisStripExcluded(samples, i));
+  if (pick >= 0) return pick;
+
+  // Then: any unused index by distance
+  pick = tryPick(() => true);
+  if (pick >= 0) return pick;
+
+  // Last resort: allow re-using an index (duplicate thumbnail)
+  let best = Infinity;
+  let nearest = -1;
+  for (let i = 0; i < limit; i++) {
+    const v = featureValues[i];
+    if (!Number.isFinite(v)) continue;
+    const d = Math.abs(v - target);
+    if (d < best) {
+      best = d;
+      nearest = i;
+    }
+  }
+  return nearest >= 0 ? nearest : 0;
+}
+
 function getAxisSamples(
   featureRange: { min: number; max: number },
   featureValues: number[],
@@ -55,48 +133,7 @@ function getAxisSamples(
   const usedIndices = new Set<number>();
 
   return targets.map((target) => {
-    // First pass: find best match excluding deprioritized drugs and already used indices
-    let nearest = -1;
-    let best = Infinity;
-
-    for (let i = 0; i < limit; i++) {
-      if (usedIndices.has(i)) continue;
-      const drug = samples[i]?.treatment?.drug || '';
-      const isDeprioritized = DEPRIORITIZED_DRUGS.some(d =>
-        drug.toLowerCase().includes(d.toLowerCase())
-      );
-      if (isDeprioritized) continue;
-
-      const d = Math.abs(featureValues[i] - target);
-      if (d < best) {
-        best = d;
-        nearest = i;
-      }
-    }
-
-    // Second pass: if no good match found, allow deprioritized drugs (but still avoid duplicates)
-    if (nearest === -1) {
-      for (let i = 0; i < limit; i++) {
-        if (usedIndices.has(i)) continue;
-        const d = Math.abs(featureValues[i] - target);
-        if (d < best) {
-          best = d;
-          nearest = i;
-        }
-      }
-    }
-
-    // Last resort: allow duplicates if absolutely necessary
-    if (nearest === -1) {
-      for (let i = 0; i < limit; i++) {
-        const d = Math.abs(featureValues[i] - target);
-        if (d < best) {
-          best = d;
-          nearest = i;
-        }
-      }
-    }
-
+    const nearest = pickUnusedIndexForTarget(target, featureValues, samples, limit, usedIndices);
     usedIndices.add(nearest);
 
     return {
