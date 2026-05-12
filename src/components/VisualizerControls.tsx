@@ -19,7 +19,6 @@ import {
   getInitialSemanticAxisFeature,
 } from '../constants/features';
 import { formatFeatureValue } from '../utils/formatFeature';
-import { buildSampleIdToIndex } from '../utils/sampleIndexMap';
 import { plasmaGradientCss } from '../utils/featureColor';
 import { estimatePlasmaParams } from '../utils/featureColorParams';
 
@@ -72,7 +71,6 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({
     apiEmbeddingCount,
     featureValues,
     samples4D,
-    filteredSamples4D,
     selectedSample,
     setSelectedSample,
     selectedDrugs,
@@ -83,11 +81,6 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({
     datasetVersion,
   } = useSample();
   const featureGroups = getFeatureGroups(datasetVersion);
-
-  const sampleIdToEmbeddingIndex = React.useMemo(
-    () => buildSampleIdToIndex(samples4D),
-    [samples4D]
-  );
 
   const [drugFilterOpen, setDrugFilterOpen] = useState(false);
   const drugFilterRef = useRef<HTMLDivElement>(null);
@@ -161,43 +154,6 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({
         .catch(() => {}),
     ]).finally(() => setFeatureLoading(false));
   }, [type, selectedFeature, datasetVersion, setFeatureValues, setSemanticState]);
-
-  useEffect(() => {
-    if (type !== '4d' || !advancedMode || !selectedFeature) return;
-    getFeatureStats(selectedFeature, datasetVersion)
-      .then((stats) => {
-        const values = featureValues[selectedFeature];
-        let pointValue: number | null = null;
-        if (
-          selectedPointIndex != null &&
-          selectedPointIndex < filteredSamples4D.length &&
-          values
-        ) {
-          const emb =
-            sampleIdToEmbeddingIndex.get(filteredSamples4D[selectedPointIndex].id) ?? -1;
-          if (emb >= 0 && emb < values.length && Number.isFinite(values[emb])) {
-            pointValue = values[emb];
-          }
-        }
-        const mid = (stats.min + stats.max) / 2;
-        setSemanticState((s) => ({
-          ...s,
-          featureRange: { min: stats.min, max: stats.max },
-          semanticSliderValue: pointValue ?? s.semanticSliderValue ?? mid,
-        }));
-      })
-      .catch(() => {});
-  }, [
-    type,
-    advancedMode,
-    selectedFeature,
-    datasetVersion,
-    selectedPointIndex,
-    setSemanticState,
-    featureValues,
-    filteredSamples4D,
-    sampleIdToEmbeddingIndex,
-  ]);
 
   const handleSliderChange = (value: number) => {
     setSemanticState((s) => ({ ...s, semanticSliderValue: value }));

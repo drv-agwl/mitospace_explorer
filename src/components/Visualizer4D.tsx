@@ -1573,13 +1573,8 @@ const Visualizer4D: React.FC = () => {
   ]);
 
   // Highlight position: projected (semantic, already in scene space from API)
-  // or selected sample.
-  //
-  // In `cursor` axis style we deliberately ignore `projectedPosition`. The
-  // slider's 3D feedback is the dedicated cursor ball, so showing a
-  // separate projection-driven highlight here would double-up as two
-  // balls. We still honour `selectedSample` so click-to-select keeps
-  // working unchanged.
+  // or selected sample. In `cursor` / `cursor-axis` we ignore `projectedPosition`
+  // so the API projection sphere does not duplicate the slider cursor ball.
   useEffect(() => {
     const proj = isCursorMode ? null : semanticState.projectedPosition;
     const pos = proj
