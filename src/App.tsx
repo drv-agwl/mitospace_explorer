@@ -6,7 +6,11 @@ import SamplePanel from './components/SamplePanel';
 import About from './components/About';
 import GlobalKeyboardShortcuts from './components/GlobalKeyboardShortcuts';
 import MobileBlocker from './components/MobileBlocker';
-import ChatPanel from './components/ChatPanel';
+// Chat is intentionally hidden from the UI for now — the LLM occasionally
+// over-interpreted data and we don't want to ship conclusions we haven't
+// vetted. Backend (`/api/chat`, agent, tools, tests) is fully preserved so
+// re-enabling is a one-line revert below.
+// import ChatPanel from './components/ChatPanel';
 import { SampleProvider } from './context/SampleContext';
 
 function Explorer() {
@@ -35,7 +39,7 @@ function Explorer() {
         </div>
       </main>
 
-      <ChatPanel />
+      {/* <ChatPanel />  — temporarily hidden, see import comment above */}
 
       <Footer />
     </div>
