@@ -80,7 +80,7 @@ const defaultOptions: VisualizerOptions = {
   renderingMode: 'instanced',
   labelVisibility: 'selected',
   showAxes: true,
-  showGrid: true,
+  showGrid: false,
   highlightSelected: true,
   performance: 'balanced'
 };
