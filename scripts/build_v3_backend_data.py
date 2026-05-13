@@ -1,13 +1,17 @@
 """
 Build a slim parquet for the backend from the full v3 parquet.
 
-The full parquet (data/v3_data/embeddings+metadata.parquet) is ~486MB because
-it contains a 2048-d `embeddings` column. We don't need the raw 2048-d embedding
-in the backend (it's only useful for downstream training). We DO need:
+The full parquet (`SRC`, ~486 MB) carries a 2048-d `embeddings` column we do
+not need in the backend (it is only useful for downstream training). We DO
+need:
   - 3D UMAP coords (`embeddings_umap`)
   - All numeric morphology / network / dynamics / function features
   - Drug + MOA labels
   - Time-series intensities (small: 20 floats per sample)
+
+The source parquet is picked from a small ranked list so that swapping to a
+reoriented / re-fit UMAP does not require editing this script. The first
+file that exists wins.
 
 Output:
   data/v3_data/features_v3.parquet  (slim, ~30-50 MB expected)
@@ -22,17 +26,35 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
-SRC = ROOT / "data" / "v3_data" / "embeddings+metadata.parquet"
-OUT = ROOT / "data" / "v3_data" / "features_v3.parquet"
+V3_DIR = ROOT / "data" / "v3_data"
+
+# Ranked source candidates. The reoriented UMAP wins when present.
+SRC_CANDIDATES = (
+    V3_DIR / "embeddings+metadata_vis_joined_reoriented.parquet",
+    V3_DIR / "embeddings+metadata.parquet",
+)
+OUT = V3_DIR / "features_v3.parquet"
+
+
+def resolve_source() -> Path:
+    for p in SRC_CANDIDATES:
+        if p.exists():
+            return p
+    raise FileNotFoundError(
+        "No v3 source parquet found. Looked for:\n  - "
+        + "\n  - ".join(str(p) for p in SRC_CANDIDATES)
+    )
 
 
 def main() -> None:
-    if not SRC.exists():
-        print(f"ERROR: source parquet not found: {SRC}", file=sys.stderr)
+    try:
+        src = resolve_source()
+    except FileNotFoundError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Loading {SRC.name} ({SRC.stat().st_size / 1e6:.1f} MB)...")
-    df = pd.read_parquet(SRC)
+    print(f"Loading {src.name} ({src.stat().st_size / 1e6:.1f} MB)...")
+    df = pd.read_parquet(src)
     print(f"  rows={len(df)} cols={len(df.columns)}")
 
     # Columns to drop: the heavy 2048-d embeddings + internal mount paths

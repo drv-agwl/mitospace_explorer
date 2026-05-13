@@ -24,21 +24,105 @@ import numpy as np
 import pandas as pd
 
 
-# Trim outliers from feature ranges; use percentile bounds instead of raw min/max
-FEATURE_PERCENTILE_LOW = 2
-FEATURE_PERCENTILE_HIGH = 98
+# Default percentile envelope. The adaptive bound below stays inside this:
+# we never trim more than `FEATURE_PERCENTILE_TIGHT_*` or less than
+# `FEATURE_PERCENTILE_DEFAULT_*` of either tail.
+FEATURE_PERCENTILE_DEFAULT_LOW = 2.0
+FEATURE_PERCENTILE_DEFAULT_HIGH = 98.0
+FEATURE_PERCENTILE_TIGHT_LOW = 10.0
+FEATURE_PERCENTILE_TIGHT_HIGH = 90.0
+
+# Manual escape hatch. Use only for truly pathological features that the
+# adaptive heuristic doesn't get right. Keys are case-insensitive.
+FEATURE_PERCENTILE_OVERRIDES: Dict[str, Tuple[float, float]] = {}
 
 
-def feature_bounds(arr: np.ndarray) -> Tuple[float, float]:
-    """Return (min, max) using percentile bounds to exclude outliers."""
+def _adaptive_percentiles(valid: np.ndarray) -> Tuple[float, float]:
+    """Pick (low_pct, high_pct) by measuring how much each tail dominates the
+    central bulk of the distribution.
+
+    Heuristic
+    ---------
+    Let bulk = p90 - p10 (span of the central 80% of the distribution) and
+    upper_tail = p98 - p90. The ratio `r = upper_tail / bulk` answers
+    "how stretched is the top 8% relative to the middle 80%?":
+      - For a near-uniform / symmetric feature r is roughly 0.1-0.2.
+      - For a moderately heavy upper tail (e.g. diffusivity), r is 0.4-0.6.
+      - For an extreme tail (e.g. tmrm dominated by one drug), r > 1.
+
+    We treat anything above `TARGET_RATIO` (≈ 0.20) as "stretched" and use
+    a smooth ramp to pull the upper percentile from the default 98 down to
+    the tight 90 as the excess grows. The lower tail is handled with the
+    same formula on the mirrored quantiles.
+
+    This means well-behaved features keep the full p2..p98 range while
+    heavy-tailed ones get a tighter clip — automatically, with no manual
+    per-feature tuning.
+    """
+    p2, p10, p90, p98 = np.nanpercentile(valid, [2, 10, 90, 98])
+    bulk = max(p90 - p10, 1e-12)
+
+    target_ratio = 0.20
+    max_excess = 1.00  # `r - target_ratio` saturates here
+
+    upper_ratio = max((p98 - p90) / bulk - target_ratio, 0.0)
+    lower_ratio = max((p10 - p2) / bulk - target_ratio, 0.0)
+
+    upper_excess = min(upper_ratio / max_excess, 1.0)
+    lower_excess = min(lower_ratio / max_excess, 1.0)
+
+    hi_pct = FEATURE_PERCENTILE_DEFAULT_HIGH - (
+        FEATURE_PERCENTILE_DEFAULT_HIGH - FEATURE_PERCENTILE_TIGHT_HIGH
+    ) * upper_excess
+    lo_pct = FEATURE_PERCENTILE_DEFAULT_LOW + (
+        FEATURE_PERCENTILE_TIGHT_LOW - FEATURE_PERCENTILE_DEFAULT_LOW
+    ) * lower_excess
+
+    return float(lo_pct), float(hi_pct)
+
+
+def feature_bounds(
+    arr: np.ndarray,
+    feature: Optional[str] = None,
+) -> Tuple[float, float]:
+    """Return (min, max) clipped to robust percentile bounds.
+
+    Strategy:
+    1. If a manual override is registered for `feature`, use it verbatim.
+    2. Otherwise pick adaptive percentiles via `_adaptive_percentiles` so the
+       clip tightens for heavy-tailed features and stays loose for symmetric
+       ones.
+    """
     valid = arr[~np.isnan(arr)]
     if len(valid) < 2:
         if len(valid) == 1:
             v = float(valid[0])
             return (v, v)
         return (0.0, 1.0)
-    lo, hi = np.nanpercentile(arr, [FEATURE_PERCENTILE_LOW, FEATURE_PERCENTILE_HIGH])
+
+    if feature:
+        override = FEATURE_PERCENTILE_OVERRIDES.get(feature.lower())
+        if override:
+            lo_pct, hi_pct = override
+            lo, hi = np.nanpercentile(arr, [lo_pct, hi_pct])
+            return float(lo), float(hi)
+
+    lo_pct, hi_pct = _adaptive_percentiles(valid)
+    lo, hi = np.nanpercentile(arr, [lo_pct, hi_pct])
     return float(lo), float(hi)
+
+
+def _debug_feature_bounds(name: str, arr: np.ndarray) -> None:
+    """Print the chosen percentile envelope (for startup diagnostics)."""
+    valid = arr[~np.isnan(arr)]
+    if len(valid) < 50:
+        return
+    lo_pct, hi_pct = _adaptive_percentiles(valid)
+    lo, hi = np.nanpercentile(arr, [lo_pct, hi_pct])
+    print(
+        f"[dataset_registry] bounds {name:<32} "
+        f"clip=({lo_pct:4.1f}, {hi_pct:4.1f}) -> ({lo:.4g}, {hi:.4g})"
+    )
 
 
 @dataclass
@@ -231,9 +315,12 @@ def _fit_axis_models(ds: Dataset, features: Iterable[str]) -> None:
                 sharp = int((ang > 120.0).sum())
             else:
                 sharp = 0
+            # Show the adaptive clip that downstream coloring / slider will use.
+            clip_lo, clip_hi = feature_bounds(fvals, feature=fname)
             print(
                 f"[dataset_registry][{ds.version}] fitted axis model: {fname} "
-                f"(input=[{lo:.4g}, {hi:.4g}], extent={extent:.2f}, path={path_len:.2f}, sharp={sharp})"
+                f"(input=[{lo:.4g}, {hi:.4g}], clip=[{clip_lo:.4g}, {clip_hi:.4g}], "
+                f"extent={extent:.2f}, path={path_len:.2f}, sharp={sharp})"
             )
             if extent < 1e-3:
                 print(

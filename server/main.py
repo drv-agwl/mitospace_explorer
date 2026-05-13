@@ -160,7 +160,7 @@ def _project_spatial(
     valid = ~np.isnan(f)
     if not np.any(valid):
         raise ValueError(f"No valid values for feature {feature_name}")
-    f_min, f_max = feature_bounds(f)
+    f_min, f_max = feature_bounds(f, feature=feature_name)
     sigma = (f_max - f_min) / bandwidth_ratio
     if sigma < 1e-12:
         sigma = 1.0
@@ -326,7 +326,7 @@ def axis_trajectory(
     valid = arr[~np.isnan(arr)]
     if len(valid) == 0:
         raise HTTPException(status_code=404, detail="No valid feature values")
-    f_min, f_max = feature_bounds(arr)
+    f_min, f_max = feature_bounds(arr, feature=feat)
     num_points = max(2, min(200, num_points))
     values = np.linspace(f_min, f_max, num_points, dtype=np.float64).reshape(-1, 1)
     coords = ds.feature_umap_model[feat].predict(values)
@@ -375,7 +375,7 @@ def feature_stats(
     valid = arr[~np.isnan(arr)]
     if len(valid) == 0:
         return {"min": 0.0, "max": 1.0}
-    f_min, f_max = feature_bounds(arr)
+    f_min, f_max = feature_bounds(arr, feature=feat)
     return {"min": f_min, "max": f_max}
 
 
