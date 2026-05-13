@@ -274,6 +274,75 @@ class TestClassifier(unittest.TestCase):
             out = query_handler.classify_query(q)
             self.assertEqual(out["type"], "drug_similarity", f"Failed for: {q!r}")
 
+    def test_clarification_routes_with_prior_context(self):
+        ctx = {
+            "last_query_type": "ranking",
+            "last_feature": "Fragment Diffusivity",
+            "last_drugs": [],
+            "last_user_message": "which drugs increase motility?",
+        }
+        for q in (
+            "are you sure?",
+            "is that correct?",
+            "double-check those numbers",
+            "doesn't look right",
+            "why?",
+            "explain that",
+            "are you certain these are accurate",
+            "are these correct",
+        ):
+            out = query_handler.classify_query(q, context=ctx)
+            self.assertEqual(
+                out["type"], "clarification",
+                f"Expected clarification for {q!r}, got {out['type']}",
+            )
+
+    def test_clarification_without_prior_falls_through(self):
+        # No prior turn → don't hijack a question that might be standalone.
+        out = query_handler.classify_query("are you sure?", context=None)
+        self.assertNotEqual(out["type"], "clarification")
+        out = query_handler.classify_query("are you sure?", context={"last_user_message": None})
+        self.assertNotEqual(out["type"], "clarification")
+
+    def test_context_extractor_skips_meta_messages(self):
+        # A chain of clarifications should still point back at the original Q.
+        import main  # noqa: E402
+        from main import HistoryMessage  # noqa: E402
+
+        history = [
+            HistoryMessage(role="user", content="Which drugs increase motility?"),
+            HistoryMessage(role="assistant", content="Top drugs ranked..."),
+            HistoryMessage(role="user", content="are you sure these are correct?"),
+            HistoryMessage(role="assistant", content="Yes, deterministic."),
+            HistoryMessage(role="user", content="doesn't look right"),
+            HistoryMessage(role="assistant", content="Let me elaborate."),
+        ]
+        ctx = main._extract_context_from_history(history)
+        self.assertEqual(ctx["last_user_message"], "Which drugs increase motility?")
+
+    def test_clarification_routes_with_prior_user_message_only(self):
+        # Frontend may not echo query_type back; last_user_message is enough.
+        ctx = {
+            "last_query_type": None,
+            "last_feature": None,
+            "last_drugs": [],
+            "last_user_message": "which drugs increase motility?",
+        }
+        out = query_handler.classify_query("are you sure?", context=ctx)
+        self.assertEqual(out["type"], "clarification")
+
+    def test_compute_clarification_recovers_ranking(self):
+        out = query_handler.compute_clarification("which drugs increase motility?")
+        self.assertTrue(out["prior_recoverable"])
+        self.assertEqual(out["prior_query_type"], "ranking")
+        self.assertIn("rankings", out["prior_stats"])
+
+    def test_compute_clarification_unrecoverable(self):
+        out = query_handler.compute_clarification(None)
+        self.assertFalse(out["prior_recoverable"])
+        out = query_handler.compute_clarification("hello")
+        self.assertFalse(out["prior_recoverable"])
+
     def test_differentiator_two_drugs(self):
         out = query_handler.classify_query("what differs most between Rotenone and CCCP?")
         self.assertEqual(out["type"], "top_differentiators")
@@ -359,6 +428,40 @@ class TestComputeStatistics(unittest.TestCase):
             sim = set(n["most_similar_on"])
             dif = set(n["most_different_on"])
             self.assertEqual(sim & dif, set())
+
+    def test_ranking_fallback_calls_out_dmso_in_top(self):
+        # Import here so this test can read the fallback formatter directly.
+        import main  # noqa: E402
+
+        stats = {
+            "feature": "Fragment Diffusivity",
+            "direction": "high",
+            "rankings": [
+                {"drug": "myls22", "mean": 0.0011, "n": 1130, "ci95_low": 0.001, "ci95_high": 0.0012, "cohens_d_vs_dmso": 0.1, "effect_vs_dmso": "negligible"},
+                {"drug": "oligomycin", "mean": 0.0011, "n": 1521, "ci95_low": 0.001, "ci95_high": 0.0012, "cohens_d_vs_dmso": 0.08, "effect_vs_dmso": "negligible", "indistinguishable_from_prev": True},
+                {"drug": "cccp", "mean": 0.0011, "n": 1098, "ci95_low": 0.001, "ci95_high": 0.0012, "cohens_d_vs_dmso": 0.05, "effect_vs_dmso": "negligible", "indistinguishable_from_prev": True},
+                {"drug": "mitomycinc", "mean": 0.0011, "n": 2449, "ci95_low": 0.001, "ci95_high": 0.0012, "cohens_d_vs_dmso": 0.05, "effect_vs_dmso": "negligible", "indistinguishable_from_prev": True},
+                {"drug": "tiron", "mean": 0.0011, "n": 1427, "ci95_low": 0.001, "ci95_high": 0.0012, "cohens_d_vs_dmso": 0.04, "effect_vs_dmso": "negligible", "indistinguishable_from_prev": True},
+                {"drug": "DMSO (control)", "mean": 0.001, "n": 1480, "ci95_low": 0.0009, "ci95_high": 0.0011},
+            ],
+        }
+        text = main._fallback_answer("ranking", stats)
+        # Headline must call out DMSO's position and 'barely separated'.
+        self.assertIn("DMSO (control)", text)
+        self.assertIn("position 6", text)
+        # And mention that ranks are indistinguishable.
+        self.assertIn("indistinguishable", text)
+
+    def test_clarification_fallback_explains_provenance(self):
+        import main  # noqa: E402
+
+        text = main._fallback_answer("clarification", {
+            "prior_recoverable": True,
+            "prior_query_type": "ranking",
+            "prior_question": "which drugs increase motility?",
+        })
+        self.assertIn("deterministic", text.lower())
+        self.assertIn("ranking", text.lower())
 
     def test_top_differentiators_sorted_by_effect(self):
         out = query_handler.compute_top_differentiators("Rotenone", "DMSO", top_n=5)

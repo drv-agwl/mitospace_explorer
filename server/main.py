@@ -587,9 +587,35 @@ def _sanitize_history(
     return cleaned
 
 
+_META_PHRASE_HINTS = (
+    "are you sure", "are you certain", "is that correct", "is that right",
+    "double check", "double-check", "verify", "recompute", "recheck",
+    "doesn't look", "doesn't seem", "looks wrong", "looks off",
+    "explain that", "explain this", "tell me more", "tell me why",
+    "elaborate", "expand on", "in more detail", "what does this mean",
+    "are these correct", "are these right", "are those correct",
+)
+
+
+def _is_meta_message(text: str) -> bool:
+    """A meta / clarification user message (so we skip it when looking for
+    the *substantive* previous question to defend in a clarification turn).
+    """
+    if not text:
+        return False
+    t = text.lower().strip()
+    if t in {"why", "why?", "really", "really?", "sure", "sure?", "explain", "explain.", "elaborate"}:
+        return True
+    return any(p in t for p in _META_PHRASE_HINTS)
+
+
 def _extract_context_from_history(history: List[HistoryMessage]) -> dict:
     """Walk history backwards to find the last feature / drugs / query type
     mentioned. Used by the classifier to interpret follow-ups like "and CCCP?".
+
+    `last_user_message` skips meta / clarification turns so that a chain like
+        Q1 (real) → Q2 ("are you sure?") → Q3 ("why?")
+    keeps pointing Q3 at Q1, not at Q2.
     """
     context = {
         "last_query_type": None,
@@ -603,12 +629,12 @@ def _extract_context_from_history(history: List[HistoryMessage]) -> dict:
             if feat:
                 context["last_feature"] = feat
         if msg.role == "user":
-            if context["last_user_message"] is None:
+            if context["last_user_message"] is None and not _is_meta_message(msg.content):
                 context["last_user_message"] = msg.content
             drugs = query_handler.extract_drug_names(msg.content)
             if drugs and not context["last_drugs"]:
                 context["last_drugs"] = drugs
-        if msg.query_type and context["last_query_type"] is None:
+        if msg.query_type and context["last_query_type"] is None and msg.query_type != "clarification":
             context["last_query_type"] = msg.query_type
         if (
             context["last_feature"]
@@ -649,9 +675,54 @@ def _fallback_answer(qtype: str, stats: dict) -> str:
             rankings = stats.get("rankings") or []
             if not rankings:
                 return f"I ranked drugs by {feature}, but no valid values were available."
+
+            # Compose a 1–2 sentence summary that surfaces *the story*, not just
+            # the bullet list. Two things a scientist would notice immediately:
+            #   • If the No.1 drug's effect vs DMSO is small/negligible, then
+            #     the "ranking" doesn't show a meaningful biological effect.
+            #   • If DMSO control itself is in the top 10, the spread between
+            #     drugs is dominated by noise rather than treatment.
             verb = "higher" if direction == "high" else "lower"
-            lines = [f"Top drugs by {verb} {feature}:"]
-            for i, r in enumerate(rankings[:10], start=1):
+            preamble_parts: List[str] = []
+            top = rankings[:10]
+            top_entry = top[0]
+            dmso_position = next(
+                (i + 1 for i, r in enumerate(rankings) if r.get("drug") == "DMSO (control)"),
+                None,
+            )
+            top_effect = top_entry.get("effect_vs_dmso")
+            top_d = top_entry.get("cohens_d_vs_dmso")
+            n_indistinguishable = sum(1 for r in top if r.get("indistinguishable_from_prev"))
+
+            opener_subject = f"**{top_entry.get('drug','?')}**"
+            opener_value = _round_for_display(top_entry.get("mean"))
+            preamble_parts.append(
+                f"By {verb} {feature}, {opener_subject} leads at {opener_value}."
+            )
+            if dmso_position and dmso_position <= 10:
+                preamble_parts.append(
+                    f"Note that **DMSO (control) is itself in position {dmso_position}** — "
+                    "the 'top' drugs are barely separated from baseline, so none of them are "
+                    f"meaningfully {verb} than control on this feature."
+                )
+            elif top_effect in {"negligible", "small"} and top_d is not None:
+                preamble_parts.append(
+                    f"The effect vs DMSO is {top_effect} (d={top_d}), so even the top drug "
+                    "shows only a modest separation from control."
+                )
+            elif top_effect == "large" and top_d is not None:
+                preamble_parts.append(
+                    f"The effect vs DMSO is large (d={top_d}), so {top_entry.get('drug')} "
+                    f"clearly stands apart from control on this feature."
+                )
+            if n_indistinguishable >= 3:
+                preamble_parts.append(
+                    f"{n_indistinguishable + 1} of the top entries have overlapping 95% CIs — "
+                    "treat the precise ordering with caution."
+                )
+
+            lines = [" ".join(preamble_parts), "", f"Top drugs by {verb} {feature}:"]
+            for i, r in enumerate(top, start=1):
                 drug = r.get("drug", "?")
                 mean = _round_for_display(r.get("mean"))
                 ci_lo = _round_for_display(r.get("ci95_low"))
@@ -667,7 +738,7 @@ def _fallback_answer(qtype: str, stats: dict) -> str:
                 if d is not None and effect:
                     line += f" — effect vs DMSO: {effect} (d={d})"
                 if r.get("indistinguishable_from_prev"):
-                    line += "  ← statistically indistinguishable from #{0}".format(i - 1)
+                    line += f"  ← indistinguishable from #{i - 1}"
                 lines.append(line)
             return "\n".join(lines)
 
@@ -676,7 +747,28 @@ def _fallback_answer(qtype: str, stats: dict) -> str:
             names = [k for k in stats.keys() if k != "_inference"]
             if not names:
                 return "I couldn't compute a comparison for those drugs."
-            lines = [f"Comparison across {', '.join(names)}:"]
+
+            # Lead with the headline: count how many features are clearly
+            # different vs indistinguishable. This gives a one-glance verdict.
+            header = f"Comparison across {', '.join(names)}"
+            if len(names) == 2 and inference:
+                pair_key = next(iter(inference))
+                verdicts = [
+                    v.get("verdict") for v in inference[pair_key].values()
+                    if isinstance(v, dict) and v.get("verdict")
+                ]
+                n_clear = sum(1 for v in verdicts if v == "clearly_different")
+                n_indist = sum(1 for v in verdicts if v == "indistinguishable")
+                total = len(verdicts)
+                if total:
+                    if n_clear >= 1 or n_indist < total:
+                        header += (
+                            f" — {n_clear}/{total} features clearly different, "
+                            f"{n_indist}/{total} indistinguishable."
+                        )
+                    else:
+                        header += f" — all {total} features are statistically indistinguishable."
+            lines = [header + ":"]
             feature_set: List[str] = []
             for n in names:
                 entry = stats.get(n, {})
@@ -757,6 +849,25 @@ def _fallback_answer(qtype: str, stats: dict) -> str:
                     f"differs most on {', '.join(n.get('most_different_on') or [])})"
                 )
             return "\n".join(lines)
+
+        if qtype == "clarification":
+            # No previous turn we can reconstruct → generic but honest.
+            if not stats.get("prior_recoverable"):
+                return (
+                    "Every number I report is computed deterministically by the backend "
+                    "(pandas means, scipy t-tests, etc.) from the loaded dataset — there's "
+                    "no model in the loop for the numbers themselves. If a specific value "
+                    "looked off, name it and I can re-explain how it was derived."
+                )
+            prior_q = stats.get("prior_question", "your previous question")
+            prior_type = stats.get("prior_query_type", "that")
+            return (
+                f"Yes — the numbers for *{prior_q}* are computed deterministically by the "
+                "backend (pandas group-by + scipy t-tests, no LLM in the loop for the "
+                "arithmetic). Each one is reproducible from the loaded dataset. If a "
+                f"specific value in the {prior_type} result looks off, point me at it and "
+                "I'll walk through how it was computed."
+            )
 
         if qtype == "top_differentiators":
             a = stats.get("drug_a", "A")

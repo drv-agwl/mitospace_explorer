@@ -416,6 +416,44 @@ def classify_query(message: str, context: Optional[Dict[str, Any]] = None) -> Di
     if any(h in msg_lower for h in help_words):
         return {'type': 'help', 'params': {}}
 
+    # ── 0a-pre. Clarification / meta-questions about the previous answer.
+    # Triggers like "are you sure?", "is that right?", "explain", "why" should
+    # NOT fall through to "unsupported" — they're conversational and want the
+    # LLM to defend or explain the previous answer.
+    clarification_patterns = [
+        "are you sure", "are you certain", "is that correct", "is that right",
+        "is this correct", "is this right", "is that accurate", "is this accurate",
+        "double check", "double-check", "doublecheck", "recompute", "recheck",
+        "verify that", "verify this", "check that", "check this",
+        "how do you know", "where did", "where do these come from",
+        "explain that", "explain this", "explain more", "explain why",
+        "tell me more", "tell me why", "elaborate", "expand on",
+        "go deeper", "more detail", "more details", "in more detail",
+        "doesn't look right", "doesn't seem right", "doesn't look correct",
+        "doesn't make sense", "makes no sense", "make no sense",
+        "looks wrong", "looks off", "seems wrong", "seems off",
+        "are these correct", "are these right", "are those correct",
+        "what does this mean", "what do you mean", "interpret",
+    ]
+    # Standalone single-word triggers — only fire when the message is short and
+    # we have a previous turn to refer to.
+    msg_stripped = msg_lower.strip().rstrip("?.!")
+    is_short_meta = msg_stripped in {"why", "really", "sure", "explain", "elaborate"}
+    has_prior_turn = bool(
+        last_query_type or (context and context.get("last_user_message"))
+    )
+    if (
+        any(p in msg_lower for p in clarification_patterns)
+        or (is_short_meta and has_prior_turn)
+    ) and has_prior_turn:
+        return {
+            "type": "clarification",
+            "params": {
+                "prior_query_type": last_query_type,
+                "prior_user_message": context.get("last_user_message") if context else None,
+            },
+        }
+
     # ── 0b-pre. Drug-similarity & top-differentiator intents.
     # These must come BEFORE the dataset-overview pattern, because phrases
     # like "what drugs look like rotenone?" otherwise trigger the overview
@@ -1147,6 +1185,37 @@ def _interpret_correlation(corr: float) -> str:
         return f"strong {direction}"
 
 
+def compute_clarification(prior_user_message: Optional[str]) -> Dict[str, Any]:
+    """Re-derive the stats envelope from the user's PREVIOUS turn so the LLM
+    has something concrete to defend or explain.
+
+    Approach: classify the prior user message, then route to its compute_* path.
+    This is deterministic (same prior question → same stats) and means we never
+    need the frontend to round-trip the prior answer's `data` back to us.
+
+    If we can't reconstruct the prior question, we return a benign envelope so
+    the LLM can still give a generic-but-honest answer ("I compute every value
+    deterministically from the loaded dataset — name the specific number…").
+    """
+    if not prior_user_message:
+        return {"prior_recoverable": False}
+
+    info = classify_query(prior_user_message)
+    prior_type = info.get("type")
+    if not prior_type or prior_type in {
+        "greeting", "thanks", "help", "unsupported", "clarification"
+    }:
+        return {"prior_recoverable": False, "prior_query_type": prior_type}
+
+    prior_stats = compute_statistics(prior_type, info.get("params") or {})
+    return {
+        "prior_recoverable": True,
+        "prior_query_type": prior_type,
+        "prior_question": prior_user_message,
+        "prior_stats": prior_stats,
+    }
+
+
 def compute_statistics(query_type: str, params: Dict[str, Any]) -> Dict[str, Any]:
     """Route to the appropriate statistics computation."""
     if query_type == "drug_comparison":
@@ -1169,4 +1238,6 @@ def compute_statistics(query_type: str, params: Dict[str, Any]) -> Dict[str, Any
         return compute_top_differentiators(
             params["drug_a"], params["drug_b"], params.get("top_n", 5)
         )
+    if query_type == "clarification":
+        return compute_clarification(params.get("prior_user_message"))
     return {"error": "Unsupported query type"}
