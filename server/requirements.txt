@@ -14,3 +14,8 @@ scikit-learn>=1.0.0
 # Chat system - LLM integration via OpenRouter
 openai>=1.0.0
 python-dotenv>=1.0.0
+# Chat system - production hardening
+# tenacity: retry transient OpenRouter failures (429 / 5xx / timeouts)
+tenacity>=8.0.0
+# slowapi: per-IP rate limiting on the (cost-bearing) /api/chat endpoint
+slowapi>=0.1.9

@@ -6,14 +6,39 @@ Designed for natural conversational flow:
 - Context-aware follow-up handling
 - Graceful handling of greetings, thanks, help requests
 - Dataset overview for vague questions
+- Multi-version: chat can serve v1 or v3 from a single backend, picked per
+  request via the `version` argument. Datasets are loaded once at startup
+  and kept in `_DATASETS`.
 """
+import logging
 import re
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
 import pandas as pd
 
 
-# Global data (loaded at startup)
+logger = logging.getLogger("mitospace.query")
+
+
+@dataclass
+class ChatDataset:
+    """Per-version feature table + sample metadata used by chat."""
+
+    version: str
+    feature_table: pd.DataFrame
+    sample_metadata: Optional[pd.DataFrame] = None
+
+
+# Module-level registry. Populated by `load_data(... version=...)` at startup.
+# Default key is "v3" so any legacy code that just calls `feature_table` keeps
+# pointing at the newest dataset.
+_DATASETS: Dict[str, ChatDataset] = {}
+_DEFAULT_VERSION = "v3"
+
+
+# Backward-compat globals (kept so existing imports don't break). They mirror
+# whichever version was loaded last by `load_data` without an explicit version.
 feature_table: Optional[pd.DataFrame] = None
 sample_metadata: Optional[pd.DataFrame] = None
 
@@ -137,9 +162,14 @@ KEY_FEATURES = [
 ]
 
 
-def load_data(feature_path: str, metadata_json_path: Optional[str] = None):
+def load_data(
+    feature_path: str,
+    metadata_json_path: Optional[str] = None,
+    *,
+    version: str = _DEFAULT_VERSION,
+) -> None:
     """
-    Load the chat dataset into memory.
+    Load the chat dataset into memory under `version`.
 
     Accepts either:
       - a .csv  (legacy v1 mitotnt_features.csv layout)
@@ -148,6 +178,10 @@ def load_data(feature_path: str, metadata_json_path: Optional[str] = None):
     For v3 we also derive `TMRM Intensity` (last timepoint of `tmrm_intensities`)
     and surface a small set of v1-friendly column aliases so the existing
     NUMERIC_FEATURES / KEY_FEATURES list keeps working without per-column rewrites.
+
+    The loaded data is registered under `version` (default v3). Module-level
+    `feature_table` / `sample_metadata` are also updated to mirror the most
+    recent load so backward-compatible callers keep working.
     """
     global feature_table, sample_metadata
 
@@ -185,7 +219,15 @@ def load_data(feature_path: str, metadata_json_path: Optional[str] = None):
         feature_table = df
     else:
         feature_table = pd.read_csv(path)
-    print(f"[QueryHandler] Loaded feature table: {len(feature_table)} samples, {len(feature_table.columns)} features ({path})")
+    logger.info(
+        "chat.dataset_loaded",
+        extra={
+            "version": version,
+            "samples": len(feature_table),
+            "columns": len(feature_table.columns),
+            "path": path,
+        },
+    )
 
     if metadata_json_path:
         import json
@@ -203,7 +245,10 @@ def load_data(feature_path: str, metadata_json_path: Optional[str] = None):
                         'phenotype': point.get('phenotype', ''),
                     })
                 sample_metadata = pd.DataFrame(metadata_records)
-                print(f"[QueryHandler] Loaded sample metadata: {len(sample_metadata)} samples")
+                logger.info(
+                    "chat.metadata_loaded",
+                    extra={"version": version, "samples": len(sample_metadata)},
+                )
     elif 'label_names' in feature_table.columns:
         # v3 parquet has labels embedded — derive metadata from it
         sample_metadata = pd.DataFrame({
@@ -215,7 +260,46 @@ def load_data(feature_path: str, metadata_json_path: Optional[str] = None):
         })
         if 'labels_moa' in feature_table.columns:
             sample_metadata['moa'] = feature_table['labels_moa'].astype(str).values
-        print(f"[QueryHandler] Derived metadata from parquet labels: {len(sample_metadata)} samples")
+        logger.info(
+            "chat.metadata_derived",
+            extra={"version": version, "samples": len(sample_metadata)},
+        )
+
+    # Register under this version. Active globals already reflect this load.
+    _DATASETS[version] = ChatDataset(
+        version=version,
+        feature_table=feature_table,
+        sample_metadata=sample_metadata,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Per-request version switching (thread-safe enough for our single-process
+# uvicorn worker; if we ever go multi-worker we'd pass version explicitly).
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def available_versions() -> List[str]:
+    return list(_DATASETS.keys())
+
+
+def has_version(version: str) -> bool:
+    return version in _DATASETS
+
+
+def use_version(version: str) -> str:
+    """Swap module-level `feature_table` / `sample_metadata` to the requested
+    version for the duration of the current request. Returns the version that
+    was actually selected (falls back to the default when missing).
+    """
+    global feature_table, sample_metadata
+    v = version if version in _DATASETS else _DEFAULT_VERSION
+    if v not in _DATASETS:
+        return v
+    ds = _DATASETS[v]
+    feature_table = ds.feature_table
+    sample_metadata = ds.sample_metadata
+    return v
 
 
 def extract_feature_name(text: str) -> Optional[str]:
@@ -305,7 +389,16 @@ def classify_query(message: str, context: Optional[Dict[str, Any]] = None) -> Di
     current_drugs = extract_drug_names(message)
     current_feature = extract_feature_name(message)
 
-    print(f"[classify] msg='{msg_lower}' | drugs={current_drugs} | feat={current_feature} | ctx_feat={last_feature} | ctx_type={last_query_type}")
+    logger.debug(
+        "chat.classify_input",
+        extra={
+            "msg": msg_lower[:200],
+            "drugs": current_drugs,
+            "feature": current_feature,
+            "ctx_feature": last_feature,
+            "ctx_query_type": last_query_type,
+        },
+    )
 
     # ── 0. Greetings, thanks, help ──
     greetings = ['hello', 'hi ', 'hi!', 'hey', 'good morning', 'good afternoon', 'good evening']
@@ -410,18 +503,31 @@ def classify_query(message: str, context: Optional[Dict[str, Any]] = None) -> Di
             return {'type': 'correlation', 'params': {'features': features[:2]}}
 
     # ── 5. Ranking queries ──
-    ranking_words_high = ['highest', 'most', 'increase', 'largest', 'maximum', 'top',
-                          'which drugs', 'what drugs', 'best', 'strongest', 'greatest']
-    ranking_words_low = ['lowest', 'least', 'decrease', 'smallest', 'minimum', 'bottom',
-                         'worst', 'weakest', 'reduce', 'lower', 'inhibit', 'diminish']
+    # Generic ranking triggers ("which drugs", "what drugs") imply ranking but
+    # don't specify direction. We split signals into "directional" (explicitly
+    # high or low) and "generic" so an explicit "decrease" never gets shadowed
+    # by the generic "which drugs" trigger that also fires on the same query.
+    ranking_words_high_explicit = [
+        'highest', 'most', 'increase', 'largest', 'maximum', 'top',
+        'best', 'strongest', 'greatest',
+    ]
+    ranking_words_low_explicit = [
+        'lowest', 'least', 'decrease', 'smallest', 'minimum', 'bottom',
+        'worst', 'weakest', 'reduce', 'lower', 'inhibit', 'diminish',
+    ]
+    ranking_words_generic = ['which drugs', 'what drugs']
 
-    is_ranking_high = any(word in msg_lower for word in ranking_words_high)
-    is_ranking_low = any(word in msg_lower for word in ranking_words_low)
+    has_high = any(word in msg_lower for word in ranking_words_high_explicit)
+    has_low = any(word in msg_lower for word in ranking_words_low_explicit)
+    has_generic = any(word in msg_lower for word in ranking_words_generic)
 
-    if is_ranking_high or is_ranking_low:
+    if has_high or has_low or has_generic:
         feature = current_feature or last_feature
         if feature:
-            direction = 'high' if is_ranking_high else 'low'
+            if has_low and not has_high:
+                direction = 'low'
+            else:
+                direction = 'high'  # explicit high, or generic with no other signal
             return {'type': 'ranking', 'params': {'feature': feature, 'direction': direction, 'top_n': 10}}
 
     # ── 6. "Effects of [drug]" / "what does [drug] do" ──

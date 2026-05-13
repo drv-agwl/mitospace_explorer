@@ -169,23 +169,87 @@ export interface ChatResponse {
   answer: string;
   data?: any;
   query_type?: string;
+  request_id?: string;
+  /** True iff every number in `answer` is verified against backend stats. */
+  grounded?: boolean;
+  /** 'llm' if the answer came from the language model, 'fallback' if from deterministic code. */
+  source?: 'llm' | 'fallback';
 }
 
+export class ChatRequestError extends Error {
+  status?: number;
+  retryable: boolean;
+
+  constructor(message: string, opts: { status?: number; retryable?: boolean } = {}) {
+    super(message);
+    this.name = 'ChatRequestError';
+    this.status = opts.status;
+    this.retryable = opts.retryable ?? false;
+  }
+}
+
+export interface SendChatOptions {
+  signal?: AbortSignal;
+  /** Overall request timeout in ms; defaults to 60s. */
+  timeoutMs?: number;
+}
+
+const DEFAULT_CHAT_TIMEOUT_MS = 60_000;
+
+/**
+ * Send a chat message to the backend.
+ *
+ * Cancellable via `options.signal` (used by the Stop button) and bounded by
+ * an internal timeout (default 60s) so a hung backend can't leave the UI
+ * spinning forever. Throws a {@link ChatRequestError} with `retryable=true`
+ * for transient failures (timeouts, 429, 5xx) so the UI can offer a Retry
+ * button without re-classifying every error string by hand.
+ */
 export async function sendChatMessage(
   message: string,
   history?: { role: string; content: string; query_type?: string }[],
   version?: DatasetVersion,
+  options: SendChatOptions = {},
 ): Promise<ChatResponse> {
-  const res = await fetch(`${API_BASE}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, history: history || [], version }),
-  });
+  const { signal: externalSignal, timeoutMs = DEFAULT_CHAT_TIMEOUT_MS } = options;
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || `Chat request failed: ${res.status}`);
+  const timeoutController = new AbortController();
+  const timeoutId = window.setTimeout(() => timeoutController.abort(), timeoutMs);
+
+  const onExternalAbort = () => timeoutController.abort();
+  externalSignal?.addEventListener('abort', onExternalAbort);
+
+  try {
+    const res = await fetch(`${API_BASE}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, history: history || [], version }),
+      signal: timeoutController.signal,
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      const retryable = res.status === 429 || res.status >= 500;
+      throw new ChatRequestError(text || `Chat request failed (HTTP ${res.status})`, {
+        status: res.status,
+        retryable,
+      });
+    }
+
+    return (await res.json()) as ChatResponse;
+  } catch (err) {
+    if (err instanceof ChatRequestError) throw err;
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      const userCancelled = externalSignal?.aborted ?? false;
+      throw new ChatRequestError(
+        userCancelled ? 'Cancelled.' : 'The request timed out. Please try again.',
+        { retryable: !userCancelled },
+      );
+    }
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    throw new ChatRequestError(`Network error: ${message}`, { retryable: true });
+  } finally {
+    window.clearTimeout(timeoutId);
+    externalSignal?.removeEventListener('abort', onExternalAbort);
   }
-
-  return res.json();
 }

@@ -10,38 +10,102 @@ Multi-version support: every endpoint accepts an optional `?version=v1|v3` query
 param (or `version` field in POST bodies). Both datasets are loaded once at
 startup and held in memory by `dataset_registry`.
 """
+import json
+import logging
 import os
 import sys
+import uuid
 from pathlib import Path
 from typing import List, Optional
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 # Chat system imports - handle both package and direct execution
 try:
     # Try relative imports first (for when run as: python -m uvicorn server.main:app)
+    from . import groundedness
     from . import query_handler
     from . import llm_client
     from . import dataset_registry
     from .query_handler import load_data, classify_query, compute_statistics
-    from .llm_client import initialize_llm_client, get_llm_client, is_llm_available
+    from .llm_client import (
+        build_system_prompt,
+        initialize_llm_client,
+        get_llm_client,
+        is_llm_available,
+    )
     from .dataset_registry import Dataset, load_v1, load_v3, register, feature_bounds
 except ImportError:
     # Fall back to absolute imports (for when run from server/ directory)
+    import groundedness
     import query_handler
     import llm_client
     import dataset_registry
     from query_handler import load_data, classify_query, compute_statistics
-    from llm_client import initialize_llm_client, get_llm_client, is_llm_available
+    from llm_client import (
+        build_system_prompt,
+        initialize_llm_client,
+        get_llm_client,
+        is_llm_available,
+    )
     from dataset_registry import Dataset, load_v1, load_v3, register, feature_bounds
 
 # Load environment variables
 load_dotenv()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Logging — single root configuration so llm_client / query_handler / this
+# module emit consistent structured-ish lines. Anything passed via `extra=`
+# is appended as key=value pairs for grep-ability without pulling in structlog.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class _KeyValueFormatter(logging.Formatter):
+    _RESERVED = {
+        "name", "msg", "args", "levelname", "levelno", "pathname", "filename",
+        "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName",
+        "created", "msecs", "relativeCreated", "thread", "threadName",
+        "processName", "process", "taskName", "message",
+    }
+
+    def format(self, record: logging.LogRecord) -> str:
+        base = f"{self.formatTime(record, '%Y-%m-%dT%H:%M:%S')} {record.levelname} {record.name} :: {record.getMessage()}"
+        extras = {
+            k: v for k, v in record.__dict__.items() if k not in self._RESERVED and not k.startswith("_")
+        }
+        if extras:
+            kv = " ".join(
+                f"{k}={json.dumps(v, default=str) if isinstance(v, (dict, list)) else v}"
+                for k, v in extras.items()
+            )
+            base += " | " + kv
+        if record.exc_info:
+            base += "\n" + self.formatException(record.exc_info)
+        return base
+
+
+def _configure_logging() -> None:
+    root = logging.getLogger("mitospace")
+    if root.handlers:
+        return
+    handler = logging.StreamHandler()
+    handler.setFormatter(_KeyValueFormatter())
+    root.addHandler(handler)
+    root.setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
+    root.propagate = False
+
+
+_configure_logging()
+log = logging.getLogger("mitospace.api")
 
 # Paths relative to project root (parent of server/)
 ROOT = Path(__file__).resolve().parent.parent
@@ -105,7 +169,21 @@ def _resolve_feature_key(ds: Dataset, feature_name: str) -> Optional[str]:
     return None
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Rate limiting for /api/chat.
+#
+# Public-facing chat is the only endpoint that costs us money per call
+# (OpenRouter). Everything else is cheap CPU + memory. We rate-limit chat by
+# remote IP using slowapi (in-memory; good enough for a single-worker uvicorn —
+# move to Redis if we ever scale out). Overridable via env.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_chat_rate_limit = os.environ.get("CHAT_RATE_LIMIT", "20/minute")
+limiter = Limiter(key_func=get_remote_address, default_limits=[])
+
 app = FastAPI(title="MitoSpace Explorer API")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 @app.get("/")
@@ -201,30 +279,44 @@ def startup():
     except Exception as e:
         print(f"[startup] v3 load failed: {e}")
 
-    # ── Chat: load v3 dataset for now (chat operates on whichever is currently active) ──
+    # ── Chat: load both v1 (legacy CSV) and v3 (parquet) so the chat endpoint
+    #    can route per-request to the dataset the user is currently exploring.
     try:
-        # Default chat backend: v3 data (newer). Falls back to v1 if v3 missing.
         if V3_PARQUET.exists():
             metadata_json = ROOT / "public" / "data" / "points4d_v3.json"
-            load_data(str(V3_PARQUET), str(metadata_json) if metadata_json.exists() else None)
-        else:
-            feature_csv = DATA / "mitotnt_features.csv"
-            metadata_json = ROOT / "src" / "data" / "points4d.json"
-            if feature_csv.exists():
-                load_data(str(feature_csv), str(metadata_json) if metadata_json.exists() else None)
+            load_data(
+                str(V3_PARQUET),
+                str(metadata_json) if metadata_json.exists() else None,
+                version="v3",
+            )
     except Exception as e:
-        print(f"[startup] Chat data loading failed: {e}")
+        log.warning("startup.chat_v3_failed", extra={"error": str(e)})
+
+    try:
+        feature_csv = DATA / "mitotnt_features.csv"
+        metadata_json = ROOT / "src" / "data" / "points4d.json"
+        if feature_csv.exists():
+            load_data(
+                str(feature_csv),
+                str(metadata_json) if metadata_json.exists() else None,
+                version="v1",
+            )
+    except Exception as e:
+        log.warning("startup.chat_v1_failed", extra={"error": str(e)})
 
     # ── LLM ──
     try:
         api_key = os.getenv("OPENROUTER_API_KEY")
-        model = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
+        # Default to Claude Haiku 4.5: stronger at strict grounding and refusal
+        # than gpt-4o-mini at similar throughput, ~$1/$5 per Mtok. Override via
+        # OPENROUTER_MODEL.
+        model = os.getenv("OPENROUTER_MODEL", "anthropic/claude-haiku-4.5")
         if api_key:
             initialize_llm_client(api_key=api_key, model=model)
         else:
-            print("[startup] Warning: OPENROUTER_API_KEY not set, chat will be disabled")
+            log.warning("startup.llm_disabled", extra={"reason": "OPENROUTER_API_KEY not set"})
     except Exception as e:
-        print(f"[startup] LLM initialization failed: {e}")
+        log.error("startup.llm_init_failed", extra={"error": str(e)})
 
 
 class ProjectRequest(BaseModel):
@@ -411,23 +503,44 @@ def health(version: Optional[str] = Query(default=None)):
         "embedding_count": n,
         "features": list(ds.feature_values.keys()),
         "axes": list(ds.feature_umap_model.keys()),
-        "chat_available": is_llm_available() and query_handler.feature_table is not None,
+        "chat_available": is_llm_available() and bool(query_handler.available_versions()),
+        "chat_versions": query_handler.available_versions(),
+        "llm_model": getattr(get_llm_client(), "model", None) if is_llm_available() else None,
     }
 
 
-# Chat endpoint
+# ─────────────────────────────────────────────────────────────────────────────
+# Chat — production endpoint
+#
+# Pipeline:
+#   1. Validate + sanitize the request (size, length, version).
+#   2. Pick the chat dataset version (v1 / v3) for this request.
+#   3. Build conversation context from history → classify intent.
+#   4. Short-circuit "greeting" / "thanks" / "help" / "unsupported" / no-stats.
+#   5. Compute deterministic statistics for the classified query.
+#   6. Ask the LLM to narrate them, passing the full prior conversation so
+#      multi-turn follow-ups feel native.
+#   7. Verify the LLM answer is *grounded* in the stats JSON; if not, fall
+#      back to a deterministic textual answer.
+#   8. Emit one structured log line per request with telemetry.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+MAX_CHAT_MESSAGE_CHARS = 2_000
+MAX_HISTORY_TURNS = 12  # ~6 exchanges; keeps prompt cheap and focused
+
+
 class HistoryMessage(BaseModel):
-    role: str
+    role: str = Field(..., pattern="^(user|assistant|system)$")
     content: str
     query_type: Optional[str] = None
 
 
 class ChatRequest(BaseModel):
-    message: str
-    history: List[HistoryMessage] = []
-    # Frontend dataset version (informational; chat always uses the latest data
-    # the backend has loaded). Kept on the request so analytics + system prompt
-    # can mention which version we're answering from.
+    message: str = Field(..., min_length=1, max_length=MAX_CHAT_MESSAGE_CHARS)
+    history: List[HistoryMessage] = Field(default_factory=list)
+    # Which dataset version the user is exploring (v1 | v3). Backend picks the
+    # matching chat data; defaults to v3 when missing or unknown.
     version: Optional[str] = None
 
 
@@ -435,238 +548,344 @@ class ChatResponse(BaseModel):
     answer: str
     data: Optional[dict] = None
     query_type: Optional[str] = None
+    request_id: str
+    grounded: bool
+    source: str  # "llm" | "fallback"
+
+
+def _sanitize_history(
+    history: List[HistoryMessage],
+    max_turns: int = MAX_HISTORY_TURNS,
+) -> List[HistoryMessage]:
+    """Trim history to the last `max_turns` turns and drop oversize/blank ones."""
+    cleaned: List[HistoryMessage] = []
+    for m in history[-max_turns:]:
+        if not m.content or not m.content.strip():
+            continue
+        if len(m.content) > MAX_CHAT_MESSAGE_CHARS:
+            # Truncate long turns rather than reject the request.
+            cleaned.append(
+                HistoryMessage(
+                    role=m.role,
+                    content=m.content[:MAX_CHAT_MESSAGE_CHARS] + "...[truncated]",
+                    query_type=m.query_type,
+                )
+            )
+            continue
+        cleaned.append(m)
+    return cleaned
 
 
 def _extract_context_from_history(history: List[HistoryMessage]) -> dict:
-    """
-    Extract conversation context from history to help classify follow-up questions.
-    Returns dict with last_query_type, last_feature, last_drugs, last_message (user).
+    """Walk history backwards to find the last feature / drugs / query type
+    mentioned. Used by the classifier to interpret follow-ups like "and CCCP?".
     """
     context = {
-        'last_query_type': None,
-        'last_feature': None,
-        'last_drugs': [],
-        'last_user_message': None,
+        "last_query_type": None,
+        "last_feature": None,
+        "last_drugs": [],
+        "last_user_message": None,
     }
-    
-    # Walk backwards through history to find the last meaningful exchange
     for msg in reversed(history):
-        # Extract features from both user AND assistant messages
-        if context['last_feature'] is None:
+        if context["last_feature"] is None:
             feat = query_handler.extract_feature_name(msg.content)
             if feat:
-                context['last_feature'] = feat
-        
-        if msg.role == 'user':
-            # Track the last user message for re-run on confirmation
-            if context['last_user_message'] is None:
-                context['last_user_message'] = msg.content
-            
+                context["last_feature"] = feat
+        if msg.role == "user":
+            if context["last_user_message"] is None:
+                context["last_user_message"] = msg.content
             drugs = query_handler.extract_drug_names(msg.content)
-            if drugs and not context['last_drugs']:
-                context['last_drugs'] = drugs
-        
-        if msg.query_type and context['last_query_type'] is None:
-            context['last_query_type'] = msg.query_type
-        
-        # Stop once we have enough context
-        if context['last_feature'] and context['last_query_type'] and context['last_user_message']:
+            if drugs and not context["last_drugs"]:
+                context["last_drugs"] = drugs
+        if msg.query_type and context["last_query_type"] is None:
+            context["last_query_type"] = msg.query_type
+        if (
+            context["last_feature"]
+            and context["last_query_type"]
+            and context["last_user_message"]
+        ):
             break
-    
     return context
 
 
-@app.post("/api/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest):
-    """
-    Conversational Q&A endpoint for dataset queries
-    
-    Flow:
-    1. Classify query type (with conversation context for follow-ups)
-    2. Compute relevant statistics from dataset
-    3. Send stats to LLM with strict prompt
-    4. Return formatted natural language answer
-    """
-    # Check if chat is available
-    if not is_llm_available():
-        raise HTTPException(
-            status_code=503,
-            detail="Chat system is not available. LLM client not initialized."
-        )
-    
-    if query_handler.feature_table is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Chat system is not available. Dataset not loaded."
-        )
-    
-    message = req.message.strip()
-    if not message:
-        raise HTTPException(status_code=400, detail="Message cannot be empty")
-    
-    # Extract context from conversation history
-    context = _extract_context_from_history(req.history)
-    print(f"[chat] Message: '{message}' | Context: {context}")
-    
-    # Step 1: Classify query (with context awareness)
-    query_info = classify_query(message, context=context)
-    query_type = query_info['type']
-    
-    # Step 2: Handle special conversational types (no stats needed)
-    if query_type == 'greeting':
-        return ChatResponse(
-            answer="Hi! I'm MitoSpace Chat — I can help you explore the mitochondrial dataset. "
-                   "Try asking things like:\n\n"
-                   "• \"Which drugs increase motility?\"\n"
-                   "• \"Compare Rotenone and CCCP\"\n"
-                   "• \"Is motility correlated with segment length?\"\n"
-                   "• \"What are the effects of TBHP?\"\n\n"
-                   "What would you like to know?",
-            data=None,
-            query_type="greeting"
-        )
-    
-    if query_type == 'thanks':
-        return ChatResponse(
-            answer="You're welcome! Feel free to ask more questions about the dataset anytime.",
-            data=None,
-            query_type="thanks"
-        )
-    
-    if query_type == 'help':
-        return ChatResponse(
-            answer="I can analyze this mitochondrial dataset for you. Here's what I can do:\n\n"
-                   "**Drug Rankings** — \"Which drugs increase motility the most?\"\n"
-                   "**Drug Comparisons** — \"Compare Rotenone and CCCP\" or \"What are the effects of TBHP?\"\n"
-                   "**Feature Correlations** — \"Is motility correlated with segment length?\"\n"
-                   "**Summary Statistics** — \"What is the mean fragment length for Rotenone?\"\n"
-                   "**Feature Info** — \"What is membrane potential?\"\n"
-                   "**Dataset Overview** — \"What features are available?\"\n\n"
-                   "You can also ask follow-up questions naturally — I'll remember the context!",
-            data=None,
-            query_type="help"
-        )
-    
-    if query_type == 'unsupported':
-        return ChatResponse(
-            answer="I'm not sure I understood that. Here are some things I can help with:\n\n"
-                   "• \"Which drugs increase motility?\" — rank drugs by a feature\n"
-                   "• \"Compare Rotenone and CCCP\" — compare drug effects\n"
-                   "• \"Is motility correlated with segment length?\" — feature correlations\n"
-                   "• \"What are the effects of TBHP?\" — drug effects\n"
-                   "• \"What features are available?\" — dataset overview\n\n"
-                   "Try rephrasing, or just mention a drug or feature name!",
-            data=None,
-            query_type="unsupported"
-        )
-    
-    # Step 3: Compute statistics
+def _round_for_display(x):
     try:
-        computed_stats = compute_statistics(query_type, query_info['params'])
-    except Exception as e:
-        print(f"[chat] Statistics computation error: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error computing statistics: {str(e)}"
-        )
-    
-    # Check for errors in computation
-    if 'error' in computed_stats:
-        return ChatResponse(
-            answer=f"Sorry, I couldn't process that: {computed_stats['error']}. "
-                   f"Try mentioning a specific drug name or feature (like motility, fragment length, or membrane potential).",
-            data=computed_stats,
-            query_type=query_type
-        )
-    
-    def _fallback_answer(qtype: str, stats: dict) -> str:
-        """
-        Deterministic fallback for when the LLM is unavailable or errors.
-        This keeps chat usable (returns a useful answer) even if OpenRouter
-        credentials are missing / rate-limited / failing.
-        """
-        try:
-            if qtype == "ranking":
-                feature = stats.get("feature", "feature")
-                direction = stats.get("direction", "high")
-                rankings = stats.get("rankings") or []
-                if not rankings:
-                    return f"I computed the ranking for {feature}, but there were no valid drug values to rank."
-                lines = [f"Top drugs by {'higher' if direction == 'high' else 'lower'} {feature}:"]
-                for i, r in enumerate(rankings[:10], start=1):
-                    drug = r.get("drug", "unknown")
-                    mean = r.get("mean", None)
-                    std = r.get("std", None)
-                    n = r.get("count", None)
-                    lines.append(f"{i}. {drug}: mean={mean} (std={std}, n={n})")
+        f = float(x)
+    except (TypeError, ValueError):
+        return x
+    if not np.isfinite(f):
+        return None
+    if abs(f) >= 100:
+        return round(f, 1)
+    if abs(f) >= 1:
+        return round(f, 2)
+    if abs(f) >= 0.01:
+        return round(f, 3)
+    return round(f, 6)
+
+
+def _fallback_answer(qtype: str, stats: dict) -> str:
+    """Deterministic textual answer used whenever the LLM is unavailable or
+    the LLM's answer fails the groundedness check. Designed to be useful on
+    its own — not a placeholder.
+    """
+    try:
+        if qtype == "ranking":
+            feature = stats.get("feature", "the requested feature")
+            direction = stats.get("direction", "high")
+            rankings = stats.get("rankings") or []
+            if not rankings:
+                return f"I ranked drugs by {feature}, but no valid values were available."
+            verb = "higher" if direction == "high" else "lower"
+            lines = [f"Top drugs by {verb} {feature}:"]
+            for i, r in enumerate(rankings[:10], start=1):
+                lines.append(
+                    f"{i}. {r.get('drug', '?')}: mean={_round_for_display(r.get('mean'))} "
+                    f"(std={_round_for_display(r.get('std'))}, n={r.get('count')})"
+                )
+            return "\n".join(lines)
+
+        if qtype == "drug_comparison":
+            # Two layouts: nested by-drug (current `compute_drug_comparison`) or
+            # the legacy `comparison` dict. Handle both safely.
+            if any(isinstance(v, dict) and "features" in v for v in stats.values()):
+                names = list(stats.keys())
+                if not names:
+                    return "I couldn't compute a comparison for those drugs."
+                lines = [f"Comparison across {', '.join(names)}:"]
+                feature_set: List[str] = []
+                for entry in stats.values():
+                    if isinstance(entry, dict):
+                        for k in (entry.get("features") or {}).keys():
+                            if k not in feature_set:
+                                feature_set.append(k)
+                for f in feature_set:
+                    parts = []
+                    for d in names:
+                        info = (stats.get(d, {}).get("features") or {}).get(f, {})
+                        if "mean" in info:
+                            parts.append(f"{d}={_round_for_display(info['mean'])}")
+                    if parts:
+                        lines.append(f"- {f}: " + ", ".join(parts))
                 return "\n".join(lines)
+            return "I couldn't format the comparison."
 
-            if qtype == "drug_comparison":
-                drugs = stats.get("drugs") or []
-                feats = stats.get("features") or []
-                lines = []
-                if drugs and feats:
-                    lines.append(f"Comparison for {', '.join(map(str, drugs))}:")
-                for f in feats:
-                    a = stats.get("comparison", {}).get(f, {})
-                    if not a:
-                        continue
-                    lines.append(
-                        f"- {f}: {drugs[0] if len(drugs)>0 else 'A'} mean={a.get('drug1_mean')} vs "
-                        f"{drugs[1] if len(drugs)>1 else 'B'} mean={a.get('drug2_mean')} "
-                        f"(Δ={a.get('difference')}, effect={a.get('effect')})"
-                    )
-                return "\n".join(lines) if lines else "I computed the comparison statistics, but couldn't format them."
+        if qtype == "correlation":
+            f1 = stats.get("feature1", "feature1")
+            f2 = stats.get("feature2", "feature2")
+            corr = stats.get("correlation")
+            n = stats.get("n_samples")
+            interp = stats.get("interpretation", "")
+            return (
+                f"{f1} and {f2} have a Pearson correlation of "
+                f"r={_round_for_display(corr)} (n={n}) — {interp}."
+            )
 
-            if qtype == "correlation":
-                f1 = stats.get("feature1", "feature1")
-                f2 = stats.get("feature2", "feature2")
-                corr = stats.get("correlation", None)
-                n = stats.get("n_samples", None)
-                interp = stats.get("interpretation", "")
-                return f"Correlation between {f1} and {f2}: r={corr} (n={n}). Interpretation: {interp}."
+        if qtype == "feature_stats":
+            feature = stats.get("feature", "feature")
+            scope = stats.get("scope", "")
+            return (
+                f"{feature} {scope}: mean={_round_for_display(stats.get('mean'))}, "
+                f"std={_round_for_display(stats.get('std'))}, "
+                f"median={_round_for_display(stats.get('median'))}, "
+                f"range {_round_for_display(stats.get('min'))} to "
+                f"{_round_for_display(stats.get('max'))} (n={stats.get('n')})."
+            )
 
-            if qtype == "feature_stats":
-                feature = stats.get("feature", "feature")
-                scope = stats.get("scope", "")
-                return (
-                    f"{feature} {scope}: mean={stats.get('mean')}, std={stats.get('std')}, "
-                    f"median={stats.get('median')}, min={stats.get('min')}, max={stats.get('max')} (n={stats.get('n')})."
-                )
+        if qtype == "feature_description":
+            return str(stats.get("description") or "No description available.")
 
-            if qtype == "feature_description":
-                return str(stats.get("description") or "No description available.")
+        if qtype == "dataset_overview":
+            drugs = stats.get("drugs") or []
+            return (
+                f"Dataset: {stats.get('total_samples')} samples, "
+                f"{stats.get('total_features')} numeric features, "
+                f"{len(drugs)} drug conditions. "
+                f"Key features: {', '.join(stats.get('key_features') or [])}."
+            )
+    except Exception as exc:
+        log.warning("chat.fallback_format_failed", extra={"qtype": qtype, "error": str(exc)})
 
-            if qtype == "dataset_overview":
-                return (
-                    f"Dataset overview: {stats.get('n_samples')} samples, {stats.get('n_features')} features. "
-                    f"Key features: {', '.join(stats.get('key_features') or [])}."
-                )
-        except Exception:
-            pass
-        return "I computed the statistics, but the language model response failed. The raw results are included in the response data."
+    return (
+        "I computed the statistics, but couldn't format a natural-language answer. "
+        "The raw numbers are attached in `data`."
+    )
 
-    # Step 4: Generate LLM response (with deterministic fallback)
-    answer = None
-    try:
-        llm = get_llm_client()
-        answer = llm.generate_response(
-            user_question=message,
-            computed_stats=computed_stats,
-            query_type=query_type
+
+@app.post("/api/chat", response_model=ChatResponse)
+@limiter.limit(_chat_rate_limit)
+async def chat(request: Request, req: ChatRequest):
+    """
+    Conversational Q&A grounded in deterministic statistics.
+
+    The endpoint is rate-limited (see `CHAT_RATE_LIMIT` env). Returns a
+    deterministic fallback if the LLM is unavailable so the chat is always
+    usable.
+    """
+    request_id = request.headers.get("x-request-id") or uuid.uuid4().hex[:12]
+
+    if query_handler.available_versions() == []:
+        raise HTTPException(status_code=503, detail="Chat dataset not loaded.")
+
+    selected_version = query_handler.use_version((req.version or "v3").lower())
+
+    message = req.message.strip()
+    history = _sanitize_history(req.history)
+
+    # ── classify ───────────────────────────────────────────────────────────
+    context = _extract_context_from_history(history)
+    query_info = classify_query(message, context=context)
+    query_type = query_info["type"]
+
+    log.info(
+        "chat.request",
+        extra={
+            "request_id": request_id,
+            "version": selected_version,
+            "history_turns": len(history),
+            "query_type": query_type,
+            "message_preview": message[:120],
+        },
+    )
+
+    # ── conversational short-circuits ──────────────────────────────────────
+    conversational = {
+        "greeting": (
+            "Hi! I'm MitoSpace Chat — I can help you explore the mitochondrial dataset. "
+            "Try asking things like:\n\n"
+            "- \"Which drugs increase motility?\"\n"
+            "- \"Compare Rotenone and CCCP\"\n"
+            "- \"Is motility correlated with segment length?\"\n"
+            "- \"What are the effects of TBHP?\"\n\n"
+            "What would you like to know?"
+        ),
+        "thanks": "You're welcome — ask anything else about the dataset whenever you like.",
+        "help": (
+            "I can analyse this mitochondrial dataset for you:\n\n"
+            "**Rankings** — \"Which drugs increase motility?\"\n"
+            "**Comparisons** — \"Compare Rotenone and CCCP\"\n"
+            "**Correlations** — \"Is motility correlated with segment length?\"\n"
+            "**Stats** — \"What is the mean fragment length for Rotenone?\"\n"
+            "**Feature info** — \"What is membrane potential?\"\n"
+            "**Overview** — \"What features are available?\"\n\n"
+            "Follow-ups work naturally — I remember the context of the last few turns."
+        ),
+        "unsupported": (
+            "I couldn't tell what you wanted. Try one of:\n\n"
+            "- \"Which drugs increase motility?\"\n"
+            "- \"Compare Rotenone and CCCP\"\n"
+            "- \"Is motility correlated with segment length?\"\n"
+            "- \"What are the effects of TBHP?\"\n"
+            "- \"What features are available?\""
+        ),
+    }
+    if query_type in conversational:
+        return ChatResponse(
+            answer=conversational[query_type],
+            data=None,
+            query_type=query_type,
+            request_id=request_id,
+            grounded=True,
+            source="fallback",
         )
-        # Some LLM error paths return a generic apology string; treat that as a failure
-        # and fall back to a deterministic answer.
-        if isinstance(answer, str) and answer.strip().lower().startswith("sorry, there was an error processing your question"):
-            answer = None
-    except Exception as e:
-        print(f"[chat] LLM generation error (falling back): {e}")
 
-    if not answer:
+    # ── compute stats ──────────────────────────────────────────────────────
+    try:
+        computed_stats = compute_statistics(query_type, query_info["params"])
+    except Exception as exc:
+        log.exception(
+            "chat.stats_error",
+            extra={"request_id": request_id, "query_type": query_type, "error": str(exc)},
+        )
+        raise HTTPException(status_code=500, detail="Error computing statistics.")
+
+    if isinstance(computed_stats, dict) and "error" in computed_stats:
+        return ChatResponse(
+            answer=(
+                f"I couldn't compute that: {computed_stats['error']}. "
+                "Try mentioning a specific drug name (e.g. Rotenone) or a feature "
+                "(motility, fragment length, membrane potential)."
+            ),
+            data=computed_stats,
+            query_type=query_type,
+            request_id=request_id,
+            grounded=True,
+            source="fallback",
+        )
+
+    # ── LLM narration ──────────────────────────────────────────────────────
+    answer: Optional[str] = None
+    grounded = True
+    source = "fallback"
+    if is_llm_available():
+        llm = get_llm_client()
+        # Build a dataset-aware system prompt
+        ds = query_handler._DATASETS.get(selected_version)
+        n_samples = len(ds.feature_table) if ds and ds.feature_table is not None else 0
+        n_drugs = (
+            int(ds.sample_metadata["drug"].nunique())
+            if ds and ds.sample_metadata is not None
+            else 0
+        )
+        system_prompt = build_system_prompt(
+            dataset_version=selected_version,
+            n_samples=n_samples,
+            n_drugs=n_drugs,
+        )
+
+        # Pass the LLM the full prior conversation so multi-turn works.
+        llm_history = [{"role": m.role, "content": m.content} for m in history]
+
+        candidate, telemetry = llm.generate(
+            system_prompt=system_prompt,
+            history=llm_history,
+            user_question=message,
+            stats_envelope=json.dumps(computed_stats, indent=2, default=str),
+            query_type=query_type,
+            request_id=request_id,
+        )
+
+        if candidate:
+            grounded = groundedness.check_and_log(
+                candidate,
+                computed_stats,
+                request_id=request_id,
+                query_type=query_type,
+            )
+            if grounded:
+                answer = candidate
+                source = "llm"
+            else:
+                log.warning(
+                    "chat.ungrounded_response_dropped",
+                    extra={
+                        "request_id": request_id,
+                        "query_type": query_type,
+                        "model": telemetry.model,
+                    },
+                )
+
+    if answer is None:
         answer = _fallback_answer(query_type, computed_stats)
-    
+        grounded = True  # deterministic by construction
+
+    log.info(
+        "chat.response",
+        extra={
+            "request_id": request_id,
+            "version": selected_version,
+            "query_type": query_type,
+            "source": source,
+            "grounded": grounded,
+            "answer_len": len(answer),
+        },
+    )
+
     return ChatResponse(
         answer=answer,
         data=computed_stats,
-        query_type=query_type
+        query_type=query_type,
+        request_id=request_id,
+        grounded=grounded,
+        source=source,
     )

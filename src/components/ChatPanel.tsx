@@ -1,6 +1,17 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { MessageCircle, X, Send, Loader2, ChevronDown, Sparkles, Move } from 'lucide-react';
-import { sendChatMessage } from '../api/client';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import {
+  MessageCircle,
+  X,
+  Send,
+  Square,
+  ChevronDown,
+  Move,
+  RefreshCw,
+  Copy,
+  Check,
+  AlertCircle,
+} from 'lucide-react';
+import { ChatRequestError, sendChatMessage } from '../api/client';
 import { useSample } from '../context/SampleContext';
 
 interface ChatMessage {
@@ -9,7 +20,87 @@ interface ChatMessage {
   content: string;
   timestamp: number;
   data?: any;
+  /** Set on assistant messages when the backend reports the LLM was bypassed. */
+  source?: 'llm' | 'fallback';
+  /** True when the backend verified every number in `content` against stats. */
+  grounded?: boolean;
+  /** When true, this is a synthetic error bubble; supports Retry. */
+  isError?: boolean;
+  /** True for the assistant message currently waiting for a response. */
+  pending?: boolean;
 }
+
+/**
+ * Render light Markdown (bold, lists, line breaks) without `dangerouslySetInnerHTML`.
+ * Why not react-markdown? Adds a 40+ KB dep for what is essentially **bold** and
+ * `- bullets`. The model is already constrained by the system prompt to use a
+ * small Markdown subset, so this hand-rolled renderer is both safer and lighter.
+ */
+function renderAssistantText(text: string): React.ReactNode {
+  // Bold spans: **like this**
+  const renderInline = (chunk: string): React.ReactNode[] => {
+    const parts: React.ReactNode[] = [];
+    let i = 0;
+    let key = 0;
+    while (i < chunk.length) {
+      const next = chunk.indexOf('**', i);
+      if (next === -1) {
+        parts.push(chunk.slice(i));
+        break;
+      }
+      if (next > i) parts.push(chunk.slice(i, next));
+      const end = chunk.indexOf('**', next + 2);
+      if (end === -1) {
+        parts.push(chunk.slice(next));
+        break;
+      }
+      parts.push(<strong key={`b-${key++}`}>{chunk.slice(next + 2, end)}</strong>);
+      i = end + 2;
+    }
+    return parts;
+  };
+
+  const lines = text.split('\n');
+  const blocks: React.ReactNode[] = [];
+  let listBuffer: string[] = [];
+  let blockKey = 0;
+
+  const flushList = () => {
+    if (listBuffer.length === 0) return;
+    blocks.push(
+      <ul key={`l-${blockKey++}`} className="list-disc pl-5 space-y-1 my-1">
+        {listBuffer.map((item, idx) => (
+          <li key={idx}>{renderInline(item)}</li>
+        ))}
+      </ul>,
+    );
+    listBuffer = [];
+  };
+
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    const bulletMatch = line.match(/^\s*[-•]\s+(.*)$/);
+    const numberedMatch = line.match(/^\s*\d+\.\s+(.*)$/);
+    if (bulletMatch) {
+      listBuffer.push(bulletMatch[1]);
+      continue;
+    }
+    if (numberedMatch) {
+      listBuffer.push(numberedMatch[1]);
+      continue;
+    }
+    flushList();
+    if (line.length === 0) {
+      blocks.push(<div key={`s-${blockKey++}`} className="h-2" />);
+    } else {
+      blocks.push(<p key={`p-${blockKey++}`}>{renderInline(line)}</p>);
+    }
+  }
+  flushList();
+  return <>{blocks}</>;
+}
+
+const MAX_INPUT_CHARS = 2000;
 
 const ChatPanel: React.FC = () => {
   const { datasetVersion } = useSample();
@@ -21,9 +112,12 @@ const ChatPanel: React.FC = () => {
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [showIntro, setShowIntro] = useState(true);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const buttonRef = useRef<HTMLDivElement>(null);
+  /** Controller for the in-flight chat request (so Stop / Close / Clear can abort). */
+  const abortRef = useRef<AbortController | null>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -90,51 +184,124 @@ const ChatPanel: React.FC = () => {
     }
   }, [isDragging, dragStart]);
 
-  const handleSend = async () => {
-    if (!input.trim() || isLoading) return;
+  /**
+   * Issue a chat request for `userMessageContent`, replacing or appending the
+   * trailing assistant bubble. Used by both initial send and Retry. The full
+   * conversation up to (but not including) the new turn is sent so the LLM
+   * can use it for multi-turn context.
+   */
+  const runRequest = useCallback(
+    async (
+      userMessageContent: string,
+      priorMessages: ChatMessage[],
+    ) => {
+      const controller = new AbortController();
+      abortRef.current = controller;
+      setIsLoading(true);
+
+      try {
+        const history = priorMessages
+          .filter((m) => !m.isError && !m.pending)
+          .slice(-12)
+          .map((m) => ({
+            role: m.role,
+            content: m.content,
+            query_type: m.data?.query_type,
+          }));
+
+        const response = await sendChatMessage(
+          userMessageContent,
+          history,
+          datasetVersion,
+          { signal: controller.signal },
+        );
+
+        const assistantMessage: ChatMessage = {
+          id: `${Date.now()}-a`,
+          role: 'assistant',
+          content: response.answer,
+          timestamp: Date.now(),
+          data: response.data,
+          source: response.source,
+          grounded: response.grounded,
+        };
+        setMessages((prev) => [...prev, assistantMessage]);
+      } catch (err) {
+        const isAbort = err instanceof ChatRequestError && !err.retryable && err.message === 'Cancelled.';
+        if (isAbort) {
+          // User pressed Stop — drop silently, no error bubble.
+          return;
+        }
+        const errMsg =
+          err instanceof ChatRequestError
+            ? err.message
+            : err instanceof Error
+            ? err.message
+            : 'Unknown error';
+        const errorMessage: ChatMessage = {
+          id: `${Date.now()}-e`,
+          role: 'assistant',
+          content: errMsg,
+          timestamp: Date.now(),
+          isError: true,
+        };
+        setMessages((prev) => [...prev, errorMessage]);
+      } finally {
+        abortRef.current = null;
+        setIsLoading(false);
+      }
+    },
+    [datasetVersion],
+  );
+
+  const handleSend = useCallback(async () => {
+    const trimmed = input.trim();
+    if (!trimmed || isLoading) return;
+    if (trimmed.length > MAX_INPUT_CHARS) return; // also guarded by maxLength on textarea
 
     const userMessage: ChatMessage = {
-      id: Date.now().toString(),
+      id: `${Date.now()}-u`,
       role: 'user',
-      content: input.trim(),
-      timestamp: Date.now()
+      content: trimmed,
+      timestamp: Date.now(),
     };
 
-    const updatedMessages = [...messages, userMessage];
-    setMessages(updatedMessages);
+    const updated = [...messages, userMessage];
+    setMessages(updated);
     setInput('');
-    setIsLoading(true);
+    await runRequest(trimmed, updated);
+  }, [input, isLoading, messages, runRequest]);
 
+  const handleStop = useCallback(() => {
+    abortRef.current?.abort();
+  }, []);
+
+  const handleRetry = useCallback(
+    async (errorMsgId: string) => {
+      if (isLoading) return;
+      const idx = messages.findIndex((m) => m.id === errorMsgId);
+      if (idx < 1) return;
+      // The user message that prompted the error is the previous user turn.
+      let userIdx = idx - 1;
+      while (userIdx >= 0 && messages[userIdx].role !== 'user') userIdx--;
+      if (userIdx < 0) return;
+      const userMsg = messages[userIdx];
+      const trimmed = messages.slice(0, idx); // drop the error bubble
+      setMessages(trimmed);
+      await runRequest(userMsg.content, trimmed);
+    },
+    [isLoading, messages, runRequest],
+  );
+
+  const handleCopy = useCallback(async (msg: ChatMessage) => {
     try {
-      // Send recent history for context (last 6 messages = 3 exchanges)
-      const history = updatedMessages.slice(-6).map(m => ({
-        role: m.role,
-        content: m.content,
-        query_type: m.data?.query_type
-      }));
-      const response = await sendChatMessage(userMessage.content, history, datasetVersion);
-      
-      const assistantMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: response.answer,
-        timestamp: Date.now(),
-        data: response.data
-      };
-
-      setMessages(prev => [...prev, assistantMessage]);
-    } catch (error) {
-      const errorMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: `Sorry, I encountered an error: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        timestamp: Date.now()
-      };
-      setMessages(prev => [...prev, errorMessage]);
-    } finally {
-      setIsLoading(false);
+      await navigator.clipboard.writeText(msg.content);
+      setCopiedId(msg.id);
+      window.setTimeout(() => setCopiedId((cur) => (cur === msg.id ? null : cur)), 1500);
+    } catch {
+      // Older browsers / non-secure context: silently no-op rather than throw.
     }
-  };
+  }, []);
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -144,8 +311,15 @@ const ChatPanel: React.FC = () => {
   };
 
   const handleClear = () => {
+    abortRef.current?.abort();
     setMessages([]);
   };
+
+  useEffect(() => {
+    // Abort any in-flight request when the panel is closed so we don't leak
+    // a hanging fetch (and so OpenRouter usage stops if the user navigates away).
+    if (!isOpen) abortRef.current?.abort();
+  }, [isOpen]);
 
   if (!isOpen) {
     return (
@@ -284,33 +458,90 @@ const ChatPanel: React.FC = () => {
           </div>
         )}
 
-        {messages.map((msg, idx) => (
-          <div
-            key={msg.id}
-            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-in`}
-            style={{ animationDelay: `${idx * 50}ms` }}
-          >
+        {messages.map((msg, idx) => {
+          const isUser = msg.role === 'user';
+          const isError = !!msg.isError;
+          return (
             <div
-              className={`max-w-[85%] rounded-xl px-3 py-2.5 shadow-sm ${
-                msg.role === 'user'
-                  ? 'bg-white text-black'
-                  : 'bg-white/[0.06] text-white/90 border border-white/[0.08]'
-              }`}
+              key={msg.id}
+              className={`flex ${isUser ? 'justify-end' : 'justify-start'} animate-fade-in`}
+              style={{ animationDelay: `${Math.min(idx, 5) * 40}ms` }}
             >
-              <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
-              {msg.role === 'assistant' && msg.data && (
-                <button
-                  className="text-xs text-white/40 hover:text-white/60 mt-2 transition-colors flex items-center gap-1"
-                  onClick={() => console.log('Data:', msg.data)}
-                  title="View raw data"
-                >
-                  <span>View data</span>
-                  <ChevronDown size={12} />
-                </button>
-              )}
+              <div
+                className={`max-w-[85%] rounded-xl px-3 py-2.5 shadow-sm ${
+                  isUser
+                    ? 'bg-white text-black'
+                    : isError
+                    ? 'bg-red-500/10 text-red-100 border border-red-400/30'
+                    : 'bg-white/[0.06] text-white/90 border border-white/[0.08]'
+                }`}
+              >
+                {isError ? (
+                  <div className="flex items-start gap-2">
+                    <AlertCircle size={14} className="text-red-300 mt-0.5 shrink-0" />
+                    <div className="text-sm leading-relaxed">
+                      <p className="font-medium text-red-100 mb-1">Something went wrong</p>
+                      <p className="text-red-100/80 whitespace-pre-wrap">{msg.content}</p>
+                      <button
+                        onClick={() => handleRetry(msg.id)}
+                        disabled={isLoading}
+                        className="mt-2 inline-flex items-center gap-1 text-xs text-red-100/90 hover:text-red-50 hover:underline disabled:opacity-50"
+                      >
+                        <RefreshCw size={12} />
+                        Try again
+                      </button>
+                    </div>
+                  </div>
+                ) : isUser ? (
+                  <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                ) : (
+                  <div className="text-sm leading-relaxed space-y-1">
+                    {renderAssistantText(msg.content)}
+                  </div>
+                )}
+                {!isUser && !isError && (
+                  <div className="mt-2 flex items-center gap-3 text-xs text-white/40">
+                    <button
+                      onClick={() => handleCopy(msg)}
+                      className="hover:text-white/70 transition-colors flex items-center gap-1"
+                      title="Copy answer"
+                    >
+                      {copiedId === msg.id ? (
+                        <>
+                          <Check size={12} />
+                          <span>Copied</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy size={12} />
+                          <span>Copy</span>
+                        </>
+                      )}
+                    </button>
+                    {msg.data && (
+                      <button
+                        className="hover:text-white/70 transition-colors flex items-center gap-1"
+                        onClick={() => console.log('[chat] raw data:', msg.data)}
+                        title="Log raw stats to console"
+                      >
+                        <span>View data</span>
+                        <ChevronDown size={12} />
+                      </button>
+                    )}
+                    {msg.source === 'fallback' && (
+                      <span
+                        className="text-amber-300/70"
+                        title="Deterministic answer (LLM unavailable or response was ungrounded)"
+                      >
+                        deterministic
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
 
         {isLoading && (
           <div className="flex justify-start animate-fade-in">
@@ -334,10 +565,11 @@ const ChatPanel: React.FC = () => {
           <textarea
             ref={inputRef}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => setInput(e.target.value.slice(0, MAX_INPUT_CHARS))}
             onKeyPress={handleKeyPress}
-            placeholder="Ask a question..."
+            placeholder={isLoading ? 'Thinking...' : 'Ask a question...'}
             disabled={isLoading}
+            maxLength={MAX_INPUT_CHARS}
             className="flex-1 bg-white/[0.06] border border-white/[0.08] rounded-lg px-3 py-2 text-white text-sm placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-white/20 focus:border-white/20 resize-none scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent disabled:opacity-50 transition-all"
             rows={1}
             style={{ maxHeight: '100px' }}
@@ -347,18 +579,39 @@ const ChatPanel: React.FC = () => {
               target.style.height = Math.min(target.scrollHeight, 100) + 'px';
             }}
           />
-          <button
-            onClick={handleSend}
-            disabled={!input.trim() || isLoading}
-            className="bg-white hover:bg-gray-100 disabled:bg-white/10 disabled:cursor-not-allowed text-black disabled:text-white/50 p-2.5 rounded-lg transition-all shrink-0 group"
-            aria-label="Send message"
-          >
-            <Send size={18} strokeWidth={2} className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform group-disabled:translate-x-0 group-disabled:translate-y-0" />
-          </button>
+          {isLoading ? (
+            <button
+              onClick={handleStop}
+              className="bg-red-500/20 hover:bg-red-500/30 border border-red-400/40 text-red-100 p-2.5 rounded-lg transition-all shrink-0"
+              aria-label="Stop generation"
+              title="Stop"
+            >
+              <Square size={16} strokeWidth={2.5} />
+            </button>
+          ) : (
+            <button
+              onClick={handleSend}
+              disabled={!input.trim()}
+              className="bg-white hover:bg-gray-100 disabled:bg-white/10 disabled:cursor-not-allowed text-black disabled:text-white/50 p-2.5 rounded-lg transition-all shrink-0 group"
+              aria-label="Send message"
+              title="Send (Enter)"
+            >
+              <Send
+                size={18}
+                strokeWidth={2}
+                className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform group-disabled:translate-x-0 group-disabled:translate-y-0"
+              />
+            </button>
+          )}
         </div>
-        <p className="text-xs text-white/30 mt-2">
-          Press Enter to send, Shift+Enter for new line
-        </p>
+        <div className="flex items-center justify-between mt-2 text-xs text-white/30">
+          <span>Enter to send · Shift+Enter for new line</span>
+          {input.length > MAX_INPUT_CHARS * 0.8 && (
+            <span className={input.length >= MAX_INPUT_CHARS ? 'text-amber-300' : ''}>
+              {input.length}/{MAX_INPUT_CHARS}
+            </span>
+          )}
+        </div>
       </div>
     </div>
   );
