@@ -14,22 +14,44 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Iterable, List, Sequence, Tuple
+from typing import Any, Iterable, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger("mitospace.groundedness")
 
 
 # Pulled out so tests can extend it if needed.
+#
+# A "number" for our purposes is one of:
+#   - a plain decimal: -0.5 or 0.5
+#   - a number with thousands separators: 34,718 or 1,234,567
+#   - a scientific-notation number: 1.5e-3
+# We allow Unicode minus (U+2212) and en-dash (U+2013) as well as ASCII '-'
+# because the LLM frequently uses pretty typography (`−0.106`, `–0.106`).
 _NUMBER_RE = re.compile(
     r"""
-    (?<![A-Za-z_])           # not part of an identifier
-    -?                       # optional sign
-    \d+                      # integer part
-    (?:\.\d+)?               # optional decimal
-    (?:[eE][+-]?\d+)?        # optional exponent
+    (?<![A-Za-z_])               # not part of an identifier
+    [-\u2212\u2013]?             # optional sign (ASCII -, U+2212 minus, U+2013 en-dash)
+    \d{1,3}(?:,\d{3})+           # >=4-digit integer with thousands separators
+    (?:\.\d+)?                   # optional decimal part
+    (?:[eE][+-]?\d+)?            # optional exponent
+    |
+    (?<![A-Za-z_])
+    [-\u2212\u2013]?
+    \d+
+    (?:\.\d+)?
+    (?:[eE][+-]?\d+)?
     """,
     re.VERBOSE,
 )
+
+
+def _parse_number(token: str) -> Optional[float]:
+    """Normalise a captured token to a float, returning None if it isn't one."""
+    s = token.replace(",", "").replace("\u2212", "-").replace("\u2013", "-")
+    try:
+        return float(s)
+    except ValueError:
+        return None
 
 
 # Numbers <= this are treated as "structural" (years, counts, list indexes,
@@ -69,19 +91,17 @@ def _collect_numbers(obj: Any, out: List[float]) -> None:
     if isinstance(obj, str):
         m = _NUMBER_RE.fullmatch(obj.strip())
         if m:
-            try:
-                out.append(float(obj))
-            except ValueError:
-                pass
+            parsed = _parse_number(obj.strip())
+            if parsed is not None:
+                out.append(parsed)
 
 
 def _extract_numbers_from_answer(answer: str) -> List[float]:
     nums: List[float] = []
     for tok in _NUMBER_RE.findall(answer or ""):
-        try:
-            nums.append(float(tok))
-        except ValueError:
-            continue
+        parsed = _parse_number(tok)
+        if parsed is not None:
+            nums.append(parsed)
     return nums
 
 
@@ -112,6 +132,52 @@ def _matches(needle: float, haystack: Sequence[float], rel_tol: float, abs_tol: 
     return False
 
 
+# Cap on how many literal stats values we try to combine when computing the
+# derived (ratios/differences/percentages) allowlist. With N literal values we
+# generate O(N^2) derived candidates; N=60 → 3600 pairs which is still fast,
+# and real stats envelopes rarely exceed this.
+_MAX_DERIVED_BASE = 60
+
+
+def _expand_with_derived(literal: Sequence[float]) -> List[float]:
+    """Expand the allowed set with pairwise ratios, differences, and
+    percentage-change expressions of the literal stats numbers.
+
+    Why: LLMs often add useful color commentary like "3.7× higher than DMSO
+    (114.2)" or "40% above baseline". These numbers don't appear in the
+    stats JSON literally but are *derived from* numbers that do, so we want
+    to admit them as grounded. By contrast, a true hallucination is unlikely
+    to coincidentally equal the ratio of two real values.
+
+    Set built:
+      - all literal values (already in)
+      - a / b and b / a for every pair
+      - a - b and b - a
+      - (a - b) / b * 100 and (b - a) / b * 100  (percent change)
+      - a * 100 and a / 100                       (unit shifts, percentages)
+    """
+    base = [v for v in literal if v != 0 and -1e15 < v < 1e15]
+    # Keep deterministic and bounded.
+    if len(base) > _MAX_DERIVED_BASE:
+        # Pick the most "interesting" values (largest by magnitude).
+        base = sorted(base, key=lambda x: -abs(x))[:_MAX_DERIVED_BASE]
+
+    derived: List[float] = list(literal)
+    for a in base:
+        derived.append(a * 100.0)
+        derived.append(a / 100.0)
+        for b in base:
+            if a is b:
+                continue
+            if b != 0:
+                derived.append(a / b)
+            derived.append(a - b)
+            if b != 0:
+                derived.append((a - b) / b * 100.0)
+    # Drop anything non-finite that fell out of the math.
+    return [d for d in derived if d == d and abs(d) != float("inf")]
+
+
 def _trailing_decimals(x: float) -> int:
     """How many decimal places `x` was likely written to, max 6."""
     s = repr(x)
@@ -127,17 +193,22 @@ def check(
     *,
     rel_tol: float = 0.05,
     abs_tol: float = 0.005,
+    allow_derived: bool = True,
 ) -> Tuple[bool, List[float]]:
     """Return (is_grounded, unsupported_numbers).
 
     `is_grounded` is True when every numeric token in the answer can be
-    matched to a number in `stats` within the given tolerances.
+    matched to a number derivable from `stats` within the given tolerances.
 
-    Tolerances are intentionally permissive — the goal is to catch
-    *hallucinations*, not punish reasonable rounding.
+    When `allow_derived=True` (default), the allowed set is expanded with
+    pairwise ratios, differences and percentage changes of the literal stats
+    values — so the LLM can legitimately write "3.7× higher" or "40% above
+    baseline" without tripping the check. Set to False for paranoid mode
+    (purely literal match).
     """
-    allowed: List[float] = []
-    _collect_numbers(stats, allowed)
+    literal: List[float] = []
+    _collect_numbers(stats, literal)
+    allowed = _expand_with_derived(literal) if allow_derived else literal
 
     found = _extract_numbers_from_answer(answer)
     unsupported = [n for n in found if not _matches(n, allowed, rel_tol, abs_tol)]

@@ -129,6 +129,58 @@ class TestGroundedness(unittest.TestCase):
         ok, _ = groundedness.check("Rotenone mean was 0.005 (std 0.001).", stats)
         self.assertTrue(ok)
 
+    def test_unicode_minus_is_grounded(self):
+        # LLMs (esp. Claude) prefer the typographic minus U+2212.
+        stats = {"correlation": -0.106, "n_samples": 34718}
+        ok, _ = groundedness.check(
+            "Pearson r = \u22120.106 across n = 34,718 cells.",  # incl. comma separator
+            stats,
+        )
+        self.assertTrue(ok)
+
+    def test_en_dash_minus_is_grounded(self):
+        stats = {"delta": -2.5}
+        ok, _ = groundedness.check("The change was \u20132.5 units.", stats)
+        self.assertTrue(ok)
+
+    def test_thousands_separator_is_grounded(self):
+        stats = {"n": 1234567}
+        ok, _ = groundedness.check("Across 1,234,567 cells we saw...", stats)
+        self.assertTrue(ok)
+
+    def test_derived_ratio_is_grounded(self):
+        # 427.6 / 114.2 ≈ 3.7 — Claude writes "3.7× higher" as legitimate color.
+        stats = {"a": 427.6, "b": 114.2}
+        ok, _ = groundedness.check("Roughly 3.7× higher than DMSO (114.2).", stats)
+        self.assertTrue(ok)
+
+    def test_derived_percent_change_is_grounded(self):
+        # (3.72 - 2.81) / 2.81 * 100 ≈ 32.4 — "32% longer" should pass.
+        stats = {"rot": 3.72, "cccp": 2.81}
+        ok, _ = groundedness.check(
+            "Rotenone fragments are ~32% longer than CCCP (3.72 vs 2.81).",
+            stats,
+        )
+        self.assertTrue(ok)
+
+    def test_pure_hallucination_still_rejected(self):
+        # Even with derived allowed, a fully fabricated value should fail.
+        stats = {"a": 1.0, "b": 2.0, "c": 3.0}
+        ok, bad = groundedness.check("The headline figure was 9876.5.", stats)
+        self.assertFalse(ok)
+        self.assertIn(9876.5, bad)
+
+    def test_paranoid_mode_rejects_derived(self):
+        # Same input as the ratio test, but with allow_derived=False.
+        stats = {"a": 427.6, "b": 114.2}
+        ok, bad = groundedness.check(
+            "Roughly 3.7× higher than DMSO (114.2).",
+            stats,
+            allow_derived=False,
+        )
+        self.assertFalse(ok)
+        self.assertIn(3.7, bad)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Classifier
@@ -277,8 +329,10 @@ class TestChatEndpoint(unittest.TestCase):
         def _bad(**kwargs):
             telemetry = llm_client.LLMTelemetry(request_id="t", model="test/model")
             telemetry.success = True
-            # 99999 is not in any computed stat → groundedness should fail.
-            return ("The correlation is r=99999.", telemetry)
+            # 8675309.1234 — Jenny's number with extra decimals so it can't
+            # possibly arise from any pairwise ratio/diff/percent of the
+            # ranking stats (which contain small means and small counts).
+            return ("The headline statistic is 8675309.1234.", telemetry)
 
         self.fake_llm.generate.side_effect = _bad
         r = self.client.post(
