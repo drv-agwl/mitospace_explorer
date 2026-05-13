@@ -2,12 +2,7 @@ import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import MitoSpaceLogo from './MitoSpaceLogo';
 
-interface HeaderProps {
-  onStartTour?: () => void;
-  showTourButton?: boolean;
-}
-
-const Header: React.FC<HeaderProps> = ({ onStartTour, showTourButton }) => {
+const Header: React.FC = () => {
   const location = useLocation();
   const isAbout = location.pathname === '/about';
 
@@ -30,16 +25,6 @@ const Header: React.FC<HeaderProps> = ({ onStartTour, showTourButton }) => {
           </Link>
 
           <nav className="flex items-center gap-2 shrink-0">
-            {showTourButton && onStartTour && (
-              <button
-                type="button"
-                onClick={onStartTour}
-                className="px-4 py-2 rounded-lg text-sm font-medium text-white/60 hover:text-white hover:bg-white/[0.06] transition-colors"
-                aria-label="Take tour"
-              >
-                Take tour
-              </button>
-            )}
             <Link
               to="/about"
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${

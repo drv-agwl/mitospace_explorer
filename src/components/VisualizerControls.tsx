@@ -351,7 +351,6 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({
 
             {/* Semantic axis toggle — primary action */}
             <button
-              data-tour="semantic-axis-toggle"
               onClick={handleSemanticToggle}
               role="switch"
               aria-pressed={advancedMode}
@@ -391,10 +390,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({
           makes it feel like a sub-toolbar without ever shifting the primary
           row's controls. */}
       {type === '4d' && advancedMode && (
-        <div
-          data-tour="semantic-feature-controls"
-          className="flex items-center gap-3 flex-wrap pt-2.5 border-t border-white/[0.06] animate-fade-in"
-        >
+        <div className="flex items-center gap-3 flex-wrap pt-2.5 border-t border-white/[0.06] animate-fade-in">
           {/* Feature picker — the canonical way to choose the semantic axis */}
           <div className="flex items-center shrink-0">
             <FeatureSelect
@@ -463,7 +459,6 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({
               overlay. */}
           {showSlider && featureRange && (
             <div
-              data-tour="semantic-axis-slider"
               className={`flex items-center gap-3 flex-1 min-w-[280px] h-9 transition-opacity duration-200 ${
                 featureLoading ? 'opacity-40 pointer-events-none' : ''
               }`}

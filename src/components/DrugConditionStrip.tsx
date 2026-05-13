@@ -180,10 +180,7 @@ const DrugConditionStrip: React.FC<DrugConditionStripProps> = ({
   if (cards.length === 0) return null;
 
   return (
-    <div
-      className="shrink-0 border-b border-white/[0.08] bg-black/95 backdrop-blur-sm"
-      data-tour="drug-conditions-strip"
-    >
+    <div className="shrink-0 border-b border-white/[0.08] bg-black/95 backdrop-blur-sm">
       {/* ─── Header ─────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-6 pt-3 pb-2 gap-4">
         <div className="flex items-baseline gap-2 min-w-0">

@@ -14,7 +14,7 @@ const SpaceLanding: React.FC<SpaceLandingProps> = ({ onSelect }) => {
           <MitoSpaceLogo size={88} variant="light" />
         </div>
       </div>
-      <div className="text-center max-w-2xl mx-auto mb-16" data-tour="landing-title">
+      <div className="text-center max-w-2xl mx-auto mb-16">
         <h2 className="text-3xl sm:text-4xl font-semibold text-white tracking-tight mb-4">
           Choose your exploration space
         </h2>
@@ -27,7 +27,6 @@ const SpaceLanding: React.FC<SpaceLandingProps> = ({ onSelect }) => {
         <button
           type="button"
           onClick={() => onSelect('4d')}
-          data-tour="card-4d"
           className="group relative flex flex-col items-start p-8 rounded-2xl bg-white/[0.04] border border-white/[0.08]
                      hover:bg-white/[0.06] hover:border-white/[0.12]
                      transition-all duration-300 text-left focus:outline-none focus:ring-2 focus:ring-white/20 focus:ring-offset-2 focus:ring-offset-black"
@@ -55,7 +54,6 @@ const SpaceLanding: React.FC<SpaceLandingProps> = ({ onSelect }) => {
         <button
           type="button"
           onClick={() => onSelect('2d')}
-          data-tour="card-2d"
           className="group relative flex flex-col items-start p-8 rounded-2xl bg-white/[0.04] border border-white/[0.08]
                      hover:bg-white/[0.06] hover:border-white/[0.12]
                      transition-all duration-300 text-left focus:outline-none focus:ring-2 focus:ring-white/20 focus:ring-offset-2 focus:ring-offset-black
