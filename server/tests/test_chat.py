@@ -20,6 +20,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from typing import Optional
 from unittest.mock import patch, MagicMock
 
 # Ensure `server/` is importable when this file is run as `python -m unittest`
@@ -576,143 +577,221 @@ class TestResponseCache(unittest.TestCase):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class TestChatEndpoint(unittest.TestCase):
+def _fake_chat_response(content: str = "", tool_calls: Optional[list] = None):
+    """Build a duck-typed assistant message + telemetry tuple that `agent.run`
+    will accept from a mocked `LLMClient.chat`."""
+    from types import SimpleNamespace
+
+    msg = SimpleNamespace(content=content, tool_calls=tool_calls)
+    telemetry = llm_client.LLMTelemetry(request_id="t", model="test/model")
+    telemetry.success = True
+    telemetry.latency_ms = 1.0
+    telemetry.finish_reason = "tool_calls" if tool_calls else "stop"
+    return (msg, telemetry)
+
+
+def _make_tool_call(name: str, args: dict, call_id: str = "call_1"):
+    """Build a duck-typed OpenAI ChatCompletionMessageToolCall."""
+    from types import SimpleNamespace
+    import json as _json
+
+    return SimpleNamespace(
+        id=call_id,
+        type="function",
+        function=SimpleNamespace(name=name, arguments=_json.dumps(args)),
+    )
+
+
+class TestChatEndpointAgent(unittest.TestCase):
+    """End-to-end /api/chat tests against the *agent* path (LLM mocked at the
+    tool-calling layer)."""
+
     @classmethod
     def setUpClass(cls):
-        from fastapi.testclient import TestClient  # local import: test-only dep
+        from fastapi.testclient import TestClient
 
         os.environ["OPENROUTER_API_KEY"] = "sk-test-dummy"
         _seed_query_handler()
 
         import main  # noqa: E402
 
-        # Force LLM to be "available" with a controllable fake.
         cls.fake_llm = MagicMock()
         cls.fake_llm.model = "test/model"
+        # We mock the new `chat` method (used by the agent), not the legacy
+        # `generate` (still here for the fallback path tests).
         llm_client._llm_client = cls.fake_llm
 
         cls.client = TestClient(main.app)
         cls.main = main
 
     def setUp(self):
-        # Clear all per-test state so tests are independent of each other.
         chat_extras.chat_response_cache._store.clear()
         chat_extras.chat_response_cache.hits = 0
         chat_extras.chat_response_cache.misses = 0
         self.fake_llm.reset_mock()
 
-        # Default: LLM returns a perfectly grounded answer for ranking.
-        def _default(**kwargs):
-            telemetry = llm_client.LLMTelemetry(request_id="t", model="test/model")
-            telemetry.success = True
-            return ("Top drugs ranked.", telemetry)
+    def test_single_tool_call_then_answer(self):
+        """Two-step agent run: LLM calls rank_drugs_by_feature, then narrates."""
+        responses = [
+            _fake_chat_response(
+                tool_calls=[
+                    _make_tool_call(
+                        "rank_drugs_by_feature",
+                        {"feature": "Fragment Length", "direction": "high", "top_n": 3},
+                    ),
+                ],
+            ),
+            _fake_chat_response(content="DMSO leads at mean 3.0."),
+        ]
+        self.fake_llm.chat.side_effect = responses
 
-        self.fake_llm.generate.side_effect = _default
-
-    def test_greeting_short_circuit(self):
-        r = self.client.post("/api/chat", json={"message": "hello"})
-        self.assertEqual(r.status_code, 200)
+        r = self.client.post("/api/chat", json={"message": "rank drugs by fragment length"})
         body = r.json()
-        self.assertEqual(body["query_type"], "greeting")
-        self.assertEqual(body["source"], "fallback")
-        self.fake_llm.generate.assert_not_called()
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(body["source"], "agent")
+        self.assertEqual(body["query_type"], "agent")
+        self.assertIn("rank_drugs_by_feature", body["tools_used"])
+        # The agent must have called the LLM twice (decide → narrate).
+        self.assertEqual(self.fake_llm.chat.call_count, 2)
+        # Tool result is the actual ranking dict surfaced in `data`.
+        self.assertIn("result", body["data"])
 
-    def test_ranking_calls_llm_and_grounded(self):
+    def test_chained_tool_calls(self):
+        """LLM chains find_similar_drugs → get_drug_pharmacology → narrates."""
+        responses = [
+            _fake_chat_response(
+                tool_calls=[
+                    _make_tool_call("find_similar_drugs", {"drug": "Rotenone", "top_n": 1}),
+                ],
+            ),
+            _fake_chat_response(
+                tool_calls=[
+                    _make_tool_call("get_drug_pharmacology", {"drug": "CCCP"}, call_id="call_2"),
+                ],
+            ),
+            _fake_chat_response(content="CCCP is closest. It's a protonophore."),
+        ]
+        self.fake_llm.chat.side_effect = responses
+
+        r = self.client.post(
+            "/api/chat",
+            json={"message": "find me a drug similar to Rotenone and tell me its mechanism"},
+        )
+        body = r.json()
+        self.assertEqual(body["source"], "agent")
+        # Two tools were used in sequence.
+        self.assertEqual(body["tools_used"][0], "find_similar_drugs")
+        self.assertIn("get_drug_pharmacology", body["tools_used"])
+        # `data` aggregates BOTH tool outputs since there were multiple.
+        self.assertIn("tools", body["data"])
+        self.assertEqual(len(body["data"]["tools"]), 2)
+
+    def test_no_tool_calls_direct_answer(self):
+        """Greeting-style turn: LLM answers without tools."""
+        self.fake_llm.chat.side_effect = [
+            _fake_chat_response(content="Hi! Ask me anything about the dataset."),
+        ]
+        r = self.client.post("/api/chat", json={"message": "hi"})
+        body = r.json()
+        self.assertEqual(body["source"], "agent")
+        self.assertEqual(body["tools_used"], [])
+        self.assertIn("dataset", body["answer"].lower())
+
+    def test_agent_llm_failure_falls_back_to_classifier(self):
+        """When the agent's LLM returns None, we degrade to the deterministic
+        classifier path (so the chat is always usable)."""
+        # First call returns None to simulate transport failure.
+        self.fake_llm.chat.side_effect = [(None, llm_client.LLMTelemetry(request_id="t", model="test/model"))]
         r = self.client.post(
             "/api/chat",
             json={"message": "which drugs increase motility the most?"},
         )
-        self.assertEqual(r.status_code, 200)
         body = r.json()
-        self.assertEqual(body["query_type"], "ranking")
-        self.assertTrue(self.fake_llm.generate.called)
-        self.assertIn(body["source"], ("llm", "fallback"))
-
-    def test_ungrounded_response_falls_back(self):
-        def _bad(**kwargs):
-            telemetry = llm_client.LLMTelemetry(request_id="t", model="test/model")
-            telemetry.success = True
-            # 8675309.1234 — Jenny's number with extra decimals so it can't
-            # possibly arise from any pairwise ratio/diff/percent of the
-            # ranking stats (which contain small means and small counts).
-            return ("The headline statistic is 8675309.1234.", telemetry)
-
-        self.fake_llm.generate.side_effect = _bad
-        r = self.client.post(
-            "/api/chat",
-            json={"message": "which drugs increase motility?"},
-        )
-        self.assertEqual(r.status_code, 200)
-        body = r.json()
+        # Fallback path produces a classifier-grade answer.
         self.assertEqual(body["source"], "fallback")
-        self.assertTrue(body["grounded"])
+        self.assertEqual(body["query_type"], "ranking")
+        self.assertIn("rankings", body["data"])
 
-    def test_llm_failure_falls_back(self):
-        def _fail(**kwargs):
-            telemetry = llm_client.LLMTelemetry(request_id="t", model="test/model")
-            telemetry.success = False
-            return (None, telemetry)
-
-        self.fake_llm.generate.side_effect = _fail
-        r = self.client.post(
-            "/api/chat",
-            json={"message": "compare Rotenone and CCCP"},
-        )
-        self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json()["source"], "fallback")
+    def test_ungrounded_agent_answer_flagged(self):
+        """If the LLM hallucinates a number, `grounded` must be False."""
+        responses = [
+            _fake_chat_response(
+                tool_calls=[
+                    _make_tool_call(
+                        "rank_drugs_by_feature",
+                        {"feature": "Fragment Length", "direction": "high", "top_n": 3},
+                    ),
+                ],
+            ),
+            # 8675309.1234 — impossibly out of band for the synthetic stats.
+            _fake_chat_response(content="The headline value is 8675309.1234."),
+        ]
+        self.fake_llm.chat.side_effect = responses
+        r = self.client.post("/api/chat", json={"message": "rank drugs by fragment length"})
+        body = r.json()
+        self.assertEqual(body["source"], "agent")
+        self.assertFalse(body["grounded"])
 
     def test_request_validation_rejects_empty(self):
         r = self.client.post("/api/chat", json={"message": "   "})
-        # FastAPI returns 422 for the empty string after pydantic min_length=1
-        # for blank we strip later, so accept either 200 (treated as unsupported)
-        # or 422 — but never a 500.
         self.assertIn(r.status_code, (200, 422))
 
     def test_response_carries_suggestions(self):
+        """Agent responses should still include follow-up chips."""
+        self.fake_llm.chat.side_effect = [
+            _fake_chat_response(
+                tool_calls=[
+                    _make_tool_call(
+                        "rank_drugs_by_feature",
+                        {"feature": "Fragment Diffusivity", "direction": "high"},
+                    ),
+                ],
+            ),
+            _fake_chat_response(content="Some narration."),
+        ]
         r = self.client.post(
-            "/api/chat",
-            json={"message": "which drugs increase motility?"},
+            "/api/chat", json={"message": "which drugs are most motile?"},
         )
         body = r.json()
-        # Suggestions are rule-based, so a ranking response must produce some.
-        self.assertIsInstance(body.get("suggestions"), list)
-        self.assertGreaterEqual(len(body["suggestions"]), 1)
+        self.assertGreaterEqual(len(body.get("suggestions") or []), 1)
 
-    def test_cache_hit_on_repeat_question(self):
-        # Reset cache and force LLM to return a stable grounded answer.
-        chat_extras.chat_response_cache._store.clear()
-
-        def _grounded(**kwargs):
-            telemetry = llm_client.LLMTelemetry(request_id="t", model="test/model")
-            telemetry.success = True
-            return ("OK answer.", telemetry)
-
-        self.fake_llm.generate.side_effect = _grounded
-        question = {"message": "which drugs increase motility the most?"}
-        r1 = self.client.post("/api/chat", json=question).json()
-        # First hit calls the LLM.
-        first_calls = self.fake_llm.generate.call_count
-        r2 = self.client.post("/api/chat", json=question).json()
-        # Second identical question must be cached and NOT call the LLM again.
-        self.assertEqual(self.fake_llm.generate.call_count, first_calls)
-        self.assertTrue(r2.get("cached"))
-        self.assertEqual(r1["answer"], r2["answer"])
-
-    def test_drug_similarity_query_routes(self):
-        r = self.client.post(
-            "/api/chat",
-            json={"message": "what drugs look like rotenone?"},
-        )
-        body = r.json()
-        self.assertEqual(body["query_type"], "drug_similarity")
-
-    def test_top_differentiator_query_routes(self):
-        r = self.client.post(
-            "/api/chat",
-            json={"message": "what differs most between Rotenone and CCCP?"},
-        )
-        body = r.json()
-        self.assertEqual(body["query_type"], "top_differentiators")
+    def test_repeat_question_returns_varied_answer(self):
+        """Same question twice ⇒ no cached/identical response. We let
+        `temperature` produce natural variation; even when the mock returns
+        identical text, no `cached: true` flag should appear (the agent path
+        does not cache final narrations)."""
+        first_pair = [
+            _fake_chat_response(
+                tool_calls=[
+                    _make_tool_call(
+                        "rank_drugs_by_feature",
+                        {"feature": "Fragment Length", "direction": "high"},
+                    ),
+                ],
+            ),
+            _fake_chat_response(content="Answer A."),
+        ]
+        second_pair = [
+            _fake_chat_response(
+                tool_calls=[
+                    _make_tool_call(
+                        "rank_drugs_by_feature",
+                        {"feature": "Fragment Length", "direction": "high"},
+                    ),
+                ],
+            ),
+            _fake_chat_response(content="Answer B (varied phrasing)."),
+        ]
+        self.fake_llm.chat.side_effect = first_pair + second_pair
+        q = {"message": "rank drugs by fragment length"}
+        r1 = self.client.post("/api/chat", json=q).json()
+        r2 = self.client.post("/api/chat", json=q).json()
+        self.assertFalse(r1.get("cached"))
+        self.assertFalse(r2.get("cached"))
+        # We exercised the LLM both times — no caching short-circuit.
+        self.assertEqual(self.fake_llm.chat.call_count, 4)
+        # And the answers differ (because the mock returned different text).
+        self.assertNotEqual(r1["answer"], r2["answer"])
 
 
 if __name__ == "__main__":

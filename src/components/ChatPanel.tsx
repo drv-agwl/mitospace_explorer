@@ -20,14 +20,16 @@ interface ChatMessage {
   content: string;
   timestamp: number;
   data?: any;
-  /** Set on assistant messages when the backend reports the LLM was bypassed. */
-  source?: 'llm' | 'fallback';
+  /** Where this answer came from: agent (tool-using LLM), llm (legacy), fallback (deterministic). */
+  source?: 'agent' | 'llm' | 'fallback';
   /** True when the backend verified every number in `content` against stats. */
   grounded?: boolean;
   /** True when the backend served this answer from its in-memory cache. */
   cached?: boolean;
   /** Up to 3 rule-based follow-up suggestions for one-click exploration. */
   suggestions?: string[];
+  /** Names of compute tools the agent invoked (for the small transparency chip). */
+  toolsUsed?: string[];
   /** When true, this is a synthetic error bubble; supports Retry. */
   isError?: boolean;
   /** True for the assistant message currently waiting for a response. */
@@ -230,6 +232,7 @@ const ChatPanel: React.FC = () => {
           grounded: response.grounded,
           cached: response.cached,
           suggestions: response.suggestions,
+          toolsUsed: response.tools_used,
         };
         setMessages((prev) => [...prev, assistantMessage]);
       } catch (err) {
@@ -567,6 +570,16 @@ const ChatPanel: React.FC = () => {
                         title="Served instantly from cache (same question + recent context already answered)"
                       >
                         cached
+                      </span>
+                    )}
+                    {msg.toolsUsed && msg.toolsUsed.length > 0 && (
+                      <span
+                        className="text-sky-300/60"
+                        title={`Computed via: ${msg.toolsUsed.join(' → ')}`}
+                      >
+                        {msg.toolsUsed.length === 1
+                          ? msg.toolsUsed[0].replace(/_/g, ' ')
+                          : `${msg.toolsUsed.length} tools`}
                       </span>
                     )}
                   </div>

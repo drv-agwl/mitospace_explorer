@@ -1,49 +1,43 @@
 # MitoSpace Chat — reference
 
-Canonical doc for the in-app chat. Replaces `OPENROUTER_INTEGRATION.md`,
-`CHAT_SYSTEM_COMPLETE.md`, and `CHAT_UI_IMPROVEMENTS.md` (all of which had
-drifted from code).
+Canonical doc for the in-app chat.
 
 ---
 
 ## 1. What it does
 
-MitoSpace Chat is a grounded scientific Q&A panel for the dataset. Users can
-ask:
+MitoSpace Chat is a grounded scientific Q&A panel for the dataset. It feels
+like talking to a careful colleague at the microscope, not a 10-template
+chatbot. Concretely:
 
-- **Rankings** — "Which drugs increase motility?" (with SEM, 95% CI, Cohen's d
-  vs DMSO, and auto-flagging of statistically indistinguishable adjacent ranks)
-- **Drug comparisons** — "Compare Rotenone and CCCP" (Welch's t-test + Cohen's
-  d + plain-English verdict per feature for the 2-drug case)
-- **Feature correlations** — "Is motility correlated with segment length?"
-  (Pearson r with Fisher-z 95% CI, plus Spearman ρ and p-values)
-- **Summary stats** — "What's the mean fragment length for Rotenone?"
-- **Feature info** — "What is membrane potential?"
-- **Dataset overview** — "What features are available?"
-- **Drug similarity** — "What drugs look most like Rotenone?" (Euclidean
-  distance in z-scored mean-phenotype space, with which-features-drove-it)
-- **Top differentiators** — "What differs most between Rotenone and DMSO?"
-  (features ranked by |Cohen's d|)
-- **Multi-turn follow-ups** — "what about for membrane potential?",
-  "and CCCP?"
-
-Every LLM-narrated answer is enriched with a **drug-knowledge block** when the
-question touches one of the 26 known compounds (Complex I inhibitors,
-uncouplers, K+/H+ antiporters, microtubule depolymerisers, etc.). The model is
-prompted to integrate this mechanism context with the statistics, so answers
-feel like talking to a colleague rather than a SQL terminal.
-
-Each answer ships with up to 3 **suggested follow-up chips** (rule-based per
-query type, de-duped against prior turns) so users can keep exploring with one
-click.
-
-The chat does NOT execute code, control the UI, or invent numbers. It
-narrates *statistics computed deterministically by the backend* from the
-loaded dataset.
+- **Open-ended phrasing works.** "Show me the standout drug for membrane
+  potential collapse" and "Find a drug similar to Rotenone but with a
+  different mechanism" both produce thoughtful answers — there is no keyword
+  classifier in the critical path.
+- **Multi-step reasoning.** The LLM may chain several deterministic compute
+  tools in one turn ("rank by TMRM low → look up mechanism for the top hit
+  → narrate"), so questions that require *combining* sources just work.
+- **Statistical literacy by default.** SEM, 95% CIs, Welch's t-test,
+  Cohen's d, Spearman ρ, indistinguishable-rank flags — the agent has access
+  to all of these and the system prompt instructs it to lean on magnitude
+  (Cohen's d), not p-values, given the large n.
+- **Biological grounding.** A drug-knowledge tool exposes mechanism /
+  molecular target / expected phenotype for the 26 known compounds, so the
+  agent can interpret data ("near-zero TMRM is consistent with CCCP's
+  protonophore mechanism") instead of just listing numbers.
+- **Self-correction.** Meta-questions ("are you sure?", "why?", "doesn't
+  look right") cause the agent to re-run the relevant tool and either defend
+  or amend its prior answer.
+- **Variation.** Identical questions return *varied phrasings* of the same
+  underlying numbers (no cached canned response).
+- **Grounded.** Every numeric token in the rendered answer must be present
+  in the union of tool results (or a simple derivation thereof — pairwise
+  ratios, differences, percentages, squares, sqrt). Hallucinations are
+  dropped and the answer falls back to a deterministic narrator.
 
 ---
 
-## 2. Architecture
+## 2. Architecture (agent path)
 
 ```
 User
@@ -51,55 +45,68 @@ User
   ▼
 FastAPI /api/chat (rate-limited, validated)
   │
-  ├─► query_handler.classify_query()        ← rule-based intent classifier
+  │  Primary path (LLM available)
+  │  ─────────────────────────────
+  │
+  ├─► agent.run()                   ← tool-using LLM loop (max 6 iterations)
+  │       │
+  │       │  iter 0: send [system, …history…, user] + tool schemas → LLM
+  │       │         LLM returns either:
+  │       │           (a) tool_calls   → execute via agent_tools.run_tool,
+  │       │                              append tool messages, loop;
+  │       │           (b) final text   → return.
+  │       │  …
+  │       │  iter N: force final answer (tools=None, tool_choice=none).
   │       │
   │       ▼
-  │   query_type ∈ {ranking, drug_comparison, correlation,
-  │                feature_stats, feature_description,
-  │                dataset_overview, drug_similarity,
-  │                top_differentiators, greeting, thanks,
-  │                help, unsupported}
+  │   AgentResult { answer, tool_invocations[], iterations, … }
   │
-  ├─► query_handler.compute_statistics()    ← deterministic pandas/numpy
-  │       │
-  │       ▼
-  │   stats: dict (the *only* source of numbers in the answer)
-  │
-  ├─► (cache check) chat_extras.chat_response_cache
-  │       │   keyed on (msg, last 4 turns, version, model). LRU, ttl=1h.
-  │       │   → return immediately with cached=True on hit.
-  │
-  ├─► drug_knowledge.context_block(drugs in scope)
-  │       │   for each known compound mentioned in this turn or recent history,
-  │       │   inject mechanism + target + expected phenotype into the prompt.
-  │
-  ├─► llm_client.LLMClient.generate()       ← OpenRouter, with retries
-  │       │   system prompt: build_system_prompt(version, n, n_drugs,
-  │       │                                       pharmacology_block=…)
-  │       │   messages   : [system, …history…, user(question + stats JSON)]
-  │       │
-  │       ▼
-  │   candidate answer  +  telemetry (model, latency, tokens)
-  │
-  ├─► groundedness.check()                  ← every number in answer must
-  │                                           appear in stats (within ε)
-  │
-  ├─► if ungrounded or LLM failed: _fallback_answer()  ← deterministic text
+  ├─► groundedness.check(answer, union of tool results)
   │
   ▼
 ChatResponse {
-  answer, data, query_type, request_id,
-  grounded, source,         // 'llm' | 'fallback'
-  suggestions: string[],    // up to 3 follow-up chips
-  cached: bool              // true if served from response cache
+  answer, data, query_type='agent', request_id,
+  grounded, source='agent',
+  suggestions: string[],
+  cached: false,
+  tools_used: ['rank_drugs_by_feature', 'get_drug_pharmacology', …]
 }
 ```
 
-Key invariant: **every numeric token in the rendered answer is verifiably
-present in `data`** — directly OR as a simple derivation of literal values
-(pairwise ratios, differences, percentages, squares, square roots). Hallucinated
-numbers are dropped, never displayed, and the answer falls back to the
-deterministic narrator.
+When the LLM is unreachable (no API key, OpenRouter down, authentication
+failure, repeated transient errors), the request falls through to the
+**legacy classifier path** below so the chat is *always* usable.
+
+### Fallback path (LLM unavailable)
+
+```
+classify_query()  →  compute_statistics()  →  _fallback_answer()
+                                                 │
+                                                 ▼
+                                         ChatResponse(source='fallback')
+```
+
+The fallback path still produces insightful answers — ranking fallback
+calls out DMSO position + indistinguishable ranks, comparison fallback
+leads with a verdict summary.
+
+### Tools the agent can call (`server/agent_tools.py`)
+
+| Tool | Returns |
+|---|---|
+| `rank_drugs_by_feature` | Top/bottom N drugs by mean(feature), with 95% CI, Cohen's d vs DMSO, indistinguishable-rank flags |
+| `compare_drugs` | Per-feature head-to-head incl. Welch's t-test + Cohen's d + verdict (clearly_different / likely_different / indistinguishable) |
+| `correlate_features` | Pearson r (Fisher-z 95% CI) + Spearman ρ + p-value |
+| `summarize_feature` | Distribution stats; optional drug filter |
+| `find_similar_drugs` | Drugs nearest a target in z-scored mean-phenotype space, plus which-features-drove-it |
+| `find_distinguishing_features` | Features ranked by \|Cohen's d\| between two drugs |
+| `get_drug_pharmacology` | Known mechanism / target / expected phenotype lookup |
+| `list_features` | All measurable features by category |
+| `list_drugs` | All drugs in the dataset with sample counts + class |
+| `dataset_overview` | High-level facts (n cells, n drugs, etc.) |
+
+Adding a new capability = add a function + one schema entry. No classifier
+work needed.
 
 ---
 
@@ -107,39 +114,37 @@ deterministic narrator.
 
 | Concern | Mechanism |
 |---|---|
-| Cost control | Per-IP rate limit on `/api/chat` (`CHAT_RATE_LIMIT`, default `20/minute`); in-memory LRU response cache for repeat questions (instant + free on hit) |
-| DoS / oversize input | Pydantic `min_length=1`, `max_length=2000` on `message`; history capped at last 12 turns, each ≤ 2000 chars |
-| Transient OpenRouter failures | tenacity exponential backoff on 429/5xx/timeout, max 3 attempts |
-| Hard timeouts | 45 s server-side per attempt, 60 s end-to-end on the client |
-| Hallucinated numbers | `groundedness.check` against the stats envelope, accepting literal values + simple derivations (ratios, differences, percentages, squares, sqrt) |
-| Scientific depth | SEM, 95% CIs, Welch's t-test, Cohen's d, Spearman ρ on every relevant query; statistically-indistinguishable adjacent ranks auto-flagged |
-| Biological grounding | `drug_knowledge.context_block` injects mechanism / target / expected phenotype for the 26 known compounds into the LLM prompt when the question mentions them |
-| Guided exploration | `chat_extras.suggested_followups` returns up to 3 rule-based, context-aware chips per answer |
-| LLM outage | Deterministic `_fallback_answer` for every supported query type, consuming the same statistical envelope |
-| Multi-turn | Full prior conversation passed to the LLM (not just the latest turn) |
+| Cost control | Per-IP rate limit on `/api/chat` (`CHAT_RATE_LIMIT`, default `20/minute`); per-turn cap of 6 agent iterations; tool-result cache within a single turn |
+| DoS / oversize input | Pydantic `min_length=1`, `max_length=2000` on `message`; history capped at last 12 turns, each ≤ 2000 chars; tool results truncated at 8 KB before re-entering the LLM context |
+| Transient OpenRouter failures | tenacity exponential backoff on 429/5xx/timeout, max 3 attempts per LLM call |
+| Hard timeouts | 45 s server-side per LLM attempt, 60 s end-to-end on the client |
+| Hallucinated numbers | `groundedness.check` against the union of tool results, accepting literal values + simple derivations |
+| Misbehaving LLM | Hard iteration cap forces a final answer; tools that error are surfaced to the LLM as `{"error": …}` so it can recover, not crash |
+| LLM outage | Agent path falls through to the legacy classifier + deterministic narrator |
+| Multi-turn | Full prior conversation passed to the LLM each turn — agent rebuilds context naturally |
 | Version awareness | `?version=v1\|v3` (or body field) routes to the matching chat dataset |
-| Observability | Structured key=value logs with `request_id` for every LLM call, chat request, cache hit/miss, and groundedness reject |
-| Frontend UX | AbortController + Stop button, Retry on transient failures, copy answer, char counter, source badge for deterministic answers, cached badge, clickable suggestion chips |
-| Tests | `python -m unittest discover -s server/tests -v` — 56 tests, no network |
+| Observability | Structured key=value logs with `request_id` for every chat request, LLM call, tool invocation, and groundedness reject |
+| Frontend UX | AbortController + Stop, Retry on transient failures, copy answer, char counter, source badge, tools-used chip |
+| Tests | `python -m unittest discover -s server/tests` — 63 tests, no network |
 
 ---
 
 ## 4. Configuration
 
-`server/.env` (copy from `server/.env.example`):
+`server/.env`:
 
 ```bash
-OPENROUTER_API_KEY=sk-or-v1-...        # required; get one from https://openrouter.ai/keys
-OPENROUTER_MODEL=anthropic/claude-haiku-4.5   # default; any OpenRouter id works
-CHAT_RATE_LIMIT=20/minute              # optional; slowapi syntax
-LOG_LEVEL=INFO                         # optional; DEBUG/INFO/WARNING/ERROR
-CORS_ORIGINS=https://example.com       # optional; CSV of additional origins
+OPENROUTER_API_KEY=sk-or-v1-...                  # required
+OPENROUTER_MODEL=anthropic/claude-haiku-4.5       # default; any tool-capable id
+CHAT_RATE_LIMIT=20/minute                         # optional; slowapi syntax
+LOG_LEVEL=INFO                                    # optional
+CORS_ORIGINS=https://example.com                  # optional CSV
 ```
 
-Frontend (`.env` or build-time):
+Frontend:
 
 ```bash
-VITE_API_URL=https://api.example.com   # backend base URL; defaults to http://127.0.0.1:8000
+VITE_API_URL=https://api.example.com              # defaults to http://127.0.0.1:8000
 ```
 
 ---
@@ -160,56 +165,58 @@ npm run dev
 # Tests
 python -m unittest discover -s server/tests -v
 
-# Health (includes which versions are loaded + active LLM model)
+# Health
 curl -s http://127.0.0.1:8000/api/health | jq
 
-# Send a chat (no auth required)
+# Chat
 curl -s -X POST http://127.0.0.1:8000/api/chat \
   -H 'Content-Type: application/json' \
-  -d '{"message":"which drugs increase motility?","version":"v3"}' | jq
+  -d '{"message":"find a drug similar to Rotenone but with a different mechanism","version":"v3"}' | jq
 ```
 
 ---
 
 ## 6. Choosing a model
 
-We default to `anthropic/claude-haiku-4.5` because it is strongest at strict
-grounding + refusal at the cost tier we want (~$1 / $5 per Mtok). Other
-sensible options on OpenRouter:
+The agent path requires a model that supports OpenAI-style function calling
+on OpenRouter. Tested defaults:
 
-| Model | Strength | Approx cost / chat |
+| Model | Strength | Notes |
 |---|---|---|
-| `anthropic/claude-haiku-4.5` (default) | grounding, refusals, concise prose | ~$0.001 |
-| `openai/gpt-4o-mini` | cheapest decent option | ~$0.0002 |
-| `openai/gpt-4o` | nuance and instruction following | ~$0.003 |
-| `deepseek/deepseek-chat` | great value, occasional drift | ~$0.0004 |
-| `meta-llama/llama-3-70b-instruct` | cheapest | ~$0.0008 |
+| `anthropic/claude-haiku-4.5` (default) | strong grounding + tool use | best balance |
+| `openai/gpt-4o-mini` | cheapest tool-capable model | fine for shorter chains |
+| `openai/gpt-4o` | most reliable chained reasoning | ~3× the cost |
+| `anthropic/claude-sonnet-4.5` | longer chains, richer narration | ~5× the cost |
 
-Swap by setting `OPENROUTER_MODEL` and restarting the backend.
+Swap by setting `OPENROUTER_MODEL` and restarting. If the chosen model does
+*not* support tools, `/api/chat` will degrade to the legacy classifier path
+(answers still work; phrasing is templated).
 
 ---
 
-## 7. Adding a new query type
+## 7. Adding a new capability
 
-1. Add classifier branch in `query_handler.classify_query`.
-2. Add stats function (`compute_*`) and route in `compute_statistics`.
-3. Add a fallback branch in `_fallback_answer` (so we still answer when the
-   LLM is down).
-4. Add a `unittest` case in `server/tests/test_chat.py`.
-5. The system prompt does NOT need changes for new query types — the LLM
-   only narrates whatever JSON it receives.
+1. Add a `compute_*` function in `query_handler.py`.
+2. Register it in `server/agent_tools.py` with:
+   - A `TOOL_SCHEMAS` entry (name + clear "USE WHEN" description + JSON parameters).
+   - A branch in `_run_tool_impl()` that calls your `compute_*`.
+3. Add a `unittest` case in `server/tests/test_chat.py`.
+4. *No* classifier change required — the LLM picks up the new tool automatically.
+5. (Optional) Add a fallback branch in `_fallback_answer` so the deterministic path also supports it when the LLM is down.
 
 ---
 
 ## 8. Security
 
 - The OpenRouter key lives only in `server/.env`. Never commit. Never paste
-  into docs. `.gitignore` already excludes `server/.env`.
-- If a key has ever been written to disk anywhere unencrypted, **rotate it**
-  on `https://openrouter.ai/keys`.
+  into docs. `.gitignore` excludes `server/.env`.
+- Rotate keys at `https://openrouter.ai/keys` if a key has ever leaked.
 - `/api/chat` is unauthenticated by design (the data is public). The rate
   limiter is what stops cost abuse. If you ever expose the API beyond your
   trusted network, add a shared bearer token check in `chat()`.
-- The system prompt explicitly rejects prompt-injection attempts
-  (`"ignore previous instructions"`, role-overrides, etc.) and the
-  groundedness check provides a second line of defence.
+- The agent system prompt explicitly rejects prompt-injection
+  (`"ignore previous instructions"`, role-overrides) and the groundedness
+  check is the second line of defence against hallucinated numbers.
+- Tools are explicit and read-only — there is no `execute_sql`, no `eval`,
+  no filesystem access. The worst a misbehaving agent can do is loop until
+  it hits the iteration cap.

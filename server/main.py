@@ -37,9 +37,12 @@ try:
     from . import dataset_registry
     from . import drug_knowledge
     from . import chat_extras
+    from . import agent as chat_agent
+    from . import agent_tools
     from .query_handler import load_data, classify_query, compute_statistics
     from .llm_client import (
         build_system_prompt,
+        build_agent_system_prompt,
         initialize_llm_client,
         get_llm_client,
         is_llm_available,
@@ -53,9 +56,12 @@ except ImportError:
     import dataset_registry
     import drug_knowledge
     import chat_extras
+    import agent as chat_agent
+    import agent_tools
     from query_handler import load_data, classify_query, compute_statistics
     from llm_client import (
         build_system_prompt,
+        build_agent_system_prompt,
         initialize_llm_client,
         get_llm_client,
         is_llm_available,
@@ -555,13 +561,19 @@ class ChatResponse(BaseModel):
     query_type: Optional[str] = None
     request_id: str
     grounded: bool
-    source: str  # "llm" | "fallback"
+    # "agent" = tool-using LLM agent (the modern path); "llm" = legacy single-shot
+    # narrate-fixed-stats path; "fallback" = deterministic answer (LLM unreachable
+    # or ungrounded). Frontends can show subtly different badges.
+    source: str
     # Up to 3 natural follow-up questions a scientist might ask next.
     # Frontend renders these as clickable chips beneath the assistant bubble.
     suggestions: List[str] = []
     # True when this answer was served from the in-memory response cache
     # (same question + recent context + version + model already answered).
     cached: bool = False
+    # When the agent used tools, this lists their names in call order for the
+    # UI ("rank_drugs_by_feature → get_drug_pharmacology"). Empty otherwise.
+    tools_used: List[str] = []
 
 
 def _sanitize_history(
@@ -901,11 +913,17 @@ def _fallback_answer(qtype: str, stats: dict) -> str:
 @app.post("/api/chat", response_model=ChatResponse)
 @limiter.limit(_chat_rate_limit)
 async def chat(request: Request, req: ChatRequest):
-    """
-    Conversational Q&A grounded in deterministic statistics.
+    """Conversational Q&A grounded in deterministic statistics.
 
-    The endpoint is rate-limited (see `CHAT_RATE_LIMIT` env). Returns a
-    deterministic fallback if the LLM is unavailable so the chat is always
+    Primary path: a tool-using LLM agent. The LLM understands the user's
+    intent in any phrasing, picks which deterministic compute tools to call
+    (rank / compare / correlate / similar / distinguishing / pharmacology
+    lookup / list / overview), chains them as needed, and writes a varied
+    natural-language answer. There is *no* keyword classifier in the
+    critical path, so novel phrasings just work.
+
+    Fallback path: if the LLM is unreachable, we fall back to the legacy
+    classify→compute→deterministic-narrate path so the chat is always
     usable.
     """
     request_id = request.headers.get("x-request-id") or uuid.uuid4().hex[:12]
@@ -914,16 +932,8 @@ async def chat(request: Request, req: ChatRequest):
         raise HTTPException(status_code=503, detail="Chat dataset not loaded.")
 
     selected_version = query_handler.use_version((req.version or "v3").lower())
-
     message = req.message.strip()
     history = _sanitize_history(req.history)
-
-    # ── classify ───────────────────────────────────────────────────────────
-    context = _extract_context_from_history(history)
-    query_info = classify_query(message, context=context)
-    query_type = query_info["type"]
-
-    # Recent user-message strings used to de-dup suggestion chips.
     recent_user_msgs = [m.content for m in history if m.role == "user"] + [message]
 
     log.info(
@@ -932,37 +942,178 @@ async def chat(request: Request, req: ChatRequest):
             "request_id": request_id,
             "version": selected_version,
             "history_turns": len(history),
-            "query_type": query_type,
             "message_preview": message[:120],
+            "path": "agent" if is_llm_available() else "fallback",
         },
     )
 
-    # ── cache check (only for stat-bearing queries; conversational short-
-    #    circuits are already nearly free) ─────────────────────────────────
-    llm_model_name = getattr(get_llm_client(), "model", "none") if is_llm_available() else "none"
-    cache_key_history = [{"role": m.role, "content": m.content} for m in history]
-    if query_type not in {"greeting", "thanks", "help", "unsupported"}:
-        cached_response = chat_extras.chat_response_cache.get(
-            message=message,
-            history=cache_key_history,
-            version=selected_version,
-            model=llm_model_name,
-        )
-        if cached_response is not None:
-            log.info(
-                "chat.cache_hit",
-                extra={
-                    "request_id": request_id,
-                    "query_type": query_type,
-                    "cache": chat_extras.chat_response_cache.stats(),
-                },
+    # ────────────────────────────────────────────────────────────────────────
+    # PRIMARY PATH: tool-using agent
+    # ────────────────────────────────────────────────────────────────────────
+    if is_llm_available():
+        try:
+            return await _chat_via_agent(
+                request_id=request_id,
+                selected_version=selected_version,
+                message=message,
+                history=history,
+                recent_user_msgs=recent_user_msgs,
             )
-            # Return a copy with a fresh request_id + cached=True flag.
-            return cached_response.model_copy(
-                update={"request_id": request_id, "cached": True}
+        except Exception as exc:  # noqa: BLE001 — agent never aborts the request
+            log.exception(
+                "chat.agent_unexpected_error",
+                extra={"request_id": request_id, "error": str(exc)},
             )
+            # Fall through to legacy classifier path.
 
-    # ── conversational short-circuits ──────────────────────────────────────
+    # ────────────────────────────────────────────────────────────────────────
+    # FALLBACK PATH: legacy classifier + deterministic narrator
+    # (used when LLM is unavailable, the API key is missing, or the agent
+    # raised an unexpected exception)
+    # ────────────────────────────────────────────────────────────────────────
+    return _chat_via_classifier(
+        request_id=request_id,
+        selected_version=selected_version,
+        message=message,
+        history=history,
+        recent_user_msgs=recent_user_msgs,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Primary path: agentic tool-use
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def _chat_via_agent(
+    *,
+    request_id: str,
+    selected_version: str,
+    message: str,
+    history: List["HistoryMessage"],
+    recent_user_msgs: List[str],
+) -> ChatResponse:
+    ds = query_handler._DATASETS.get(selected_version)
+    n_samples = len(ds.feature_table) if ds and ds.feature_table is not None else 0
+    n_drugs = (
+        int(ds.sample_metadata["drug"].nunique())
+        if ds and ds.sample_metadata is not None
+        else 0
+    )
+    system_prompt = build_agent_system_prompt(
+        dataset_version=selected_version,
+        n_samples=n_samples,
+        n_drugs=n_drugs,
+    )
+
+    agent_history = [{"role": m.role, "content": m.content} for m in history]
+    result = chat_agent.run(
+        user_message=message,
+        history=agent_history,
+        system_prompt=system_prompt,
+        request_id=request_id,
+    )
+
+    if result is None or not result.answer:
+        log.warning(
+            "chat.agent_returned_empty",
+            extra={"request_id": request_id, "errors": (result.errors if result else None)},
+        )
+        # Fall back to classifier path.
+        return _chat_via_classifier(
+            request_id=request_id,
+            selected_version=selected_version,
+            message=message,
+            history=history,
+            recent_user_msgs=recent_user_msgs,
+        )
+
+    # Groundedness: every numeric token must be present in the union of tool
+    # results (treated as a single nested object).
+    data = chat_agent.collected_tool_data(result.tool_invocations)
+    grounded = True
+    if result.tool_invocations:
+        grounded = groundedness.check_and_log(
+            result.answer,
+            data,
+            request_id=request_id,
+            query_type="agent",
+        )
+
+    # Suggest follow-ups based on the most relevant tool call (the LAST one
+    # the agent ran, which is usually the headline result).
+    primary = result.tool_invocations[-1] if result.tool_invocations else None
+    suggestions = chat_extras.suggested_followups(
+        query_type=_query_type_for_tool(primary.name) if primary else "agent",
+        params=primary.arguments if primary else None,
+        stats=primary.result if primary else None,
+        recent_user_messages=recent_user_msgs,
+    )
+
+    log.info(
+        "chat.response",
+        extra={
+            "request_id": request_id,
+            "version": selected_version,
+            "source": "agent",
+            "grounded": grounded,
+            "answer_len": len(result.answer),
+            "iterations": result.iterations,
+            "tools_used": chat_agent.tool_summary(result.tool_invocations),
+            "llm_latency_ms": round(result.llm_latency_ms, 1),
+            "suggestions": len(suggestions),
+        },
+    )
+
+    return ChatResponse(
+        answer=result.answer,
+        data=data or None,
+        query_type="agent",
+        request_id=request_id,
+        grounded=grounded,
+        source="agent",
+        suggestions=suggestions,
+        cached=False,
+        tools_used=chat_agent.tool_summary(result.tool_invocations),
+    )
+
+
+# Tool name → suggestion query_type (so chips re-use the existing rules).
+_TOOL_TO_QTYPE = {
+    "rank_drugs_by_feature": "ranking",
+    "compare_drugs": "drug_comparison",
+    "correlate_features": "correlation",
+    "summarize_feature": "feature_stats",
+    "find_similar_drugs": "drug_similarity",
+    "find_distinguishing_features": "top_differentiators",
+    "get_drug_pharmacology": "feature_description",
+    "list_features": "dataset_overview",
+    "list_drugs": "dataset_overview",
+    "dataset_overview": "dataset_overview",
+}
+
+
+def _query_type_for_tool(name: Optional[str]) -> str:
+    return _TOOL_TO_QTYPE.get(name or "", "agent")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Fallback path: legacy classifier + deterministic narrator
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _chat_via_classifier(
+    *,
+    request_id: str,
+    selected_version: str,
+    message: str,
+    history: List["HistoryMessage"],
+    recent_user_msgs: List[str],
+) -> ChatResponse:
+    context = _extract_context_from_history(history)
+    query_info = classify_query(message, context=context)
+    query_type = query_info["type"]
+
     conversational = {
         "greeting": (
             "Hi! I'm MitoSpace Chat — I can help you explore the mitochondrial dataset. "
@@ -1009,7 +1160,6 @@ async def chat(request: Request, req: ChatRequest):
             ),
         )
 
-    # ── compute stats ──────────────────────────────────────────────────────
     try:
         computed_stats = compute_statistics(query_type, query_info["params"])
     except Exception as exc:
@@ -1037,86 +1187,7 @@ async def chat(request: Request, req: ChatRequest):
             ),
         )
 
-    # ── LLM narration ──────────────────────────────────────────────────────
-    answer: Optional[str] = None
-    grounded = True
-    source = "fallback"
-
-    # Drugs the user touched in either this turn or recent history — used to
-    # decide which pharmacology entries to inject into the prompt.
-    drugs_in_context: List[str] = []
-    for d in query_handler.extract_drug_names(message):
-        if d not in drugs_in_context:
-            drugs_in_context.append(d)
-    for m in history:
-        if m.role == "user":
-            for d in query_handler.extract_drug_names(m.content):
-                if d not in drugs_in_context:
-                    drugs_in_context.append(d)
-    # Also pull from query_info.params (covers "compare X and Y" where the
-    # name resolution happened in the classifier).
-    qp = query_info.get("params") or {}
-    for k in ("drugs", "drug_a", "drug_b", "drug", "target_drug"):
-        v = qp.get(k)
-        if isinstance(v, str):
-            drugs_in_context.append(v)
-        elif isinstance(v, list):
-            drugs_in_context.extend(v)
-
-    pharm_block = drug_knowledge.context_block(drugs_in_context)
-
-    if is_llm_available():
-        llm = get_llm_client()
-        ds = query_handler._DATASETS.get(selected_version)
-        n_samples = len(ds.feature_table) if ds and ds.feature_table is not None else 0
-        n_drugs = (
-            int(ds.sample_metadata["drug"].nunique())
-            if ds and ds.sample_metadata is not None
-            else 0
-        )
-        system_prompt = build_system_prompt(
-            dataset_version=selected_version,
-            n_samples=n_samples,
-            n_drugs=n_drugs,
-            pharmacology_block=pharm_block,
-        )
-
-        # Pass the LLM the full prior conversation so multi-turn works.
-        llm_history = [{"role": m.role, "content": m.content} for m in history]
-
-        candidate, telemetry = llm.generate(
-            system_prompt=system_prompt,
-            history=llm_history,
-            user_question=message,
-            stats_envelope=json.dumps(computed_stats, indent=2, default=str),
-            query_type=query_type,
-            request_id=request_id,
-        )
-
-        if candidate:
-            grounded = groundedness.check_and_log(
-                candidate,
-                computed_stats,
-                request_id=request_id,
-                query_type=query_type,
-            )
-            if grounded:
-                answer = candidate
-                source = "llm"
-            else:
-                log.warning(
-                    "chat.ungrounded_response_dropped",
-                    extra={
-                        "request_id": request_id,
-                        "query_type": query_type,
-                        "model": telemetry.model,
-                    },
-                )
-
-    if answer is None:
-        answer = _fallback_answer(query_type, computed_stats)
-        grounded = True  # deterministic by construction
-
+    answer = _fallback_answer(query_type, computed_stats)
     suggestions = chat_extras.suggested_followups(
         query_type=query_type,
         params=query_info.get("params"),
@@ -1129,35 +1200,20 @@ async def chat(request: Request, req: ChatRequest):
         extra={
             "request_id": request_id,
             "version": selected_version,
+            "source": "fallback",
             "query_type": query_type,
-            "source": source,
-            "grounded": grounded,
             "answer_len": len(answer),
-            "pharm_drugs": len(drugs_in_context),
             "suggestions": len(suggestions),
         },
     )
 
-    response = ChatResponse(
+    return ChatResponse(
         answer=answer,
         data=computed_stats,
         query_type=query_type,
         request_id=request_id,
-        grounded=grounded,
-        source=source,
+        grounded=True,
+        source="fallback",
         suggestions=suggestions,
         cached=False,
     )
-
-    # Only cache LLM-narrated answers so users get the deterministic-fallback
-    # path again next time (and the LLM can succeed on retry).
-    if source == "llm":
-        chat_extras.chat_response_cache.put(
-            message=message,
-            history=cache_key_history,
-            version=selected_version,
-            model=llm_model_name,
-            response=response,
-        )
-
-    return response

@@ -799,6 +799,12 @@ def _drug_indices(drug: str) -> Tuple[str, List[int]]:
     """Return (display_name, dataframe indices) for one drug.
 
     Always merges Control + DMSO into a single 'DMSO (control)' group.
+
+    The returned display name uses the *dataset's* stored casing (not the
+    caller's input casing) so that subsequent dict lookups against names
+    iterated from `sample_metadata['drug'].unique()` always match. Without
+    this, calling `_drug_indices('Rotenone')` against a dataset that stores
+    `'rotenone'` would silently produce a key that mismatches later use.
     """
     if sample_metadata is None:
         return drug, []
@@ -806,7 +812,12 @@ def _drug_indices(drug: str) -> Tuple[str, List[int]]:
         sel = sample_metadata[sample_metadata["drug"].str.upper().isin(["DMSO", "CONTROL"])]
         return "DMSO (control)", sel.index.tolist()
     sel = sample_metadata[sample_metadata["drug"].str.lower() == drug.lower()]
-    return drug, sel.index.tolist()
+    indices = sel.index.tolist()
+    if indices:
+        # Use the dataset's canonical name for this drug (first matching row).
+        canonical = sample_metadata.loc[indices[0], "drug"]
+        return canonical, indices
+    return drug, indices
 
 
 def compute_drug_comparison(drugs: List[str]) -> Dict[str, Any]:

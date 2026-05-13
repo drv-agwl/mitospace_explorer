@@ -172,12 +172,19 @@ export interface ChatResponse {
   request_id?: string;
   /** True iff every number in `answer` is verified against backend stats. */
   grounded?: boolean;
-  /** 'llm' if the answer came from the language model, 'fallback' if from deterministic code. */
-  source?: 'llm' | 'fallback';
+  /**
+   * Where the answer came from:
+   *  - 'agent'    — tool-using LLM agent (modern path)
+   *  - 'llm'      — legacy single-shot LLM narration (kept for backward compat)
+   *  - 'fallback' — deterministic narrator (LLM unreachable or hallucinated)
+   */
+  source?: 'agent' | 'llm' | 'fallback';
   /** Up to 3 natural follow-up questions a scientist might ask next. */
   suggestions?: string[];
   /** True when the answer was served from the in-memory response cache. */
   cached?: boolean;
+  /** When the agent used tools, the tool names in call order (for transparency). */
+  tools_used?: string[];
 }
 
 export class ChatRequestError extends Error {
