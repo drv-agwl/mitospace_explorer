@@ -35,6 +35,8 @@ try:
     from . import query_handler
     from . import llm_client
     from . import dataset_registry
+    from . import drug_knowledge
+    from . import chat_extras
     from .query_handler import load_data, classify_query, compute_statistics
     from .llm_client import (
         build_system_prompt,
@@ -49,6 +51,8 @@ except ImportError:
     import query_handler
     import llm_client
     import dataset_registry
+    import drug_knowledge
+    import chat_extras
     from query_handler import load_data, classify_query, compute_statistics
     from llm_client import (
         build_system_prompt,
@@ -506,6 +510,7 @@ def health(version: Optional[str] = Query(default=None)):
         "chat_available": is_llm_available() and bool(query_handler.available_versions()),
         "chat_versions": query_handler.available_versions(),
         "llm_model": getattr(get_llm_client(), "model", None) if is_llm_available() else None,
+        "chat_cache": chat_extras.chat_response_cache.stats(),
     }
 
 
@@ -551,6 +556,12 @@ class ChatResponse(BaseModel):
     request_id: str
     grounded: bool
     source: str  # "llm" | "fallback"
+    # Up to 3 natural follow-up questions a scientist might ask next.
+    # Frontend renders these as clickable chips beneath the assistant bubble.
+    suggestions: List[str] = []
+    # True when this answer was served from the in-memory response cache
+    # (same question + recent context + version + model already answered).
+    cached: bool = False
 
 
 def _sanitize_history(
@@ -626,8 +637,10 @@ def _round_for_display(x):
 
 def _fallback_answer(qtype: str, stats: dict) -> str:
     """Deterministic textual answer used whenever the LLM is unavailable or
-    the LLM's answer fails the groundedness check. Designed to be useful on
-    its own — not a placeholder.
+    its candidate failed the groundedness check.
+
+    These answers now consume the richer statistical envelope (SEM, CIs,
+    Cohen's d, verdict) so they're useful on their own — not placeholders.
     """
     try:
         if qtype == "ranking":
@@ -639,47 +652,74 @@ def _fallback_answer(qtype: str, stats: dict) -> str:
             verb = "higher" if direction == "high" else "lower"
             lines = [f"Top drugs by {verb} {feature}:"]
             for i, r in enumerate(rankings[:10], start=1):
-                lines.append(
-                    f"{i}. {r.get('drug', '?')}: mean={_round_for_display(r.get('mean'))} "
-                    f"(std={_round_for_display(r.get('std'))}, n={r.get('count')})"
-                )
+                drug = r.get("drug", "?")
+                mean = _round_for_display(r.get("mean"))
+                ci_lo = _round_for_display(r.get("ci95_low"))
+                ci_hi = _round_for_display(r.get("ci95_high"))
+                n = r.get("n") or r.get("count")
+                effect = r.get("effect_vs_dmso")
+                d = r.get("cohens_d_vs_dmso")
+                line = f"{i}. {drug}: mean={mean}"
+                if ci_lo is not None and ci_hi is not None:
+                    line += f" (95% CI {ci_lo}–{ci_hi}, n={n})"
+                else:
+                    line += f" (n={n})"
+                if d is not None and effect:
+                    line += f" — effect vs DMSO: {effect} (d={d})"
+                if r.get("indistinguishable_from_prev"):
+                    line += "  ← statistically indistinguishable from #{0}".format(i - 1)
+                lines.append(line)
             return "\n".join(lines)
 
         if qtype == "drug_comparison":
-            # Two layouts: nested by-drug (current `compute_drug_comparison`) or
-            # the legacy `comparison` dict. Handle both safely.
-            if any(isinstance(v, dict) and "features" in v for v in stats.values()):
-                names = list(stats.keys())
-                if not names:
-                    return "I couldn't compute a comparison for those drugs."
-                lines = [f"Comparison across {', '.join(names)}:"]
-                feature_set: List[str] = []
-                for entry in stats.values():
-                    if isinstance(entry, dict):
-                        for k in (entry.get("features") or {}).keys():
-                            if k not in feature_set:
-                                feature_set.append(k)
-                for f in feature_set:
-                    parts = []
-                    for d in names:
-                        info = (stats.get(d, {}).get("features") or {}).get(f, {})
-                        if "mean" in info:
-                            parts.append(f"{d}={_round_for_display(info['mean'])}")
-                    if parts:
-                        lines.append(f"- {f}: " + ", ".join(parts))
-                return "\n".join(lines)
-            return "I couldn't format the comparison."
+            inference = stats.get("_inference") or {}
+            names = [k for k in stats.keys() if k != "_inference"]
+            if not names:
+                return "I couldn't compute a comparison for those drugs."
+            lines = [f"Comparison across {', '.join(names)}:"]
+            feature_set: List[str] = []
+            for n in names:
+                entry = stats.get(n, {})
+                for k in (entry.get("features") or {}).keys():
+                    if k not in feature_set:
+                        feature_set.append(k)
+            for f in feature_set:
+                parts = []
+                for d in names:
+                    info = (stats.get(d, {}).get("features") or {}).get(f, {})
+                    if "mean" in info:
+                        parts.append(f"{d}={_round_for_display(info['mean'])}")
+                line = f"- {f}: " + ", ".join(parts)
+                # Append inference verdict for the 2-drug case
+                if len(names) == 2 and inference:
+                    pair_key = next(iter(inference), None)
+                    if pair_key:
+                        cmp = inference[pair_key].get(f) or {}
+                        verdict = cmp.get("verdict")
+                        d = cmp.get("cohens_d")
+                        if verdict and d is not None:
+                            line += f"  ({verdict.replace('_',' ')}, d={d})"
+                lines.append(line)
+            return "\n".join(lines)
 
         if qtype == "correlation":
             f1 = stats.get("feature1", "feature1")
             f2 = stats.get("feature2", "feature2")
-            corr = stats.get("correlation")
+            r = stats.get("correlation")
+            ci_lo = stats.get("ci95_low")
+            ci_hi = stats.get("ci95_high")
             n = stats.get("n_samples")
             interp = stats.get("interpretation", "")
-            return (
-                f"{f1} and {f2} have a Pearson correlation of "
-                f"r={_round_for_display(corr)} (n={n}) — {interp}."
+            spearman = stats.get("spearman")
+            line = (
+                f"{f1} and {f2} have a Pearson correlation of r={_round_for_display(r)}"
             )
+            if ci_lo is not None and ci_hi is not None:
+                line += f" (95% CI {_round_for_display(ci_lo)} to {_round_for_display(ci_hi)})"
+            line += f", n={n}. Interpretation: {interp}."
+            if spearman is not None:
+                line += f" Spearman ρ={_round_for_display(spearman)}."
+            return line
 
         if qtype == "feature_stats":
             feature = stats.get("feature", "feature")
@@ -703,6 +743,41 @@ def _fallback_answer(qtype: str, stats: dict) -> str:
                 f"{len(drugs)} drug conditions. "
                 f"Key features: {', '.join(stats.get('key_features') or [])}."
             )
+
+        if qtype == "drug_similarity":
+            target = stats.get("target_drug", "the target")
+            neighbours = stats.get("neighbors") or []
+            if not neighbours:
+                return f"I couldn't find similar drugs to {target}."
+            lines = [f"Drugs most similar to {target} (smaller distance = more similar):"]
+            for i, n in enumerate(neighbours, start=1):
+                lines.append(
+                    f"{i}. {n['drug']}: distance={n.get('distance')} "
+                    f"(most similar on {', '.join(n.get('most_similar_on') or [])}; "
+                    f"differs most on {', '.join(n.get('most_different_on') or [])})"
+                )
+            return "\n".join(lines)
+
+        if qtype == "top_differentiators":
+            a = stats.get("drug_a", "A")
+            b = stats.get("drug_b", "B")
+            rows = stats.get("top_differentiators") or []
+            if not rows:
+                return f"I couldn't compute differentiators between {a} and {b}."
+            lines = [f"Features that differ most between {a} and {b} (sorted by |Cohen's d|):"]
+            for row in rows:
+                f = row.get("feature")
+                d = row.get("cohens_d")
+                eff = row.get("effect_size")
+                p = row.get("p_value")
+                a_mean = _round_for_display(row.get(f"{a}_mean"))
+                b_mean = _round_for_display(row.get(f"{b}_mean"))
+                p_str = "<0.001" if p is not None and p < 0.001 else _round_for_display(p)
+                lines.append(
+                    f"- {f}: {a}={a_mean} vs {b}={b_mean}  (d={d}, {eff}, p={p_str})"
+                )
+            return "\n".join(lines)
+
     except Exception as exc:
         log.warning("chat.fallback_format_failed", extra={"qtype": qtype, "error": str(exc)})
 
@@ -737,6 +812,9 @@ async def chat(request: Request, req: ChatRequest):
     query_info = classify_query(message, context=context)
     query_type = query_info["type"]
 
+    # Recent user-message strings used to de-dup suggestion chips.
+    recent_user_msgs = [m.content for m in history if m.role == "user"] + [message]
+
     log.info(
         "chat.request",
         extra={
@@ -747,6 +825,31 @@ async def chat(request: Request, req: ChatRequest):
             "message_preview": message[:120],
         },
     )
+
+    # ── cache check (only for stat-bearing queries; conversational short-
+    #    circuits are already nearly free) ─────────────────────────────────
+    llm_model_name = getattr(get_llm_client(), "model", "none") if is_llm_available() else "none"
+    cache_key_history = [{"role": m.role, "content": m.content} for m in history]
+    if query_type not in {"greeting", "thanks", "help", "unsupported"}:
+        cached_response = chat_extras.chat_response_cache.get(
+            message=message,
+            history=cache_key_history,
+            version=selected_version,
+            model=llm_model_name,
+        )
+        if cached_response is not None:
+            log.info(
+                "chat.cache_hit",
+                extra={
+                    "request_id": request_id,
+                    "query_type": query_type,
+                    "cache": chat_extras.chat_response_cache.stats(),
+                },
+            )
+            # Return a copy with a fresh request_id + cached=True flag.
+            return cached_response.model_copy(
+                update={"request_id": request_id, "cached": True}
+            )
 
     # ── conversational short-circuits ──────────────────────────────────────
     conversational = {
@@ -787,6 +890,12 @@ async def chat(request: Request, req: ChatRequest):
             request_id=request_id,
             grounded=True,
             source="fallback",
+            suggestions=chat_extras.suggested_followups(
+                query_type=query_type,
+                params=query_info.get("params"),
+                stats=None,
+                recent_user_messages=recent_user_msgs,
+            ),
         )
 
     # ── compute stats ──────────────────────────────────────────────────────
@@ -811,15 +920,42 @@ async def chat(request: Request, req: ChatRequest):
             request_id=request_id,
             grounded=True,
             source="fallback",
+            suggestions=chat_extras.suggested_followups(
+                query_type="unsupported",
+                recent_user_messages=recent_user_msgs,
+            ),
         )
 
     # ── LLM narration ──────────────────────────────────────────────────────
     answer: Optional[str] = None
     grounded = True
     source = "fallback"
+
+    # Drugs the user touched in either this turn or recent history — used to
+    # decide which pharmacology entries to inject into the prompt.
+    drugs_in_context: List[str] = []
+    for d in query_handler.extract_drug_names(message):
+        if d not in drugs_in_context:
+            drugs_in_context.append(d)
+    for m in history:
+        if m.role == "user":
+            for d in query_handler.extract_drug_names(m.content):
+                if d not in drugs_in_context:
+                    drugs_in_context.append(d)
+    # Also pull from query_info.params (covers "compare X and Y" where the
+    # name resolution happened in the classifier).
+    qp = query_info.get("params") or {}
+    for k in ("drugs", "drug_a", "drug_b", "drug", "target_drug"):
+        v = qp.get(k)
+        if isinstance(v, str):
+            drugs_in_context.append(v)
+        elif isinstance(v, list):
+            drugs_in_context.extend(v)
+
+    pharm_block = drug_knowledge.context_block(drugs_in_context)
+
     if is_llm_available():
         llm = get_llm_client()
-        # Build a dataset-aware system prompt
         ds = query_handler._DATASETS.get(selected_version)
         n_samples = len(ds.feature_table) if ds and ds.feature_table is not None else 0
         n_drugs = (
@@ -831,6 +967,7 @@ async def chat(request: Request, req: ChatRequest):
             dataset_version=selected_version,
             n_samples=n_samples,
             n_drugs=n_drugs,
+            pharmacology_block=pharm_block,
         )
 
         # Pass the LLM the full prior conversation so multi-turn works.
@@ -869,6 +1006,13 @@ async def chat(request: Request, req: ChatRequest):
         answer = _fallback_answer(query_type, computed_stats)
         grounded = True  # deterministic by construction
 
+    suggestions = chat_extras.suggested_followups(
+        query_type=query_type,
+        params=query_info.get("params"),
+        stats=computed_stats,
+        recent_user_messages=recent_user_msgs,
+    )
+
     log.info(
         "chat.response",
         extra={
@@ -878,14 +1022,31 @@ async def chat(request: Request, req: ChatRequest):
             "source": source,
             "grounded": grounded,
             "answer_len": len(answer),
+            "pharm_drugs": len(drugs_in_context),
+            "suggestions": len(suggestions),
         },
     )
 
-    return ChatResponse(
+    response = ChatResponse(
         answer=answer,
         data=computed_stats,
         query_type=query_type,
         request_id=request_id,
         grounded=grounded,
         source=source,
+        suggestions=suggestions,
+        cached=False,
     )
+
+    # Only cache LLM-narrated answers so users get the deterministic-fallback
+    # path again next time (and the LLM can succeed on retry).
+    if source == "llm":
+        chat_extras.chat_response_cache.put(
+            message=message,
+            history=cache_key_history,
+            version=selected_version,
+            model=llm_model_name,
+            response=response,
+        )
+
+    return response

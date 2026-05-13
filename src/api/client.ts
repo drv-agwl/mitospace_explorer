@@ -174,6 +174,10 @@ export interface ChatResponse {
   grounded?: boolean;
   /** 'llm' if the answer came from the language model, 'fallback' if from deterministic code. */
   source?: 'llm' | 'fallback';
+  /** Up to 3 natural follow-up questions a scientist might ask next. */
+  suggestions?: string[];
+  /** True when the answer was served from the in-memory response cache. */
+  cached?: boolean;
 }
 
 export class ChatRequestError extends Error {

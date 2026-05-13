@@ -33,6 +33,8 @@ import pandas as pd
 import groundedness  # noqa: E402
 import llm_client  # noqa: E402
 import query_handler  # noqa: E402
+import drug_knowledge  # noqa: E402
+import chat_extras  # noqa: E402
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -163,6 +165,40 @@ class TestGroundedness(unittest.TestCase):
         )
         self.assertTrue(ok)
 
+    def test_confidence_level_label_is_grounded(self):
+        # "95% CI" is structural — 95 shouldn't be flagged even if absent from stats.
+        stats = {"correlation": -0.21, "ci95_low": -0.22, "ci95_high": -0.19}
+        ok, _ = groundedness.check(
+            "Pearson r = -0.21 (95% CI: -0.22 to -0.19, p < 0.001).",
+            stats,
+        )
+        self.assertTrue(ok)
+
+    def test_effect_size_thresholds_are_grounded(self):
+        # Cohen's d ≥ 0.8 = large. These threshold numbers shouldn't be flagged.
+        stats = {"cohens_d": 1.2}
+        ok, _ = groundedness.check(
+            "Cohen's d = 1.2 (above the 0.8 threshold for a large effect).",
+            stats,
+        )
+        self.assertTrue(ok)
+
+    def test_r_squared_is_grounded(self):
+        # r² = "% variance explained" is a natural scientific addendum.
+        # r=-0.205 → r²=0.042 → 4.2% variance. All three should pass.
+        stats = {"correlation": -0.205, "n": 34718}
+        ok, _ = groundedness.check(
+            "Pearson r = -0.205, explaining about 4.2% of the variance (r² = 0.042).",
+            stats,
+        )
+        self.assertTrue(ok)
+
+    def test_absolute_value_is_grounded(self):
+        # "|d| = 1.4" when stats has d = -1.4 should be allowed.
+        stats = {"cohens_d": -1.4}
+        ok, _ = groundedness.check("|d| = 1.4 indicates a large effect.", stats)
+        self.assertTrue(ok)
+
     def test_pure_hallucination_still_rejected(self):
         # Even with derived allowed, a fully fabricated value should fail.
         stats = {"a": 1.0, "b": 2.0, "c": 3.0}
@@ -228,6 +264,21 @@ class TestClassifier(unittest.TestCase):
         self.assertEqual(out["type"], "correlation")
         self.assertEqual(len(out["params"]["features"]), 2)
 
+    def test_similarity_with_adverb(self):
+        # Regex should catch "look most like", "looks a lot like".
+        for q in (
+            "what drugs look most like Rotenone?",
+            "drugs that looks a lot like CCCP",
+            "find compounds that look very much like DMSO",
+        ):
+            out = query_handler.classify_query(q)
+            self.assertEqual(out["type"], "drug_similarity", f"Failed for: {q!r}")
+
+    def test_differentiator_two_drugs(self):
+        out = query_handler.classify_query("what differs most between Rotenone and CCCP?")
+        self.assertEqual(out["type"], "top_differentiators")
+        self.assertEqual({out["params"]["drug_a"], out["params"]["drug_b"]}, {"Rotenone", "CCCP"})
+
     def test_followup_uses_context(self):
         ctx = {
             "last_query_type": "ranking",
@@ -273,6 +324,149 @@ class TestComputeStatistics(unittest.TestCase):
         self.assertEqual(out["feature"], "TMRM Intensity")
         self.assertIn("Rotenone", out["scope"])
 
+    def test_ranking_has_cis_and_effects(self):
+        out = query_handler.compute_ranking("Fragment Length", direction="high", top_n=3)
+        for entry in out["rankings"]:
+            self.assertIn("ci95_low", entry)
+            self.assertIn("ci95_high", entry)
+            # First-place entry has no `_vs_dmso` if it IS DMSO; otherwise must.
+            if entry["drug"] != "DMSO (control)":
+                self.assertIn("cohens_d_vs_dmso", entry)
+                self.assertIn("effect_vs_dmso", entry)
+
+    def test_drug_comparison_has_welch_inference(self):
+        out = query_handler.compute_drug_comparison(["Rotenone", "DMSO"])
+        self.assertIn("_inference", out)
+        pair_key = next(iter(out["_inference"]))
+        # We engineered Rotenone to have a smaller TMRM mean — Cohen's d should
+        # be large and the verdict should be 'clearly_different'.
+        cmp = out["_inference"][pair_key].get("TMRM Intensity") or {}
+        self.assertIn(cmp.get("verdict"), ("clearly_different", "likely_different"))
+        self.assertGreater(abs(cmp.get("cohens_d", 0.0)), 0.5)
+
+    def test_correlation_has_ci_and_spearman(self):
+        out = query_handler.compute_correlation("Fragment Length", "Fragment Diffusivity")
+        for k in ("ci95_low", "ci95_high", "spearman", "p_value"):
+            self.assertIn(k, out)
+
+    def test_drug_similarity_returns_neighbours(self):
+        out = query_handler.compute_drug_similarity("Rotenone", top_n=2)
+        self.assertEqual(out["target_drug"], "Rotenone")
+        self.assertEqual(len(out["neighbors"]), 2)
+        for n in out["neighbors"]:
+            self.assertGreaterEqual(n["distance"], 0)
+            # `most_similar_on` and `most_different_on` must be disjoint sets.
+            sim = set(n["most_similar_on"])
+            dif = set(n["most_different_on"])
+            self.assertEqual(sim & dif, set())
+
+    def test_top_differentiators_sorted_by_effect(self):
+        out = query_handler.compute_top_differentiators("Rotenone", "DMSO", top_n=5)
+        ds = [abs(r["cohens_d"]) for r in out["top_differentiators"]]
+        # Sorted descending by |d|.
+        self.assertEqual(ds, sorted(ds, reverse=True))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Drug knowledge base
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestDrugKnowledge(unittest.TestCase):
+    def test_known_drug_lookup(self):
+        self.assertIsNotNone(drug_knowledge.get("rotenone"))
+        self.assertIsNotNone(drug_knowledge.get("ROTENONE"))
+        self.assertIsNotNone(drug_knowledge.get("  Rotenone  "))
+        self.assertIn("Complex I", drug_knowledge.get("rotenone").pharm_class)
+
+    def test_aliases_resolve_to_control(self):
+        for alias in ("DMSO", "ctrl", "vehicle", "untreated"):
+            f = drug_knowledge.get(alias)
+            self.assertIsNotNone(f, f"Alias {alias!r} should resolve")
+            self.assertEqual(f.display_name, "DMSO (vehicle control)")
+
+    def test_unknown_drug_returns_none(self):
+        self.assertIsNone(drug_knowledge.get("madeupcompound42"))
+        self.assertIsNone(drug_knowledge.get(""))
+        self.assertIsNone(drug_knowledge.get(None))
+
+    def test_context_block_dedupes_and_skips_unknowns(self):
+        block = drug_knowledge.context_block(["rotenone", "ROTENONE", "unknown", "cccp"])
+        self.assertIsNotNone(block)
+        # Each known drug appears exactly once.
+        self.assertEqual(block.count("Rotenone — "), 1)
+        self.assertEqual(block.count("CCCP — "), 1)
+
+    def test_context_block_empty_when_nothing_recognised(self):
+        self.assertIsNone(drug_knowledge.context_block(["unknown1", "unknown2"]))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Suggested follow-ups + response cache
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestSuggestedFollowups(unittest.TestCase):
+    def test_ranking_suggests_opposite_direction(self):
+        out = chat_extras.suggested_followups(
+            query_type="ranking",
+            params={"feature": "motility", "direction": "high"},
+            stats={"rankings": [{"drug": "Nigericin"}]},
+        )
+        self.assertTrue(any("decrease" in s.lower() for s in out))
+        self.assertTrue(any("nigericin" in s.lower() for s in out))
+
+    def test_similarity_suggests_compare(self):
+        out = chat_extras.suggested_followups(
+            query_type="drug_similarity",
+            stats={"target_drug": "Rotenone", "neighbors": [{"drug": "Antimycin A"}]},
+        )
+        self.assertTrue(any("compare" in s.lower() for s in out))
+
+    def test_dedupes_against_history(self):
+        # Suggestion identical to a past user message must be filtered.
+        out = chat_extras.suggested_followups(
+            query_type="ranking",
+            params={"feature": "motility", "direction": "high"},
+            stats={"rankings": [{"drug": "Nigericin"}]},
+            recent_user_messages=["Which drugs decrease motility?"],
+        )
+        self.assertFalse(any("decrease motility" in s.lower() for s in out))
+
+    def test_max_three_suggestions(self):
+        out = chat_extras.suggested_followups(
+            query_type="drug_comparison",
+            params={"drugs": ["Rotenone", "CCCP"]},
+            stats={},
+        )
+        self.assertLessEqual(len(out), 3)
+
+
+class TestResponseCache(unittest.TestCase):
+    def test_hit_after_put(self):
+        cache = chat_extras.ResponseCache(capacity=4, ttl_seconds=60)
+        cache.put(message="hello", history=[], version="v3", model="m", response={"a": 1})
+        got = cache.get(message="hello", history=[], version="v3", model="m")
+        self.assertEqual(got, {"a": 1})
+        stats = cache.stats()
+        self.assertEqual(stats["hits"], 1)
+
+    def test_miss_on_different_version(self):
+        cache = chat_extras.ResponseCache()
+        cache.put(message="x", history=[], version="v3", model="m", response={"a": 1})
+        got = cache.get(message="x", history=[], version="v1", model="m")
+        self.assertIsNone(got)
+
+    def test_lru_eviction(self):
+        cache = chat_extras.ResponseCache(capacity=2)
+        cache.put(message="a", history=[], version="v3", model="m", response="A")
+        cache.put(message="b", history=[], version="v3", model="m", response="B")
+        cache.put(message="c", history=[], version="v3", model="m", response="C")
+        # 'a' should have been evicted (oldest).
+        self.assertIsNone(cache.get(message="a", history=[], version="v3", model="m"))
+        self.assertIsNotNone(cache.get(message="b", history=[], version="v3", model="m"))
+        self.assertIsNotNone(cache.get(message="c", history=[], version="v3", model="m"))
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # /api/chat end-to-end with mocked LLM
@@ -298,6 +492,12 @@ class TestChatEndpoint(unittest.TestCase):
         cls.main = main
 
     def setUp(self):
+        # Clear all per-test state so tests are independent of each other.
+        chat_extras.chat_response_cache._store.clear()
+        chat_extras.chat_response_cache.hits = 0
+        chat_extras.chat_response_cache.misses = 0
+        self.fake_llm.reset_mock()
+
         # Default: LLM returns a perfectly grounded answer for ranking.
         def _default(**kwargs):
             telemetry = llm_client.LLMTelemetry(request_id="t", model="test/model")
@@ -364,6 +564,52 @@ class TestChatEndpoint(unittest.TestCase):
         # for blank we strip later, so accept either 200 (treated as unsupported)
         # or 422 — but never a 500.
         self.assertIn(r.status_code, (200, 422))
+
+    def test_response_carries_suggestions(self):
+        r = self.client.post(
+            "/api/chat",
+            json={"message": "which drugs increase motility?"},
+        )
+        body = r.json()
+        # Suggestions are rule-based, so a ranking response must produce some.
+        self.assertIsInstance(body.get("suggestions"), list)
+        self.assertGreaterEqual(len(body["suggestions"]), 1)
+
+    def test_cache_hit_on_repeat_question(self):
+        # Reset cache and force LLM to return a stable grounded answer.
+        chat_extras.chat_response_cache._store.clear()
+
+        def _grounded(**kwargs):
+            telemetry = llm_client.LLMTelemetry(request_id="t", model="test/model")
+            telemetry.success = True
+            return ("OK answer.", telemetry)
+
+        self.fake_llm.generate.side_effect = _grounded
+        question = {"message": "which drugs increase motility the most?"}
+        r1 = self.client.post("/api/chat", json=question).json()
+        # First hit calls the LLM.
+        first_calls = self.fake_llm.generate.call_count
+        r2 = self.client.post("/api/chat", json=question).json()
+        # Second identical question must be cached and NOT call the LLM again.
+        self.assertEqual(self.fake_llm.generate.call_count, first_calls)
+        self.assertTrue(r2.get("cached"))
+        self.assertEqual(r1["answer"], r2["answer"])
+
+    def test_drug_similarity_query_routes(self):
+        r = self.client.post(
+            "/api/chat",
+            json={"message": "what drugs look like rotenone?"},
+        )
+        body = r.json()
+        self.assertEqual(body["query_type"], "drug_similarity")
+
+    def test_top_differentiator_query_routes(self):
+        r = self.client.post(
+            "/api/chat",
+            json={"message": "what differs most between Rotenone and CCCP?"},
+        )
+        body = r.json()
+        self.assertEqual(body["query_type"], "top_differentiators")
 
 
 if __name__ == "__main__":

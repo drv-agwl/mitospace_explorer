@@ -13,6 +13,7 @@ edit a partially-hallucinated answer in-place is worse than replacing it.
 from __future__ import annotations
 
 import logging
+import math
 import re
 from typing import Any, Iterable, List, Optional, Sequence, Tuple
 
@@ -64,7 +65,15 @@ _STRUCTURAL_ALLOWLIST: frozenset[float] = frozenset(
         20.0, 100.0, 1000.0,
         # Common percentile / p-value labels:
         0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99,
-        # Years that show up in narrative context (kept conservative)
+        # Confidence-level labels ("95% CI", "99% CI", "90% CI", etc.). These
+        # are not statistical values, just headers that scientists always cite.
+        90.0, 95.0, 99.0,
+        # Effect-size threshold conventions (Cohen): d > 0.2 small,
+        # 0.5 medium, 0.8 large; r² thresholds; z-scores.
+        0.2, 0.8, 1.96,
+        # Round percentages people quote (e.g. "50% of variance", "10x higher")
+        50.0,
+        # Years that show up in narrative context (kept conservative).
         2024.0, 2025.0, 2026.0,
     }
 )
@@ -166,12 +175,22 @@ def _expand_with_derived(literal: Sequence[float]) -> List[float]:
     for a in base:
         derived.append(a * 100.0)
         derived.append(a / 100.0)
+        # Unary derivations that scientists routinely write:
+        #   r²  → variance explained
+        #   √|x| → magnitude of an effect or noise
+        #   |x| → absolute value (drop the sign in narration)
+        derived.append(a * a)
+        derived.append(a * a * 100.0)  # "% variance explained"
+        if a >= 0:
+            derived.append(math.sqrt(a))
+        derived.append(abs(a))
         for b in base:
             if a is b:
                 continue
             if b != 0:
                 derived.append(a / b)
             derived.append(a - b)
+            derived.append(a + b)
             if b != 0:
                 derived.append((a - b) / b * 100.0)
     # Drop anything non-finite that fell out of the math.

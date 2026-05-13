@@ -24,6 +24,10 @@ interface ChatMessage {
   source?: 'llm' | 'fallback';
   /** True when the backend verified every number in `content` against stats. */
   grounded?: boolean;
+  /** True when the backend served this answer from its in-memory cache. */
+  cached?: boolean;
+  /** Up to 3 rule-based follow-up suggestions for one-click exploration. */
+  suggestions?: string[];
   /** When true, this is a synthetic error bubble; supports Retry. */
   isError?: boolean;
   /** True for the assistant message currently waiting for a response. */
@@ -224,6 +228,8 @@ const ChatPanel: React.FC = () => {
           data: response.data,
           source: response.source,
           grounded: response.grounded,
+          cached: response.cached,
+          suggestions: response.suggestions,
         };
         setMessages((prev) => [...prev, assistantMessage]);
       } catch (err) {
@@ -289,6 +295,25 @@ const ChatPanel: React.FC = () => {
       const trimmed = messages.slice(0, idx); // drop the error bubble
       setMessages(trimmed);
       await runRequest(userMsg.content, trimmed);
+    },
+    [isLoading, messages, runRequest],
+  );
+
+  const handleSuggestion = useCallback(
+    async (suggestion: string) => {
+      if (isLoading) return;
+      const trimmed = suggestion.trim();
+      if (!trimmed) return;
+      const userMessage: ChatMessage = {
+        id: `${Date.now()}-u`,
+        role: 'user',
+        content: trimmed,
+        timestamp: Date.now(),
+      };
+      const updated = [...messages, userMessage];
+      setMessages(updated);
+      setInput('');
+      await runRequest(trimmed, updated);
     },
     [isLoading, messages, runRequest],
   );
@@ -536,6 +561,29 @@ const ChatPanel: React.FC = () => {
                         deterministic
                       </span>
                     )}
+                    {msg.cached && (
+                      <span
+                        className="text-emerald-300/70"
+                        title="Served instantly from cache (same question + recent context already answered)"
+                      >
+                        cached
+                      </span>
+                    )}
+                  </div>
+                )}
+                {!isUser && !isError && msg.suggestions && msg.suggestions.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {msg.suggestions.map((s) => (
+                      <button
+                        key={s}
+                        onClick={() => handleSuggestion(s)}
+                        disabled={isLoading}
+                        className="text-xs px-2.5 py-1 rounded-full border border-white/10 bg-white/[0.04] text-white/65 hover:bg-white/[0.08] hover:text-white/90 hover:border-white/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed text-left leading-snug"
+                        title="Ask this as a follow-up"
+                      >
+                        {s}
+                      </button>
+                    ))}
                   </div>
                 )}
               </div>

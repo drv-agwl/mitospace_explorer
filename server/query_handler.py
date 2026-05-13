@@ -11,11 +11,13 @@ Designed for natural conversational flow:
   and kept in `_DATASETS`.
 """
 import logging
+import math
 import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
 import pandas as pd
+from scipy import stats as _scipy_stats
 
 
 logger = logging.getLogger("mitospace.query")
@@ -414,6 +416,44 @@ def classify_query(message: str, context: Optional[Dict[str, Any]] = None) -> Di
     if any(h in msg_lower for h in help_words):
         return {'type': 'help', 'params': {}}
 
+    # ── 0b-pre. Drug-similarity & top-differentiator intents.
+    # These must come BEFORE the dataset-overview pattern, because phrases
+    # like "what drugs look like rotenone?" otherwise trigger the overview
+    # match on "what drugs".
+    similarity_words = [
+        "similar to", "resemble", "closest to",
+        "neighbours of", "neighbors of", "phenotype like", "behave like",
+        "phenotypically similar", "act like", "phenocopy", "phenocopies",
+    ]
+    # Regex for "look(s) (most/much/very) like" — handles adverbs between the verb
+    # and "like" that scientists naturally insert ("look most like", "looks a lot like").
+    _look_like_re = re.compile(r"\blooks?\s+(?:[a-z]+\s+){0,3}like\b", re.IGNORECASE)
+    if (
+        any(p in msg_lower for p in similarity_words)
+        or _look_like_re.search(message)
+    ) and current_drugs:
+        return {
+            "type": "drug_similarity",
+            "params": {"drug": current_drugs[0], "top_n": 5},
+        }
+
+    differentiator_phrases = [
+        "differs most", "differs the most", "biggest difference",
+        "largest difference", "most different", "distinguish",
+        "what's different", "what is different", "differ most",
+    ]
+    if any(p in msg_lower for p in differentiator_phrases):
+        if len(current_drugs) >= 2:
+            return {
+                "type": "top_differentiators",
+                "params": {"drug_a": current_drugs[0], "drug_b": current_drugs[1], "top_n": 5},
+            }
+        elif len(current_drugs) == 1:
+            return {
+                "type": "top_differentiators",
+                "params": {"drug_a": current_drugs[0], "drug_b": "DMSO", "top_n": 5},
+            }
+
     # ── 0b. Dataset overview questions ──
     overview_patterns = [
         'what features', 'which features', 'available features', 'list features',
@@ -422,6 +462,8 @@ def classify_query(message: str, context: Optional[Dict[str, Any]] = None) -> Di
         'how many samples', 'how many drugs', 'how many features',
         'what is available', 'what can i ask', 'what do you know',
         'overview', 'summarize the data', 'summary of the data',
+        "what's in", 'what is in', 'in this dataset', 'in the dataset',
+        'describe the dataset', 'tell me about the data',
     ]
     if any(p in msg_lower for p in overview_patterns):
         return {'type': 'dataset_overview', 'params': {}}
@@ -646,118 +688,384 @@ def _normalize_drug_name(drug: str) -> str:
     return drug
 
 
+def _summary(values: pd.Series) -> Dict[str, Any]:
+    """Per-group descriptive summary plus SEM and 95% CI of the mean.
+
+    SEM = std / sqrt(n); 95% CI = mean ± 1.96 * SEM (large-n approximation,
+    which is appropriate since every drug group in v3 has n > 700).
+    """
+    n = int(len(values))
+    if n == 0:
+        return {"n": 0}
+    mean = float(values.mean())
+    std = float(values.std()) if n > 1 else 0.0
+    sem = std / math.sqrt(n) if n > 0 else 0.0
+    ci_half = 1.96 * sem
+    return {
+        "n": n,
+        "mean": round(mean, 4),
+        "std": round(std, 4),
+        "median": round(float(values.median()), 4),
+        "sem": round(sem, 5),
+        "ci95_low": round(mean - ci_half, 4),
+        "ci95_high": round(mean + ci_half, 4),
+    }
+
+
+def _welch_compare(a: pd.Series, b: pd.Series) -> Dict[str, Any]:
+    """Welch's t-test + Cohen's d for two unequal-variance samples.
+
+    Returns p-value, t-statistic, Cohen's d (pooled-std variant), and a plain
+    English verdict in {"clearly different", "likely different",
+    "indistinguishable"}. Verdict combines p < 0.01 AND |d| > 0.2 (small
+    effect) so that *trivial* differences over huge n don't get flagged as
+    interesting.
+    """
+    a = a.dropna().to_numpy()
+    b = b.dropna().to_numpy()
+    if len(a) < 2 or len(b) < 2:
+        return {"verdict": "insufficient_data"}
+    t_stat, p = _scipy_stats.ttest_ind(a, b, equal_var=False)
+    pooled_std = math.sqrt(((a.std(ddof=1) ** 2) + (b.std(ddof=1) ** 2)) / 2.0)
+    cohens_d = (a.mean() - b.mean()) / pooled_std if pooled_std > 0 else 0.0
+    abs_d = abs(cohens_d)
+    if p < 0.01 and abs_d > 0.5:
+        verdict = "clearly_different"
+    elif p < 0.05 and abs_d > 0.2:
+        verdict = "likely_different"
+    elif p > 0.05 or abs_d < 0.1:
+        verdict = "indistinguishable"
+    else:
+        verdict = "borderline"
+    return {
+        "p_value": float(p),
+        "t_stat": round(float(t_stat), 3),
+        "cohens_d": round(float(cohens_d), 3),
+        "effect_size": _effect_label(abs_d),
+        "verdict": verdict,
+    }
+
+
+def _effect_label(abs_d: float) -> str:
+    """Cohen's conventional thresholds."""
+    if abs_d < 0.2:
+        return "negligible"
+    if abs_d < 0.5:
+        return "small"
+    if abs_d < 0.8:
+        return "medium"
+    return "large"
+
+
+def _drug_indices(drug: str) -> Tuple[str, List[int]]:
+    """Return (display_name, dataframe indices) for one drug.
+
+    Always merges Control + DMSO into a single 'DMSO (control)' group.
+    """
+    if sample_metadata is None:
+        return drug, []
+    if drug.upper() in ["DMSO", "CONTROL"]:
+        sel = sample_metadata[sample_metadata["drug"].str.upper().isin(["DMSO", "CONTROL"])]
+        return "DMSO (control)", sel.index.tolist()
+    sel = sample_metadata[sample_metadata["drug"].str.lower() == drug.lower()]
+    return drug, sel.index.tolist()
+
+
 def compute_drug_comparison(drugs: List[str]) -> Dict[str, Any]:
-    """Compare mean feature values between drugs (Control and DMSO are merged)."""
+    """Compare two (or more) drugs across the key features.
+
+    For the *two-drug* case (the common one) we also include statistical
+    inference: Welch's t-test p-value, Cohen's d, and a plain-English verdict
+    per feature. This lets the LLM say "fragment length is clearly different
+    (d=1.6, p<0.001)" instead of just listing two means.
+    """
     if feature_table is None or sample_metadata is None:
-        return {'error': 'Data not loaded'}
+        return {"error": "Data not loaded"}
 
-    results = {}
-
-    for drug in drugs:
-        display_name = drug
-        if drug.upper() in ['DMSO', 'CONTROL']:
-            drug_samples = sample_metadata[
-                sample_metadata['drug'].str.upper().isin(['DMSO', 'CONTROL'])
-            ]
-            display_name = 'DMSO (control)'
-        else:
-            drug_samples = sample_metadata[sample_metadata['drug'] == drug]
-
-        if len(drug_samples) == 0:
-            results[display_name] = {'error': 'No samples found'}
+    per_drug: Dict[str, Dict[str, Any]] = {}
+    for d in drugs:
+        name, idx = _drug_indices(d)
+        if not idx:
+            per_drug[d] = {"error": f"No samples found for '{d}'"}
             continue
+        per_drug[name] = {"count": len(idx), "features": {}, "indices": idx}
 
-        indices = drug_samples.index.tolist()
-        results[display_name] = {'count': len(indices), 'features': {}}
+    valid_names = [n for n, v in per_drug.items() if "indices" in v]
 
-        for feature in KEY_FEATURES:
-            if feature in feature_table.columns:
-                values = feature_table.loc[indices, feature].dropna()
-                if len(values) > 0:
-                    results[display_name]['features'][feature] = {
-                        'mean': round(float(values.mean()), 4),
-                        'std': round(float(values.std()), 4),
-                        'median': round(float(values.median()), 4),
-                        'n': len(values)
-                    }
+    pairwise: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    if len(valid_names) == 2:
+        a_name, b_name = valid_names
+        pairwise[f"{a_name} vs {b_name}"] = {}
 
-    return results
+    for feature in KEY_FEATURES:
+        if feature not in feature_table.columns:
+            continue
+        for name in valid_names:
+            vals = feature_table.loc[per_drug[name]["indices"], feature].dropna()
+            if len(vals) > 0:
+                per_drug[name]["features"][feature] = _summary(vals)
+        # Pairwise inference for the 2-drug case
+        if len(valid_names) == 2:
+            a_name, b_name = valid_names
+            a_vals = feature_table.loc[per_drug[a_name]["indices"], feature].dropna()
+            b_vals = feature_table.loc[per_drug[b_name]["indices"], feature].dropna()
+            if len(a_vals) >= 2 and len(b_vals) >= 2:
+                pairwise[f"{a_name} vs {b_name}"][feature] = _welch_compare(a_vals, b_vals)
+
+    # Drop internal indices before returning
+    for v in per_drug.values():
+        v.pop("indices", None)
+
+    result: Dict[str, Any] = dict(per_drug)
+    if pairwise:
+        result["_inference"] = pairwise
+    return result
 
 
 def compute_correlation(feature1: str, feature2: str) -> Dict[str, Any]:
-    """Compute Pearson correlation between two features."""
+    """Pearson correlation with a 95% confidence interval via Fisher z-transform.
+
+    We also include Spearman ρ for monotonic but non-linear relationships, and
+    a p-value, so the LLM can comment meaningfully on "is this real?".
+    """
     if feature_table is None:
-        return {'error': 'Data not loaded'}
+        return {"error": "Data not loaded"}
 
     if feature1 not in feature_table.columns or feature2 not in feature_table.columns:
-        return {'error': f'Features not found: {feature1}, {feature2}'}
+        return {"error": f"Features not found: {feature1}, {feature2}"}
 
     vals1 = feature_table[feature1]
     vals2 = feature_table[feature2]
     valid_mask = (~vals1.isna()) & (~vals2.isna())
-    vals1_clean = vals1[valid_mask]
-    vals2_clean = vals2[valid_mask]
+    v1 = vals1[valid_mask].to_numpy()
+    v2 = vals2[valid_mask].to_numpy()
+    n = len(v1)
 
-    if len(vals1_clean) < 2:
-        return {'error': 'Insufficient data for correlation'}
+    if n < 3:
+        return {"error": "Insufficient data for correlation"}
 
-    corr = float(np.corrcoef(vals1_clean, vals2_clean)[0, 1])
+    pearson_r, pearson_p = _scipy_stats.pearsonr(v1, v2)
+    spearman_r, spearman_p = _scipy_stats.spearmanr(v1, v2)
+
+    # Fisher z-transform CI for Pearson r.
+    if abs(pearson_r) < 1.0:
+        z = 0.5 * math.log((1 + pearson_r) / (1 - pearson_r))
+        se = 1.0 / math.sqrt(n - 3)
+        z_lo, z_hi = z - 1.96 * se, z + 1.96 * se
+        r_lo = (math.exp(2 * z_lo) - 1) / (math.exp(2 * z_lo) + 1)
+        r_hi = (math.exp(2 * z_hi) - 1) / (math.exp(2 * z_hi) + 1)
+    else:
+        r_lo = r_hi = float(pearson_r)
 
     return {
-        'feature1': feature1,
-        'feature2': feature2,
-        'correlation': round(corr, 4),
-        'n_samples': len(vals1_clean),
-        'interpretation': _interpret_correlation(corr)
+        "feature1": feature1,
+        "feature2": feature2,
+        "correlation": round(float(pearson_r), 4),
+        "ci95_low": round(float(r_lo), 4),
+        "ci95_high": round(float(r_hi), 4),
+        "p_value": float(pearson_p),
+        "spearman": round(float(spearman_r), 4),
+        "spearman_p": float(spearman_p),
+        "n_samples": n,
+        "interpretation": _interpret_correlation(pearson_r),
     }
 
 
-def compute_ranking(feature: str, direction: str = 'high', top_n: int = 10) -> Dict[str, Any]:
-    """Rank drugs by mean feature value (Control and DMSO are merged)."""
+def compute_ranking(feature: str, direction: str = "high", top_n: int = 10) -> Dict[str, Any]:
+    """Rank drugs by mean feature value, with 95% CIs and Cohen's d vs DMSO.
+
+    Two key additions over the previous version:
+      1. Each entry includes the 95% CI of the mean and SEM, so adjacent ranks
+         whose CIs overlap can be flagged as statistically indistinguishable.
+      2. Each entry includes Cohen's d vs DMSO (control) so the LLM can call
+         out *biologically meaningful* effects, not just rank order.
+    """
     if feature_table is None or sample_metadata is None:
-        return {'error': 'Data not loaded'}
+        return {"error": "Data not loaded"}
 
     if feature not in feature_table.columns:
-        return {'error': f'Feature not found: {feature}'}
+        return {"error": f"Feature not found: {feature}"}
 
-    rankings = []
-    processed_drugs = set()
+    # Pre-fetch DMSO baseline values for effect-size calculation.
+    _, ctrl_idx = _drug_indices("DMSO")
+    ctrl_vals = (
+        feature_table.loc[ctrl_idx, feature].dropna() if ctrl_idx else pd.Series(dtype=float)
+    )
 
-    for drug in sample_metadata['drug'].unique():
-        if drug.upper() in processed_drugs:
+    rankings: List[Dict[str, Any]] = []
+    seen: set = set()
+    for drug in sample_metadata["drug"].unique():
+        key = drug.upper()
+        if key in seen:
             continue
+        name, idx = _drug_indices(drug)
+        seen.add(key)
+        if name == "DMSO (control)":
+            seen.update({"DMSO", "CONTROL"})
+        values = feature_table.loc[idx, feature].dropna()
+        if len(values) == 0:
+            continue
+        summary = _summary(values)
+        entry = {"drug": name, **summary}
+        if len(ctrl_vals) > 1 and name != "DMSO (control)":
+            pooled = math.sqrt(((values.std(ddof=1) ** 2) + (ctrl_vals.std(ddof=1) ** 2)) / 2.0)
+            d = (values.mean() - ctrl_vals.mean()) / pooled if pooled > 0 else 0.0
+            entry["cohens_d_vs_dmso"] = round(float(d), 3)
+            entry["effect_vs_dmso"] = _effect_label(abs(d))
+        rankings.append(entry)
 
-        if drug.upper() in ['CONTROL', 'DMSO']:
-            if 'DMSO' in processed_drugs or 'CONTROL' in processed_drugs:
-                continue
-            drug_samples = sample_metadata[
-                sample_metadata['drug'].str.upper().isin(['DMSO', 'CONTROL'])
-            ]
-            display_name = 'DMSO (control)'
-            processed_drugs.add('DMSO')
-            processed_drugs.add('CONTROL')
-        else:
-            drug_samples = sample_metadata[sample_metadata['drug'] == drug]
-            display_name = drug
-            processed_drugs.add(drug.upper())
+    rankings.sort(key=lambda x: x["mean"], reverse=(direction == "high"))
+    top = rankings[:top_n]
 
-        indices = drug_samples.index.tolist()
-        values = feature_table.loc[indices, feature].dropna()
-
-        if len(values) > 0:
-            rankings.append({
-                'drug': display_name,
-                'mean': round(float(values.mean()), 4),
-                'std': round(float(values.std()), 4),
-                'count': len(values)
-            })
-
-    rankings.sort(key=lambda x: x['mean'], reverse=(direction == 'high'))
+    # Flag adjacent ranks whose 95% CIs overlap (statistically indistinguishable).
+    for i, r in enumerate(top):
+        if i == 0:
+            continue
+        prev = top[i - 1]
+        # CIs overlap iff one's high >= the other's low (and vice versa).
+        if (
+            r.get("ci95_high") is not None
+            and prev.get("ci95_low") is not None
+            and r["ci95_high"] >= prev["ci95_low"]
+            and r["ci95_low"] <= prev["ci95_high"]
+        ):
+            r["indistinguishable_from_prev"] = True
 
     return {
-        'feature': feature,
-        'direction': direction,
-        'rankings': rankings[:top_n]
+        "feature": feature,
+        "direction": direction,
+        "rankings": top,
+        "n_drugs_total": len(rankings),
+    }
+
+
+def compute_drug_similarity(target_drug: str, top_n: int = 5) -> Dict[str, Any]:
+    """Find drugs whose mean phenotype across KEY_FEATURES is closest to
+    `target_drug`. Distance is Euclidean in z-scored feature space, so each
+    feature contributes equally regardless of its raw scale.
+
+    Returns a ranked list of (drug, distance, distinctive_features). The
+    "distinctive_features" list flags which features drove the similarity (or
+    lack of it) — i.e. which axes the two drugs agree / disagree on most.
+    """
+    if feature_table is None or sample_metadata is None:
+        return {"error": "Data not loaded"}
+    target_name, target_idx = _drug_indices(target_drug)
+    if not target_idx:
+        return {"error": f"No samples found for drug '{target_drug}'"}
+
+    feats = [f for f in KEY_FEATURES if f in feature_table.columns]
+    if not feats:
+        return {"error": "No key features available"}
+
+    # Compute per-drug mean vector over feats, then z-score each feature.
+    drug_means: Dict[str, np.ndarray] = {}
+    seen: set = set()
+    for drug in sample_metadata["drug"].unique():
+        if drug.upper() in seen:
+            continue
+        name, idx = _drug_indices(drug)
+        seen.add(drug.upper())
+        if name == "DMSO (control)":
+            seen.update({"DMSO", "CONTROL"})
+        vec = []
+        for f in feats:
+            vals = feature_table.loc[idx, f].dropna()
+            vec.append(float(vals.mean()) if len(vals) else np.nan)
+        drug_means[name] = np.asarray(vec, dtype=float)
+
+    if target_name not in drug_means:
+        return {"error": f"Could not compute profile for '{target_drug}'"}
+
+    M = np.asarray(list(drug_means.values()))
+    names = list(drug_means.keys())
+    mu = np.nanmean(M, axis=0)
+    sigma = np.nanstd(M, axis=0)
+    sigma[sigma == 0] = 1.0
+    Z = (M - mu) / sigma
+    target_z = Z[names.index(target_name)]
+
+    # Euclidean distance with NaN-safe sum.
+    distances = []
+    for i, n in enumerate(names):
+        if n == target_name:
+            continue
+        diff = Z[i] - target_z
+        mask = ~np.isnan(diff)
+        if mask.sum() == 0:
+            continue
+        d = float(np.linalg.norm(diff[mask]))
+        # Rank features by |z-diff| and split into similar / different halves so
+        # we never name the same feature in both lists for sparse comparisons.
+        feat_diffs = [(f, v) for f, v in zip(feats, np.abs(diff)) if not math.isnan(v)]
+        feat_diffs.sort(key=lambda x: x[1])
+        # Up to 3 most similar / 3 most different, ensuring no overlap.
+        k = min(3, len(feat_diffs))
+        most_similar = feat_diffs[:k]
+        # "Most different" comes from the *opposite end* of the same sorted list.
+        most_different = list(reversed(feat_diffs[-k:]))
+        sim_names = {f for f, _ in most_similar}
+        most_different = [(f, v) for f, v in most_different if f not in sim_names]
+        distances.append(
+            {
+                "drug": n,
+                "distance": round(d, 3),
+                "most_similar_on": [f for f, _ in most_similar],
+                "most_different_on": [f for f, _ in most_different],
+            }
+        )
+
+    distances.sort(key=lambda x: x["distance"])
+    return {
+        "target_drug": target_name,
+        "metric": "Euclidean distance in z-scored mean-phenotype space",
+        "features_used": feats,
+        "neighbors": distances[:top_n],
+        "n_drugs_compared": len(distances),
+    }
+
+
+def compute_top_differentiators(drug_a: str, drug_b: str, top_n: int = 5) -> Dict[str, Any]:
+    """Rank features by how strongly they differ between two drugs.
+
+    Sorted by |Cohen's d|, so the answer highlights *biologically* large
+    differences (not just statistically significant ones, which over n>1000
+    are common). Useful for "what's different between X and Y?".
+    """
+    if feature_table is None or sample_metadata is None:
+        return {"error": "Data not loaded"}
+    a_name, a_idx = _drug_indices(drug_a)
+    b_name, b_idx = _drug_indices(drug_b)
+    if not a_idx:
+        return {"error": f"No samples for '{drug_a}'"}
+    if not b_idx:
+        return {"error": f"No samples for '{drug_b}'"}
+
+    feats = [f for f in KEY_FEATURES if f in feature_table.columns]
+    rows = []
+    for f in feats:
+        a_vals = feature_table.loc[a_idx, f].dropna()
+        b_vals = feature_table.loc[b_idx, f].dropna()
+        if len(a_vals) < 2 or len(b_vals) < 2:
+            continue
+        cmp = _welch_compare(a_vals, b_vals)
+        rows.append(
+            {
+                "feature": f,
+                f"{a_name}_mean": round(float(a_vals.mean()), 4),
+                f"{b_name}_mean": round(float(b_vals.mean()), 4),
+                "cohens_d": cmp.get("cohens_d"),
+                "effect_size": cmp.get("effect_size"),
+                "p_value": cmp.get("p_value"),
+                "verdict": cmp.get("verdict"),
+            }
+        )
+    rows.sort(key=lambda r: -abs(r.get("cohens_d") or 0))
+    return {
+        "drug_a": a_name,
+        "drug_b": b_name,
+        "top_differentiators": rows[:top_n],
+        "n_features_compared": len(rows),
     }
 
 
@@ -840,22 +1148,25 @@ def _interpret_correlation(corr: float) -> str:
 
 
 def compute_statistics(query_type: str, params: Dict[str, Any]) -> Dict[str, Any]:
-    """Route to appropriate statistics computation."""
-    if query_type == 'drug_comparison':
-        return compute_drug_comparison(params['drugs'])
-    elif query_type == 'correlation':
-        return compute_correlation(params['features'][0], params['features'][1])
-    elif query_type == 'ranking':
+    """Route to the appropriate statistics computation."""
+    if query_type == "drug_comparison":
+        return compute_drug_comparison(params["drugs"])
+    if query_type == "correlation":
+        return compute_correlation(params["features"][0], params["features"][1])
+    if query_type == "ranking":
         return compute_ranking(
-            params['feature'],
-            params.get('direction', 'high'),
-            params.get('top_n', 10)
+            params["feature"], params.get("direction", "high"), params.get("top_n", 10)
         )
-    elif query_type == 'feature_stats':
-        return compute_feature_stats(params['feature'], params.get('drug'))
-    elif query_type == 'feature_description':
-        return get_feature_description(params['feature'])
-    elif query_type == 'dataset_overview':
+    if query_type == "feature_stats":
+        return compute_feature_stats(params["feature"], params.get("drug"))
+    if query_type == "feature_description":
+        return get_feature_description(params["feature"])
+    if query_type == "dataset_overview":
         return compute_dataset_overview()
-    else:
-        return {'error': 'Unsupported query type'}
+    if query_type == "drug_similarity":
+        return compute_drug_similarity(params["drug"], params.get("top_n", 5))
+    if query_type == "top_differentiators":
+        return compute_top_differentiators(
+            params["drug_a"], params["drug_b"], params.get("top_n", 5)
+        )
+    return {"error": "Unsupported query type"}

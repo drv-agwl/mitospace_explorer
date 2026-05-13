@@ -11,14 +11,31 @@ drifted from code).
 MitoSpace Chat is a grounded scientific Q&A panel for the dataset. Users can
 ask:
 
-- **Rankings** — "Which drugs increase motility?"
-- **Drug comparisons** — "Compare Rotenone and CCCP"
+- **Rankings** — "Which drugs increase motility?" (with SEM, 95% CI, Cohen's d
+  vs DMSO, and auto-flagging of statistically indistinguishable adjacent ranks)
+- **Drug comparisons** — "Compare Rotenone and CCCP" (Welch's t-test + Cohen's
+  d + plain-English verdict per feature for the 2-drug case)
 - **Feature correlations** — "Is motility correlated with segment length?"
+  (Pearson r with Fisher-z 95% CI, plus Spearman ρ and p-values)
 - **Summary stats** — "What's the mean fragment length for Rotenone?"
 - **Feature info** — "What is membrane potential?"
 - **Dataset overview** — "What features are available?"
+- **Drug similarity** — "What drugs look most like Rotenone?" (Euclidean
+  distance in z-scored mean-phenotype space, with which-features-drove-it)
+- **Top differentiators** — "What differs most between Rotenone and DMSO?"
+  (features ranked by |Cohen's d|)
 - **Multi-turn follow-ups** — "what about for membrane potential?",
   "and CCCP?"
+
+Every LLM-narrated answer is enriched with a **drug-knowledge block** when the
+question touches one of the 26 known compounds (Complex I inhibitors,
+uncouplers, K+/H+ antiporters, microtubule depolymerisers, etc.). The model is
+prompted to integrate this mechanism context with the statistics, so answers
+feel like talking to a colleague rather than a SQL terminal.
+
+Each answer ships with up to 3 **suggested follow-up chips** (rule-based per
+query type, de-duped against prior turns) so users can keep exploring with one
+click.
 
 The chat does NOT execute code, control the UI, or invent numbers. It
 narrates *statistics computed deterministically by the backend* from the
@@ -39,7 +56,8 @@ FastAPI /api/chat (rate-limited, validated)
   │       ▼
   │   query_type ∈ {ranking, drug_comparison, correlation,
   │                feature_stats, feature_description,
-  │                dataset_overview, greeting, thanks,
+  │                dataset_overview, drug_similarity,
+  │                top_differentiators, greeting, thanks,
   │                help, unsupported}
   │
   ├─► query_handler.compute_statistics()    ← deterministic pandas/numpy
@@ -47,8 +65,17 @@ FastAPI /api/chat (rate-limited, validated)
   │       ▼
   │   stats: dict (the *only* source of numbers in the answer)
   │
+  ├─► (cache check) chat_extras.chat_response_cache
+  │       │   keyed on (msg, last 4 turns, version, model). LRU, ttl=1h.
+  │       │   → return immediately with cached=True on hit.
+  │
+  ├─► drug_knowledge.context_block(drugs in scope)
+  │       │   for each known compound mentioned in this turn or recent history,
+  │       │   inject mechanism + target + expected phenotype into the prompt.
+  │
   ├─► llm_client.LLMClient.generate()       ← OpenRouter, with retries
-  │       │   system prompt: build_system_prompt(version, n, n_drugs)
+  │       │   system prompt: build_system_prompt(version, n, n_drugs,
+  │       │                                       pharmacology_block=…)
   │       │   messages   : [system, …history…, user(question + stats JSON)]
   │       │
   │       ▼
@@ -60,11 +87,19 @@ FastAPI /api/chat (rate-limited, validated)
   ├─► if ungrounded or LLM failed: _fallback_answer()  ← deterministic text
   │
   ▼
-ChatResponse { answer, data, query_type, request_id, grounded, source }
+ChatResponse {
+  answer, data, query_type, request_id,
+  grounded, source,         // 'llm' | 'fallback'
+  suggestions: string[],    // up to 3 follow-up chips
+  cached: bool              // true if served from response cache
+}
 ```
 
 Key invariant: **every numeric token in the rendered answer is verifiably
-present in `data`.** Hallucinated numbers are dropped, never displayed.
+present in `data`** — directly OR as a simple derivation of literal values
+(pairwise ratios, differences, percentages, squares, square roots). Hallucinated
+numbers are dropped, never displayed, and the answer falls back to the
+deterministic narrator.
 
 ---
 
@@ -72,17 +107,20 @@ present in `data`.** Hallucinated numbers are dropped, never displayed.
 
 | Concern | Mechanism |
 |---|---|
-| Cost control | Per-IP rate limit on `/api/chat` (`CHAT_RATE_LIMIT`, default `20/minute`) |
+| Cost control | Per-IP rate limit on `/api/chat` (`CHAT_RATE_LIMIT`, default `20/minute`); in-memory LRU response cache for repeat questions (instant + free on hit) |
 | DoS / oversize input | Pydantic `min_length=1`, `max_length=2000` on `message`; history capped at last 12 turns, each ≤ 2000 chars |
 | Transient OpenRouter failures | tenacity exponential backoff on 429/5xx/timeout, max 3 attempts |
 | Hard timeouts | 45 s server-side per attempt, 60 s end-to-end on the client |
-| Hallucinated numbers | `groundedness.check` against the stats envelope |
-| LLM outage | Deterministic `_fallback_answer` for every supported query type |
+| Hallucinated numbers | `groundedness.check` against the stats envelope, accepting literal values + simple derivations (ratios, differences, percentages, squares, sqrt) |
+| Scientific depth | SEM, 95% CIs, Welch's t-test, Cohen's d, Spearman ρ on every relevant query; statistically-indistinguishable adjacent ranks auto-flagged |
+| Biological grounding | `drug_knowledge.context_block` injects mechanism / target / expected phenotype for the 26 known compounds into the LLM prompt when the question mentions them |
+| Guided exploration | `chat_extras.suggested_followups` returns up to 3 rule-based, context-aware chips per answer |
+| LLM outage | Deterministic `_fallback_answer` for every supported query type, consuming the same statistical envelope |
 | Multi-turn | Full prior conversation passed to the LLM (not just the latest turn) |
 | Version awareness | `?version=v1\|v3` (or body field) routes to the matching chat dataset |
-| Observability | Structured key=value logs with `request_id` for every LLM call and chat request |
-| Frontend UX | AbortController + Stop button, Retry on transient failures, copy answer, char counter, source badge for deterministic answers |
-| Tests | `python -m unittest discover -s server/tests -v` — 22 tests, no network |
+| Observability | Structured key=value logs with `request_id` for every LLM call, chat request, cache hit/miss, and groundedness reject |
+| Frontend UX | AbortController + Stop button, Retry on transient failures, copy answer, char counter, source badge for deterministic answers, cached badge, clickable suggestion chips |
+| Tests | `python -m unittest discover -s server/tests -v` — 56 tests, no network |
 
 ---
 
