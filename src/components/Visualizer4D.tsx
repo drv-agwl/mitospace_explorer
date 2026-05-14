@@ -2099,10 +2099,31 @@ const Visualizer4D: React.FC = () => {
         e.preventDefault();
         toggleFullscreen();
       }
+      // Dev helper: Shift+C copies the current camera pose to clipboard +
+      // logs it. Use this to capture an exact framing and paste it back so
+      // we can pin it as the v3 default. Removed once the default is set.
+      if ((e.key === 'C' || (e.shiftKey && (e.key === 'c' || e.key === 'C')))) {
+        const cam = cameraRef.current;
+        const ctl = controlsRef.current;
+        if (!cam || !ctl) return;
+        e.preventDefault();
+        const fmt = (n: number) => Number(n.toFixed(4));
+        const pose = {
+          position: { x: fmt(cam.position.x), y: fmt(cam.position.y), z: fmt(cam.position.z) },
+          target:   { x: fmt(ctl.target.x),   y: fmt(ctl.target.y),   z: fmt(ctl.target.z) },
+          up:       { x: fmt(cam.up.x),       y: fmt(cam.up.y),       z: fmt(cam.up.z) },
+          fov:      cam.fov,
+          datasetVersion,
+        };
+        const text = JSON.stringify(pose, null, 2);
+        // eslint-disable-next-line no-console
+        console.log('[MitoSpace camera pose]', pose, '\n' + text);
+        try { navigator.clipboard?.writeText(text); } catch { /* no-op */ }
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [handleResetView, toggleFullscreen]);
+  }, [handleResetView, toggleFullscreen, datasetVersion]);
 
   return (
     <div ref={fullscreenContainerRef} className={`${isDarkMode ? 'bg-black' : 'bg-white'} h-full flex flex-col overflow-hidden`}>
