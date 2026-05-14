@@ -33,16 +33,7 @@ import type { AxisStyle } from '../types';
 
 const SCALE_FACTOR = 4;
 
-/**
- * Default orbit camera for v3 — elevated “mostly top-down” view (main mass
- * dominant, satellites visible along XZ like the UX reference screenshot).
- * Slight X/Z offsets keep mild perspective instead of pure nadir Y.
- *
- * To match an Open3D Visualizer export later, see `open3dKeyframeToOrbitCamera`
- * in `utils/open3dViewTrajectory.ts`.
- */
-const V3_DEFAULT_CAMERA = { x: -25, y: -0, z: -100 };
-
+/** Default orbit distance: symmetric diagonal toward origin (same for v1 and v3). */
 function v1DiagonalCameraCoord(): number {
   const initDist = 1 + 0.26 * 299;
   return initDist / Math.sqrt(3);
@@ -542,15 +533,11 @@ const Visualizer4D: React.FC = () => {
     };
   }, []);
 
-  // Apply default camera when dataset version changes (v3 uses a tuned view).
+  // Apply default camera when dataset version changes (same diagonal framing for v1 and v3).
   useEffect(() => {
     if (!cameraRef.current || !controlsRef.current) return;
-    if (datasetVersion === 'v3') {
-      cameraRef.current.position.set(V3_DEFAULT_CAMERA.x, V3_DEFAULT_CAMERA.y, V3_DEFAULT_CAMERA.z);
-    } else {
-      const c = v1DiagonalCameraCoord();
-      cameraRef.current.position.set(c, c, c);
-    }
+    const c = v1DiagonalCameraCoord();
+    cameraRef.current.position.set(c, c, c);
     cameraRef.current.lookAt(0, 0, 0);
     controlsRef.current.target.set(0, 0, 0);
     controlsRef.current.update();
@@ -1986,15 +1973,12 @@ const Visualizer4D: React.FC = () => {
 
   const handleResetView = useCallback(() => {
     if (!cameraRef.current || !controlsRef.current) return;
-    if (datasetVersion === 'v3') {
-      cameraRef.current.position.set(V3_DEFAULT_CAMERA.x, V3_DEFAULT_CAMERA.y, V3_DEFAULT_CAMERA.z);
-    } else {
-      cameraRef.current.position.set(25, 25, 25);
-    }
-      cameraRef.current.lookAt(new THREE.Vector3(0, 0, 0));
-        controlsRef.current.target.set(0, 0, 0);
-        controlsRef.current.update();
-  }, [datasetVersion]);
+    const c = v1DiagonalCameraCoord();
+    cameraRef.current.position.set(c, c, c);
+    cameraRef.current.lookAt(new THREE.Vector3(0, 0, 0));
+    controlsRef.current.target.set(0, 0, 0);
+    controlsRef.current.update();
+  }, []);
 
   const toggleFullscreen = useCallback(() => {
     const el = fullscreenContainerRef.current as HTMLElement & { webkitRequestFullscreen?: () => void };
