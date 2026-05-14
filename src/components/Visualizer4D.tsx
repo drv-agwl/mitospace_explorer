@@ -40,19 +40,22 @@ function v1DiagonalCameraCoord(): number {
 }
 
 /**
- * v3 default orbit: same *view direction* as the historical fixed camera
- * (-25, 0, -100), but distance scales from the **actual** world-space extent
- * of the current `points4d_v3.json` cloud so re-exports / new UMAP scales
- * still frame nicely.
+ * v3 default orbit: **same view direction as the classic v1 diagonal** — camera
+ * on the (1,1,1) ray looking at the origin. User reference screenshots match
+ * this framing (main mass toward one corner, comfortable padding), not the
+ * flatter (-25,0,-100) pose.
  *
- * Reference calibration: `points4d_v3.json` (May 2026) has world-space AABB
- * half-diagonal ≈ 48.32 after centering × SCALE_FACTOR; legacy distance ≈ 103
- * along this ray.
+ * Distance scales with the live world-space AABB half-diagonal so new
+ * `points4d_v3.json` exports still fill the frame like the reference image.
+ *
+ * Calibration: `points4d_v3.json` (May 2026) world half-diagonal ≈ 48.32 after
+ * centering × SCALE_FACTOR; we match the historical **total** orbit radius
+ * `v1DiagonalCameraCoord() * √3` (~136.4) at that extent.
  */
-const V3_VIEW_DIRECTION = new THREE.Vector3(-25, 0, -100).normalize();
+const V3_VIEW_DIRECTION = new THREE.Vector3(1, 1, 1).normalize();
 const V3_CAM_REF_HALF_DIAG = 48.323164445610814;
-const V3_CAM_REF_DISTANCE = 103;
-const V3_CAM_DISTANCE_SCALE = V3_CAM_REF_DISTANCE / V3_CAM_REF_HALF_DIAG;
+const V3_CAM_DISTANCE_SCALE =
+  (v1DiagonalCameraCoord() * Math.sqrt(3)) / V3_CAM_REF_HALF_DIAG;
 
 function v3CameraDistanceFromPositions(positions: Float32Array, vertexCount: number): number {
   let minx = Infinity;
