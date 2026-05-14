@@ -227,7 +227,7 @@ const About: React.FC = () => {
                   </p>
                   <p className="text-white/70 text-sm sm:text-base leading-relaxed mb-6">
                     Dhruv Agarwal*, Zichen Wang*, Eric Arkfeld*, Andre Modolo*, Parth Natekar*,
-                    Hiroyuki Hakozaki*, Mehul Arora, Siddharth Nahar, Manav Doshi, Gillian McMahon,
+                    Hiroyuki Hakozaki*, Mehul Arora, Gillian McMahon, Siddharth Nahar, Manav Doshi,
                     Johannes Schöneberg
                   </p>
                   <a
