@@ -33,10 +33,65 @@ import type { AxisStyle } from '../types';
 
 const SCALE_FACTOR = 4;
 
-/** Default orbit distance: symmetric diagonal toward origin (same for v1 and v3). */
+/** Default orbit distance: symmetric diagonal toward origin (v1). */
 function v1DiagonalCameraCoord(): number {
   const initDist = 1 + 0.26 * 299;
   return initDist / Math.sqrt(3);
+}
+
+/**
+ * v3 default orbit: same *view direction* as the historical fixed camera
+ * (-25, 0, -100), but distance scales from the **actual** world-space extent
+ * of the current `points4d_v3.json` cloud so re-exports / new UMAP scales
+ * still frame nicely.
+ *
+ * Reference calibration: `points4d_v3.json` (May 2026) has world-space AABB
+ * half-diagonal ≈ 48.32 after centering × SCALE_FACTOR; legacy distance ≈ 103
+ * along this ray.
+ */
+const V3_VIEW_DIRECTION = new THREE.Vector3(-25, 0, -100).normalize();
+const V3_CAM_REF_HALF_DIAG = 48.323164445610814;
+const V3_CAM_REF_DISTANCE = 103;
+const V3_CAM_DISTANCE_SCALE = V3_CAM_REF_DISTANCE / V3_CAM_REF_HALF_DIAG;
+
+function v3CameraDistanceFromPositions(positions: Float32Array, vertexCount: number): number {
+  let minx = Infinity;
+  let miny = Infinity;
+  let minz = Infinity;
+  let maxx = -Infinity;
+  let maxy = -Infinity;
+  let maxz = -Infinity;
+  for (let i = 0; i < vertexCount; i++) {
+    const x = positions[i * 3];
+    const y = positions[i * 3 + 1];
+    const z = positions[i * 3 + 2];
+    if (x < minx) minx = x;
+    if (x > maxx) maxx = x;
+    if (y < miny) miny = y;
+    if (y > maxy) maxy = y;
+    if (z < minz) minz = z;
+    if (z > maxz) maxz = z;
+  }
+  const dx = maxx - minx;
+  const dy = maxy - miny;
+  const dz = maxz - minz;
+  const diag = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  const half = diag > 1e-6 ? diag * 0.5 : 1;
+  const dist = half * V3_CAM_DISTANCE_SCALE;
+  return Math.max(40, Math.min(280, dist));
+}
+
+function applyV3DefaultOrbitCamera(
+  positions: Float32Array,
+  vertexCount: number,
+  camera: THREE.PerspectiveCamera,
+  controls: OrbitControls
+): void {
+  const dist = v3CameraDistanceFromPositions(positions, vertexCount);
+  camera.position.copy(V3_VIEW_DIRECTION).multiplyScalar(dist);
+  camera.lookAt(0, 0, 0);
+  controls.target.set(0, 0, 0);
+  controls.update();
 }
 
 /** Reused for dense point picking (avoid per-click allocations). */
@@ -166,6 +221,8 @@ const Visualizer4D: React.FC = () => {
   const grid2Ref = useRef<THREE.GridHelper | null>(null);
   /** Mean xyz (embedding space) from the last point-cloud build; used to pan camera when filtering re-centroids the cloud. */
   const prevEmbeddingCentroidRef = useRef<THREE.Vector3 | null>(null);
+  /** After switching to v3, apply data-driven default orbit once the point buffer exists. */
+  const v3CameraFitPendingRef = useRef(false);
 
   const [trajectoryPoints, setTrajectoryPoints] = useState<Array<{ x: number; y: number; z: number }> | null>(null);
 
@@ -533,9 +590,15 @@ const Visualizer4D: React.FC = () => {
     };
   }, []);
 
-  // Apply default camera when dataset version changes (same diagonal framing for v1 and v3).
+  // Apply default camera when dataset version changes (v1 diagonal; v3 uses
+  // extent-based framing once the point cloud is built — see v3CameraFitPendingRef).
   useEffect(() => {
     if (!cameraRef.current || !controlsRef.current) return;
+    if (datasetVersion === 'v3') {
+      v3CameraFitPendingRef.current = true;
+      return;
+    }
+    v3CameraFitPendingRef.current = false;
     const c = v1DiagonalCameraCoord();
     cameraRef.current.position.set(c, c, c);
     cameraRef.current.lookAt(0, 0, 0);
@@ -1641,8 +1704,19 @@ const Visualizer4D: React.FC = () => {
     const points = new THREE.Points(geometry, material);
     sceneRef.current.add(points);
     pointsRef.current = points;
+
+    if (
+      datasetVersion === 'v3' &&
+      v3CameraFitPendingRef.current &&
+      cameraRef.current &&
+      controlsRef.current
+    ) {
+      applyV3DefaultOrbitCamera(positions, filteredSamples4D.length, cameraRef.current, controlsRef.current);
+      v3CameraFitPendingRef.current = false;
+    }
   }, [
     filteredSamples4D,
+    datasetVersion,
     visualizerOptions,
     isDarkMode,
     semanticState.advancedMode,
@@ -1973,12 +2047,20 @@ const Visualizer4D: React.FC = () => {
 
   const handleResetView = useCallback(() => {
     if (!cameraRef.current || !controlsRef.current) return;
+    if (datasetVersion === 'v3') {
+      const geom = pointsRef.current?.geometry;
+      const attr = geom?.getAttribute('position') as THREE.BufferAttribute | undefined;
+      if (attr && attr.count > 0) {
+        applyV3DefaultOrbitCamera(attr.array as Float32Array, attr.count, cameraRef.current, controlsRef.current);
+        return;
+      }
+    }
     const c = v1DiagonalCameraCoord();
     cameraRef.current.position.set(c, c, c);
     cameraRef.current.lookAt(new THREE.Vector3(0, 0, 0));
     controlsRef.current.target.set(0, 0, 0);
     controlsRef.current.update();
-  }, []);
+  }, [datasetVersion]);
 
   const toggleFullscreen = useCallback(() => {
     const el = fullscreenContainerRef.current as HTMLElement & { webkitRequestFullscreen?: () => void };
