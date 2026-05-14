@@ -40,60 +40,23 @@ function v1DiagonalCameraCoord(): number {
 }
 
 /**
- * v3 default orbit: **same view direction as the classic v1 diagonal** — camera
- * on the (1,1,1) ray looking at the origin. User reference screenshots match
- * this framing (main mass toward one corner, comfortable padding), not the
- * flatter (-25,0,-100) pose.
- *
- * Distance scales with the live world-space AABB half-diagonal so new
- * `points4d_v3.json` exports still fill the frame like the reference image.
- *
- * Calibration: `points4d_v3.json` (May 2026) world half-diagonal ≈ 48.32 after
- * centering × SCALE_FACTOR; we match the historical **total** orbit radius
- * `v1DiagonalCameraCoord() * √3` (~136.4) at that extent.
+ * v3 default camera — exact pose captured in-app (user Shift+C export).
+ * Position / target / up / FOV are fixed in scene space (centered cloud at origin).
  */
-const V3_VIEW_DIRECTION = new THREE.Vector3(1, 1, 1).normalize();
-const V3_CAM_REF_HALF_DIAG = 48.323164445610814;
-const V3_CAM_DISTANCE_SCALE =
-  (v1DiagonalCameraCoord() * Math.sqrt(3)) / V3_CAM_REF_HALF_DIAG;
+const V3_DEFAULT_CAMERA = {
+  position: new THREE.Vector3(-20.0188, 86.7031, 4.1465),
+  target: new THREE.Vector3(-2.1732, -0.0622, -1.3373),
+  up: new THREE.Vector3(0, 1, 0),
+  fov: 50,
+} as const;
 
-function v3CameraDistanceFromPositions(positions: Float32Array, vertexCount: number): number {
-  let minx = Infinity;
-  let miny = Infinity;
-  let minz = Infinity;
-  let maxx = -Infinity;
-  let maxy = -Infinity;
-  let maxz = -Infinity;
-  for (let i = 0; i < vertexCount; i++) {
-    const x = positions[i * 3];
-    const y = positions[i * 3 + 1];
-    const z = positions[i * 3 + 2];
-    if (x < minx) minx = x;
-    if (x > maxx) maxx = x;
-    if (y < miny) miny = y;
-    if (y > maxy) maxy = y;
-    if (z < minz) minz = z;
-    if (z > maxz) maxz = z;
-  }
-  const dx = maxx - minx;
-  const dy = maxy - miny;
-  const dz = maxz - minz;
-  const diag = Math.sqrt(dx * dx + dy * dy + dz * dz);
-  const half = diag > 1e-6 ? diag * 0.5 : 1;
-  const dist = half * V3_CAM_DISTANCE_SCALE;
-  return Math.max(40, Math.min(280, dist));
-}
-
-function applyV3DefaultOrbitCamera(
-  positions: Float32Array,
-  vertexCount: number,
-  camera: THREE.PerspectiveCamera,
-  controls: OrbitControls
-): void {
-  const dist = v3CameraDistanceFromPositions(positions, vertexCount);
-  camera.position.copy(V3_VIEW_DIRECTION).multiplyScalar(dist);
-  camera.lookAt(0, 0, 0);
-  controls.target.set(0, 0, 0);
+function applyV3PinnedDefaultCamera(camera: THREE.PerspectiveCamera, controls: OrbitControls): void {
+  camera.fov = V3_DEFAULT_CAMERA.fov;
+  camera.up.copy(V3_DEFAULT_CAMERA.up);
+  camera.position.copy(V3_DEFAULT_CAMERA.position);
+  controls.target.copy(V3_DEFAULT_CAMERA.target);
+  camera.lookAt(controls.target);
+  camera.updateProjectionMatrix();
   controls.update();
 }
 
@@ -224,8 +187,6 @@ const Visualizer4D: React.FC = () => {
   const grid2Ref = useRef<THREE.GridHelper | null>(null);
   /** Mean xyz (embedding space) from the last point-cloud build; used to pan camera when filtering re-centroids the cloud. */
   const prevEmbeddingCentroidRef = useRef<THREE.Vector3 | null>(null);
-  /** After switching to v3, apply data-driven default orbit once the point buffer exists. */
-  const v3CameraFitPendingRef = useRef(false);
 
   const [trajectoryPoints, setTrajectoryPoints] = useState<Array<{ x: number; y: number; z: number }> | null>(null);
 
@@ -593,17 +554,16 @@ const Visualizer4D: React.FC = () => {
     };
   }, []);
 
-  // Apply default camera when dataset version changes (v1 diagonal; v3 uses
-  // extent-based framing once the point cloud is built — see v3CameraFitPendingRef).
+  // Apply default camera when dataset version changes.
   useEffect(() => {
     if (!cameraRef.current || !controlsRef.current) return;
     if (datasetVersion === 'v3') {
-      v3CameraFitPendingRef.current = true;
+      applyV3PinnedDefaultCamera(cameraRef.current, controlsRef.current);
       return;
     }
-    v3CameraFitPendingRef.current = false;
     const c = v1DiagonalCameraCoord();
     cameraRef.current.position.set(c, c, c);
+    cameraRef.current.up.set(0, 1, 0);
     cameraRef.current.lookAt(0, 0, 0);
     controlsRef.current.target.set(0, 0, 0);
     controlsRef.current.update();
@@ -1707,19 +1667,8 @@ const Visualizer4D: React.FC = () => {
     const points = new THREE.Points(geometry, material);
     sceneRef.current.add(points);
     pointsRef.current = points;
-
-    if (
-      datasetVersion === 'v3' &&
-      v3CameraFitPendingRef.current &&
-      cameraRef.current &&
-      controlsRef.current
-    ) {
-      applyV3DefaultOrbitCamera(positions, filteredSamples4D.length, cameraRef.current, controlsRef.current);
-      v3CameraFitPendingRef.current = false;
-    }
   }, [
     filteredSamples4D,
-    datasetVersion,
     visualizerOptions,
     isDarkMode,
     semanticState.advancedMode,
@@ -2051,15 +2000,12 @@ const Visualizer4D: React.FC = () => {
   const handleResetView = useCallback(() => {
     if (!cameraRef.current || !controlsRef.current) return;
     if (datasetVersion === 'v3') {
-      const geom = pointsRef.current?.geometry;
-      const attr = geom?.getAttribute('position') as THREE.BufferAttribute | undefined;
-      if (attr && attr.count > 0) {
-        applyV3DefaultOrbitCamera(attr.array as Float32Array, attr.count, cameraRef.current, controlsRef.current);
-        return;
-      }
+      applyV3PinnedDefaultCamera(cameraRef.current, controlsRef.current);
+      return;
     }
     const c = v1DiagonalCameraCoord();
     cameraRef.current.position.set(c, c, c);
+    cameraRef.current.up.set(0, 1, 0);
     cameraRef.current.lookAt(new THREE.Vector3(0, 0, 0));
     controlsRef.current.target.set(0, 0, 0);
     controlsRef.current.update();
@@ -2099,31 +2045,10 @@ const Visualizer4D: React.FC = () => {
         e.preventDefault();
         toggleFullscreen();
       }
-      // Dev helper: Shift+C copies the current camera pose to clipboard +
-      // logs it. Use this to capture an exact framing and paste it back so
-      // we can pin it as the v3 default. Removed once the default is set.
-      if ((e.key === 'C' || (e.shiftKey && (e.key === 'c' || e.key === 'C')))) {
-        const cam = cameraRef.current;
-        const ctl = controlsRef.current;
-        if (!cam || !ctl) return;
-        e.preventDefault();
-        const fmt = (n: number) => Number(n.toFixed(4));
-        const pose = {
-          position: { x: fmt(cam.position.x), y: fmt(cam.position.y), z: fmt(cam.position.z) },
-          target:   { x: fmt(ctl.target.x),   y: fmt(ctl.target.y),   z: fmt(ctl.target.z) },
-          up:       { x: fmt(cam.up.x),       y: fmt(cam.up.y),       z: fmt(cam.up.z) },
-          fov:      cam.fov,
-          datasetVersion,
-        };
-        const text = JSON.stringify(pose, null, 2);
-        // eslint-disable-next-line no-console
-        console.log('[MitoSpace camera pose]', pose, '\n' + text);
-        try { navigator.clipboard?.writeText(text); } catch { /* no-op */ }
-      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [handleResetView, toggleFullscreen, datasetVersion]);
+  }, [handleResetView, toggleFullscreen]);
 
   return (
     <div ref={fullscreenContainerRef} className={`${isDarkMode ? 'bg-black' : 'bg-white'} h-full flex flex-col overflow-hidden`}>
