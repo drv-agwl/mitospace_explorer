@@ -143,7 +143,25 @@ DRUG_ALIASES = {
     'vehicle': 'DMSO',
     'untreated': 'DMSO',
     'baseline': 'DMSO',
+    # v3 metadata uses legacy typo "lantrunculinb"; v1 JSON used correct "latrunculinb".
+    'latrunculin b': 'lantrunculinb',
+    'latrunculin-b': 'lantrunculinb',
+    'latrunculinb': 'lantrunculinb',
 }
+
+# Alternate spellings / typos → slug exactly as stored in `sample_metadata['drug']`.
+_DRUG_SLUG_CORRECTIONS: Dict[str, str] = {
+    'latrunculinb': 'lantrunculinb',
+}
+
+
+def normalize_drug_slug(drug: str) -> str:
+    """Map user or legacy-corpus spellings to the identifier used in loaded metadata."""
+    d = (drug or '').strip()
+    if not d:
+        return d
+    key = d.lower().replace(' ', '').replace('-', '')
+    return _DRUG_SLUG_CORRECTIONS.get(key, d)
 
 # All numeric features (v1 + v3 friendly names; v3 also adds Tortuosity)
 NUMERIC_FEATURES = [
@@ -811,7 +829,8 @@ def _drug_indices(drug: str) -> Tuple[str, List[int]]:
     if drug.upper() in ["DMSO", "CONTROL"]:
         sel = sample_metadata[sample_metadata["drug"].str.upper().isin(["DMSO", "CONTROL"])]
         return "DMSO (control)", sel.index.tolist()
-    sel = sample_metadata[sample_metadata["drug"].str.lower() == drug.lower()]
+    resolved = normalize_drug_slug(drug)
+    sel = sample_metadata[sample_metadata["drug"].str.lower() == resolved.lower()]
     indices = sel.index.tolist()
     if indices:
         # Use the dataset's canonical name for this drug (first matching row).

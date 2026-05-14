@@ -102,6 +102,13 @@ def _seed_query_handler() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+class TestDrugSlugNormalization(unittest.TestCase):
+    def test_latrunculin_maps_to_dataset_typo_slug(self):
+        self.assertEqual(query_handler.normalize_drug_slug("latrunculinb"), "lantrunculinb")
+        self.assertEqual(query_handler.normalize_drug_slug("Latrunculin B"), "lantrunculinb")
+        self.assertEqual(query_handler.normalize_drug_slug("lantrunculinb"), "lantrunculinb")
+
+
 class TestGroundedness(unittest.TestCase):
     def test_exact_match_is_grounded(self):
         stats = {"feature": "TMRM", "mean": 0.123, "std": 0.045, "n": 200}

@@ -217,10 +217,19 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
   const availableDrugs = useMemo(() => {
     const drugs = new Set<string>();
-    samples2D.forEach(s => drugs.add(s.treatment.drug));
-    samples4D.forEach(s => drugs.add(s.treatment.drug));
+    // v3 4D points use different drug slugs than the bundled v1 `points2d.json`
+    // (e.g. correct "latrunculinb" in v1 vs legacy typo "lantrunculinb" in v3).
+    // Merging both into one filter list produced two checkboxes for the same
+    // compound; picking the v1-only slug hid every v3 point. Only list drugs
+    // present in the active dataset's 4D samples when on v3.
+    if (datasetVersion === 'v3') {
+      samples4D.forEach((s) => drugs.add(s.treatment.drug));
+    } else {
+      samples2D.forEach((s) => drugs.add(s.treatment.drug));
+      samples4D.forEach((s) => drugs.add(s.treatment.drug));
+    }
     return Array.from(drugs).sort((a, b) => a.localeCompare(b));
-  }, [samples4D]);
+  }, [datasetVersion, samples4D]);
 
   const toggleDrugFilter = useCallback((drug: string) => {
     setSelectedDrugs(prev => {

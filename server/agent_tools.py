@@ -287,9 +287,8 @@ def _resolve_feature(name: str) -> Optional[str]:
 
 
 def _resolve_drug(name: str) -> str:
-    """Normalise a drug name for the compute layer (control/DMSO are merged
-    downstream; we just pass through after a light trim)."""
-    return (name or "").strip()
+    """Normalise a drug name for the compute layer (legacy slug typos, etc.)."""
+    return query_handler.normalize_drug_slug((name or "").strip())
 
 
 def _list_features() -> Dict[str, Any]:
