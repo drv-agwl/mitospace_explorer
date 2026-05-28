@@ -1,4 +1,5 @@
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
+import { useEffect } from 'react';
 import Header from './components/Header';
 import Visualizer4D from './components/Visualizer4D';
 import Footer from './components/Footer';
@@ -6,12 +7,14 @@ import SamplePanel from './components/SamplePanel';
 import About from './components/About';
 import GlobalKeyboardShortcuts from './components/GlobalKeyboardShortcuts';
 import MobileBlocker from './components/MobileBlocker';
+import { SampleProvider } from './context/SampleContext';
+import { trackPageView } from './analytics';
+
 // Chat is intentionally hidden from the UI for now — the LLM occasionally
 // over-interpreted data and we don't want to ship conclusions we haven't
 // vetted. Backend (`/api/chat`, agent, tools, tests) is fully preserved so
 // re-enabling is a one-line revert below.
 // import ChatPanel from './components/ChatPanel';
-import { SampleProvider } from './context/SampleContext';
 
 function Explorer() {
   return (
@@ -46,10 +49,21 @@ function Explorer() {
   );
 }
 
+function RouteTracker() {
+  const location = useLocation();
+
+  useEffect(() => {
+    trackPageView(location.pathname);
+  }, [location]);
+
+  return null;
+}
+
 function App() {
   return (
     <MobileBlocker>
       <Router>
+        <RouteTracker />
         <SampleProvider>
           <Routes>
             <Route path="/" element={<Explorer />} />
