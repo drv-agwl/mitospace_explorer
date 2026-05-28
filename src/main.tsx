@@ -4,8 +4,7 @@ import App from './App.tsx';
 import './index.css';
 import { initializeGA } from './analytics';
 
-// Initialize Google Analytics
-initializeGA('G-EBDV8H9CJM');
+initializeGA();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

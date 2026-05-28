@@ -9,7 +9,6 @@ import GlobalKeyboardShortcuts from './components/GlobalKeyboardShortcuts';
 import MobileBlocker from './components/MobileBlocker';
 import { SampleProvider } from './context/SampleContext';
 import { trackPageView } from './analytics';
-
 // Chat is intentionally hidden from the UI for now — the LLM occasionally
 // over-interpreted data and we don't want to ship conclusions we haven't
 // vetted. Backend (`/api/chat`, agent, tools, tests) is fully preserved so
@@ -53,8 +52,8 @@ function RouteTracker() {
   const location = useLocation();
 
   useEffect(() => {
-    trackPageView(location.pathname);
-  }, [location]);
+    trackPageView(`${location.pathname}${location.search}${location.hash}`);
+  }, [location.pathname, location.search, location.hash]);
 
   return null;
 }
