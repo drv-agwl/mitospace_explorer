@@ -107,7 +107,9 @@ def main() -> None:
         )
         sys.exit(1)
 
-    label_names = df["label_names"].astype(str).to_numpy()
+    label_names = (
+        df["label_names"].astype(str).replace({"lantrunculinb": "latrunculinb"}).to_numpy()
+    )
     moa_names = (
         df["labels_moa"].astype(str).to_numpy() if "labels_moa" in df.columns else None
     )

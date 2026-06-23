@@ -221,7 +221,7 @@ DRUG_KB: Dict[str, DrugFact] = {
         mechanism="Caps actin (+) ends and prevents addition of new monomers, leading to net depolymerisation of the actin cortex.",
         expected_phenotype="Altered short-range fission/fusion dynamics that depend on actin (e.g. INF2-driven fission constriction).",
     ),
-    "lantrunculinb": DrugFact(
+    "latrunculinb": DrugFact(
         display_name="Latrunculin B",
         pharm_class="G-actin sequesterer",
         target="Monomeric G-actin",
@@ -254,8 +254,9 @@ def get(drug_name: Optional[str]) -> Optional[DrugFact]:
         "antimycin": "antimycina",
         "antimycin-a": "antimycina",
         "cytochalasin-d": "cytochalasind",
-        "latrunculin-b": "lantrunculinb",
-        "latrunculinb": "lantrunculinb",
+        "lantrunculinb": "latrunculinb",
+        "lantrunculin-b": "latrunculinb",
+        "latrunculin-b": "latrunculinb",
         "lonidamine": "lonidamine",
         "mdivi": "mdivi1",
         "mdivi-1": "mdivi1",

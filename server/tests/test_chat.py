@@ -103,10 +103,10 @@ def _seed_query_handler() -> None:
 
 
 class TestDrugSlugNormalization(unittest.TestCase):
-    def test_latrunculin_maps_to_dataset_typo_slug(self):
-        self.assertEqual(query_handler.normalize_drug_slug("latrunculinb"), "lantrunculinb")
-        self.assertEqual(query_handler.normalize_drug_slug("Latrunculin B"), "lantrunculinb")
-        self.assertEqual(query_handler.normalize_drug_slug("lantrunculinb"), "lantrunculinb")
+    def test_latrunculin_normalizes_to_canonical_slug(self):
+        self.assertEqual(query_handler.normalize_drug_slug("latrunculinb"), "latrunculinb")
+        self.assertEqual(query_handler.normalize_drug_slug("Latrunculin B"), "latrunculinb")
+        self.assertEqual(query_handler.normalize_drug_slug("lantrunculinb"), "latrunculinb")
 
 
 class TestGroundedness(unittest.TestCase):

@@ -1,12 +1,13 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { Home, ZoomIn, ZoomOut, HelpCircle, Maximize2, Minimize2, Grid3X3 } from 'lucide-react';
+import { Home, ZoomIn, ZoomOut, HelpCircle, Maximize2, Minimize2, Grid3X3, Camera } from 'lucide-react';
 import { useSample } from '../context/SampleContext';
 import VisualizerControls from './VisualizerControls';
 import SemanticAxisPreview from './SemanticAxisPreview';
 import DrugConditionStrip from './DrugConditionStrip';
 import ColorLegend from './ColorLegend';
+import ActiveViewBar from './ActiveViewBar';
 import { projectOnAxis, getAxisTrajectory } from '../api/client';
 import { featureToColorPlasmaAdaptive, plasmaAtT } from '../utils/featureColor';
 import { adaptColorForDarkTheme } from '../utils/colorUtils';
@@ -154,6 +155,7 @@ const Visualizer4D: React.FC = () => {
     setSemanticState,
     apiEmbeddingCount,
     datasetVersion,
+    comparisonCells,
   } = useSample();
 
   const sampleIdToEmbeddingIndex = React.useMemo(
@@ -169,6 +171,8 @@ const Visualizer4D: React.FC = () => {
   const controlsRef = useRef<OrbitControls | null>(null);
   const pointsRef = useRef<THREE.Points | null>(null);
   const selectedPointMeshRef = useRef<THREE.Mesh | null>(null);
+  // Wireframe rings marking the cells pinned for comparison (multi-highlight).
+  const comparisonMeshesRef = useRef<THREE.Mesh[]>([]);
   const targetHighlightPosRef = useRef<THREE.Vector3 | null>(null);
   /** Hover indicator ring: shows which point a click would select. */
   const hoverRingRef = useRef<THREE.Mesh | null>(null);
@@ -270,6 +274,61 @@ const Visualizer4D: React.FC = () => {
     []
   );
 
+  // ── Multi-highlight: a coloured wireframe ring on every pinned comparison
+  //    cell currently visible, so the compared set reads as a group in space.
+  useEffect(() => {
+    const scene = sceneRef.current;
+    const clear = () => {
+      const s = sceneRef.current;
+      comparisonMeshesRef.current.forEach((m) => {
+        if (s) s.remove(m);
+        m.geometry.dispose();
+        (m.material as THREE.Material).dispose();
+      });
+      comparisonMeshesRef.current = [];
+    };
+    clear();
+    if (!scene || comparisonCells.length === 0) return clear;
+    const visible = new Set(filteredSamples4D.map((s) => s.id));
+    for (const { sample } of comparisonCells) {
+      if (!visible.has(sample.id)) continue;
+      const pos = toScenePos(sample.x, sample.y, sample.z);
+      const c = sample.color;
+      const col = c
+        ? new THREE.Color(c.r ?? 1, c.g ?? 1, c.b ?? 1)
+        : new THREE.Color(0.35, 0.85, 1);
+      const geo = new THREE.SphereGeometry(1.7, 20, 20);
+      const mat = new THREE.MeshBasicMaterial({
+        color: col,
+        transparent: true,
+        opacity: 0.7,
+        wireframe: true,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.copy(pos);
+      scene.add(mesh);
+      comparisonMeshesRef.current.push(mesh);
+    }
+    return clear;
+  }, [comparisonCells, filteredSamples4D, toScenePos]);
+
+  // Export the current atlas view as a PNG (figures for decks / papers).
+  const handleExportImage = useCallback(() => {
+    const renderer = rendererRef.current;
+    const scene = sceneRef.current;
+    const camera = cameraRef.current;
+    if (!renderer || !scene || !camera) return;
+    renderer.render(scene, camera);
+    const url = renderer.domElement.toDataURL('image/png');
+    const a = document.createElement('a');
+    a.href = url;
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    a.download = `mitospace-atlas-${stamp}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }, []);
+
   // Generate circular point texture for better-looking points
   const generatePointTexture = (darkMode: boolean) => {
     const canvas = document.createElement('canvas');
@@ -336,7 +395,9 @@ const Visualizer4D: React.FC = () => {
     const renderer = new THREE.WebGLRenderer({ 
       antialias: true,
       alpha: true,
-      powerPreference: 'high-performance'
+      powerPreference: 'high-performance',
+      // Keep the drawn frame readable so we can export the atlas as a PNG.
+      preserveDrawingBuffer: true,
     });
     const w = Math.max(1, containerRef.current.clientWidth);
     const h = Math.max(1, containerRef.current.clientHeight);
@@ -2121,7 +2182,10 @@ const Visualizer4D: React.FC = () => {
             <div className="w-10 h-10 border-2 border-mito-500 border-t-transparent rounded-full animate-spin" />
           </div>
         )}
-        
+
+        {/* Live read-out of what's applied to the atlas (colouring + filters) */}
+        <ActiveViewBar />
+
         {/* Floating controls */}
         <div className="absolute top-4 right-4 flex flex-col gap-2">
           <button
@@ -2172,6 +2236,13 @@ const Visualizer4D: React.FC = () => {
             title={visualizerOptions.showGrid !== false ? 'Hide grid' : 'Show grid'}
           >
             <Grid3X3 size={18} strokeWidth={2} />
+          </button>
+          <button
+            onClick={handleExportImage}
+            className="bg-white/10 hover:bg-white/15 text-white/90 p-2.5 rounded-xl w-10 h-10 flex items-center justify-center transition-colors border border-white/10"
+            title="Export atlas as PNG"
+          >
+            <Camera size={18} strokeWidth={2} />
           </button>
           <button
             onClick={toggleHelp}

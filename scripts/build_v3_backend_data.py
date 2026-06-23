@@ -68,6 +68,11 @@ def main() -> None:
     keep = [c for c in df.columns if c not in drop_cols]
     out = df[keep].copy()
 
+    if "label_names" in out.columns:
+        out["label_names"] = out["label_names"].astype(str).replace(
+            {"lantrunculinb": "latrunculinb"}
+        )
+
     # Convert intensities arrays to lists so parquet round-trips cleanly
     for col in ("morph_intensities", "tmrm_intensities", "embeddings_umap", "cmap_label", "cmap_moa"):
         if col in out.columns:

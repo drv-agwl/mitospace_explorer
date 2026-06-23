@@ -574,6 +574,10 @@ class ChatResponse(BaseModel):
     # When the agent used tools, this lists their names in call order for the
     # UI ("rank_drugs_by_feature → get_drug_pharmacology"). Empty otherwise.
     tools_used: List[str] = []
+    # View actions the agent performed on the explorer (colour by feature,
+    # filter conditions, open a cell, reset). The frontend dispatches these into
+    # the visualizer. Empty when the agent only answered a question.
+    actions: List[dict] = []
 
 
 def _sanitize_history(
@@ -1031,6 +1035,7 @@ async def _chat_via_agent(
     # Groundedness: every numeric token must be present in the union of tool
     # results (treated as a single nested object).
     data = chat_agent.collected_tool_data(result.tool_invocations)
+    ui_actions = chat_agent.collected_ui_actions(result.tool_invocations)
     grounded = True
     if result.tool_invocations:
         grounded = groundedness.check_and_log(
@@ -1060,6 +1065,7 @@ async def _chat_via_agent(
             "answer_len": len(result.answer),
             "iterations": result.iterations,
             "tools_used": chat_agent.tool_summary(result.tool_invocations),
+            "ui_actions": len(ui_actions),
             "llm_latency_ms": round(result.llm_latency_ms, 1),
             "suggestions": len(suggestions),
         },
@@ -1075,6 +1081,7 @@ async def _chat_via_agent(
         suggestions=suggestions,
         cached=False,
         tools_used=chat_agent.tool_summary(result.tool_invocations),
+        actions=ui_actions,
     )
 
 

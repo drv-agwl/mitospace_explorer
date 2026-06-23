@@ -141,7 +141,7 @@ const SamplePanel: React.FC = () => {
 
   if (!selectedSample) {
     return (
-      <div className="flex-1 min-h-0 w-full flex flex-col overflow-hidden bg-black/95 border-l border-white/[0.08] backdrop-blur-sm">
+      <div className="flex-1 min-h-0 w-full flex flex-col overflow-hidden bg-transparent">
         <div className="flex-1 flex flex-col items-center justify-center px-10 text-center">
           <div className="w-20 h-20 rounded-2xl bg-white/[0.04] border border-white/[0.06] flex items-center justify-center mb-5">
             <Microscope size={32} strokeWidth={1.5} className="text-white/30" />
@@ -166,7 +166,7 @@ const SamplePanel: React.FC = () => {
   const hasMetadata = metadataEntries.length > 0;
 
   return (
-    <div className="flex-1 min-h-0 w-full flex flex-col overflow-hidden bg-black/95 border-l border-white/[0.08] backdrop-blur-sm">
+    <div className="flex-1 min-h-0 w-full flex flex-col overflow-hidden bg-transparent">
       {/* ── HEADER — left accent + phenotype chip colours match the cloud legend */}
       <div className="shrink-0 px-6 pt-5 pb-4 border-b border-white/[0.08]">
         <div

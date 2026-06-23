@@ -322,3 +322,19 @@ def collected_tool_data(invocations: List[ToolInvocation]) -> Dict[str, Any]:
 def tool_summary(invocations: List[ToolInvocation]) -> List[str]:
     """Short human-readable list of tools the agent called (for the UI)."""
     return [inv.name for inv in invocations]
+
+
+def collected_ui_actions(invocations: List[ToolInvocation]) -> List[Dict[str, Any]]:
+    """Pull every ``ui_action`` payload (from view-action tools) in call order.
+
+    These are forwarded to the frontend so the agent can drive the explorer
+    (colour by feature, filter conditions, open a cell, reset). Only successful
+    actions (``ok: true`` with a ``ui_action``) are included.
+    """
+    actions: List[Dict[str, Any]] = []
+    for inv in invocations:
+        result = inv.result if isinstance(inv.result, dict) else {}
+        ui_action = result.get("ui_action")
+        if result.get("ok") and isinstance(ui_action, dict):
+            actions.append(ui_action)
+    return actions

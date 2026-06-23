@@ -136,22 +136,24 @@ FEATURE_ALIASES = {
     'complexity': 'Node Count',
 }
 
-# Drug aliases (Control and DMSO are the same)
+# Drug aliases (Control and DMSO are the same). Values are canonical slugs in
+# metadata after legacy typo cleanup (`lantrunculinb` → `latrunculinb`).
 DRUG_ALIASES = {
     'control': 'DMSO',
     'ctrl': 'DMSO',
     'vehicle': 'DMSO',
     'untreated': 'DMSO',
     'baseline': 'DMSO',
-    # v3 metadata uses legacy typo "lantrunculinb"; v1 JSON used correct "latrunculinb".
-    'latrunculin b': 'lantrunculinb',
-    'latrunculin-b': 'lantrunculinb',
-    'latrunculinb': 'lantrunculinb',
+    'lantrunculinb': 'latrunculinb',
+    'lantrunculin b': 'latrunculinb',
+    'lantrunculin-b': 'latrunculinb',
+    'latrunculin b': 'latrunculinb',
+    'latrunculin-b': 'latrunculinb',
 }
 
-# Alternate spellings / typos → slug exactly as stored in `sample_metadata['drug']`.
+# Legacy typo in older exports / parquets → canonical slug in `sample_metadata['drug']`.
 _DRUG_SLUG_CORRECTIONS: Dict[str, str] = {
-    'latrunculinb': 'lantrunculinb',
+    'lantrunculinb': 'latrunculinb',
 }
 
 
@@ -161,7 +163,12 @@ def normalize_drug_slug(drug: str) -> str:
     if not d:
         return d
     key = d.lower().replace(' ', '').replace('-', '')
-    return _DRUG_SLUG_CORRECTIONS.get(key, d)
+    key = _DRUG_SLUG_CORRECTIONS.get(key, key)
+    for alias, canonical in DRUG_ALIASES.items():
+        ak = alias.lower().replace(' ', '').replace('-', '')
+        if ak == key:
+            return canonical
+    return d
 
 # All numeric features (v1 + v3 friendly names; v3 also adds Tortuosity)
 NUMERIC_FEATURES = [
@@ -239,6 +246,10 @@ def load_data(
         feature_table = df
     else:
         feature_table = pd.read_csv(path)
+    if 'label_names' in feature_table.columns:
+        feature_table['label_names'] = feature_table['label_names'].astype(str).replace(
+            {'lantrunculinb': 'latrunculinb'}
+        )
     logger.info(
         "chat.dataset_loaded",
         extra={
@@ -265,6 +276,11 @@ def load_data(
                         'phenotype': point.get('phenotype', ''),
                     })
                 sample_metadata = pd.DataFrame(metadata_records)
+                for col in ('drug', 'phenotype'):
+                    if col in sample_metadata.columns:
+                        sample_metadata[col] = sample_metadata[col].astype(str).replace(
+                            {'lantrunculinb': 'latrunculinb'}
+                        )
                 logger.info(
                     "chat.metadata_loaded",
                     extra={"version": version, "samples": len(sample_metadata)},

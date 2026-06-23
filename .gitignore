@@ -31,6 +31,13 @@ server/.env
 __pycache__/
 *.pyc
 
+# Python virtual environment (local only)
+server/venv/
+venv/
+
+# Scratch / temp
+tmp/
+
 # Heavy upstream v3 data (kept locally, not committed). The slim
 # features_v3.parquet IS committed because the backend needs it.
 data/v3_data/embeddings+metadata.parquet
