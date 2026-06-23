@@ -1,6 +1,7 @@
-import React, { createContext, useContext, useState, useCallback, useEffect, useMemo, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef, ReactNode } from 'react';
 import { Sample, ColoringMode, VisualizerOptions, RenderingMode, LabelVisibility, PerformanceMode, SemanticState, AxisStyle, DatasetVersion } from '../types';
 import { samples2D, samples4D as samples4DV1, loadSamples4DV3 } from '../data/sampleData';
+import { parseView, hasViewState } from '../lib/shareView';
 
 // Persist the user's preferred 3D axis representation across reloads so the
 // A/B comparison sticks. Default = 'cursor' (no axis geometry; a smooth
@@ -30,6 +31,16 @@ const initialSemanticState: SemanticState = {
   featureRange: null,
   axisStyle: initialAxisStyle,
 };
+
+/** A cell pinned into the comparison gallery. `index` is its position in
+ *  `samples4D` (for 3D highlight / re-focus); null when unknown. */
+export interface ComparisonCell {
+  sample: Sample;
+  index: number | null;
+}
+
+/** Max cells that can be compared side-by-side (layout + video perf bound). */
+export const MAX_COMPARISON = 6;
 
 interface SampleContextType {
   samples2D: Sample[];
@@ -71,6 +82,12 @@ interface SampleContextType {
   toggleDrugFilter: (drug: string) => void;
   selectAllDrugFilter: () => void;
   clearDrugFilter: () => void;
+  /** Cells pinned for side-by-side comparison in the Cells panel. */
+  comparisonCells: ComparisonCell[];
+  addComparisonCell: (sample: Sample, index: number | null) => void;
+  removeComparisonCell: (id: string) => void;
+  toggleComparisonCell: (sample: Sample, index: number | null) => void;
+  clearComparison: () => void;
 }
 
 const defaultOptions: VisualizerOptions = {
@@ -105,6 +122,7 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDrugs, setSelectedDrugs] = useState<Set<string>>(new Set());
+  const [comparisonCells, setComparisonCells] = useState<ComparisonCell[]>([]);
   const [visualizerOptions, setVisualizerOptions] = useState<VisualizerOptions>(() => ({
     ...defaultOptions,
     pointSize: initialDatasetVersion === 'v3' ? 1.0 : 1.5,
@@ -168,6 +186,7 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     // When switching datasets, drop point-specific state (indices won't align)
     setSelectedSample(null);
     setSelectedPointIndex(null);
+    setComparisonCells([]);
     setSemanticState((prev) => ({
       ...initialSemanticState,
       // Preserve the user's chosen axis-style across dataset switches.
@@ -215,10 +234,37 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setVisualizerOptions(prev => ({ ...prev, performance: mode }));
   };
 
+  // ── Comparison gallery (multi-cell) ─────────────────────────────────────
+  const addComparisonCell = useCallback((sample: Sample, index: number | null) => {
+    setComparisonCells((prev) => {
+      if (prev.some((c) => c.sample.id === sample.id)) return prev;
+      const next = [...prev, { sample, index }];
+      // Cap the set; evict oldest first (FIFO) so recent adds stay visible.
+      return next.length > MAX_COMPARISON ? next.slice(next.length - MAX_COMPARISON) : next;
+    });
+  }, []);
+
+  const removeComparisonCell = useCallback((id: string) => {
+    setComparisonCells((prev) => prev.filter((c) => c.sample.id !== id));
+  }, []);
+
+  const toggleComparisonCell = useCallback((sample: Sample, index: number | null) => {
+    setComparisonCells((prev) => {
+      if (prev.some((c) => c.sample.id === sample.id)) {
+        return prev.filter((c) => c.sample.id !== sample.id);
+      }
+      const next = [...prev, { sample, index }];
+      return next.length > MAX_COMPARISON ? next.slice(next.length - MAX_COMPARISON) : next;
+    });
+  }, []);
+
+  const clearComparison = useCallback(() => setComparisonCells([]), []);
+
   const availableDrugs = useMemo(() => {
     const drugs = new Set<string>();
-    // v3 4D points use different drug slugs than the bundled v1 `points2d.json`
-    // (e.g. correct "latrunculinb" in v1 vs legacy typo "lantrunculinb" in v3).
+    // v3 4D points can use different drug slugs than the bundled v1 `points2d.json`;
+    // older v3 exports used a typo slug for Latrunculin B (`lantrunculinb`), now
+    // normalized to `latrunculinb` in data + backend.
     // Merging both into one filter list produced two checkboxes for the same
     // compound; picking the v1-only slug hid every v3 point. Only list drugs
     // present in the active dataset's 4D samples when on v3.
@@ -284,6 +330,50 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     }
   }, [filteredSamples2D, filteredSamples4D, selectedSample, setSelectedSample, setSelectedPointIndex]);
 
+  // Restore a shared view (?color=…&drug=…&sel=…&cmp=…) once samples are ready.
+  const viewAppliedRef = useRef(false);
+  useEffect(() => {
+    if (viewAppliedRef.current || samples4D.length === 0) return;
+    const view = parseView(window.location.search);
+    viewAppliedRef.current = true;
+    if (!hasViewState(view)) return;
+    try {
+      if (view.feature) {
+        setSemanticState((s) => ({
+          ...s,
+          advancedMode: true,
+          selectedFeature: view.feature as string,
+          semanticSliderValue: null,
+          projectedPosition: null,
+          projectedConfidence: null,
+          axisSamplesVisible: false,
+        }));
+      } else if (view.mode === 'phenotype') {
+        setColoringMode('phenotype');
+      }
+      if (view.drugs && view.drugs.length) {
+        const wanted = new Set(view.drugs.map((d) => d.toLowerCase()));
+        const matched = samples4D
+          .filter((s) => wanted.has(s.treatment.drug.toLowerCase()))
+          .map((s) => s.treatment.drug);
+        if (matched.length) setSelectedDrugs(new Set(matched));
+      }
+      view.cmp?.forEach((id) => {
+        const idx = samples4D.findIndex((s) => s.id === id);
+        if (idx >= 0) addComparisonCell(samples4D[idx], idx);
+      });
+      if (view.sel) {
+        const idx = samples4D.findIndex((s) => s.id === view.sel);
+        if (idx >= 0) {
+          setSelectedSample(samples4D[idx]);
+          setSelectedPointIndex(idx);
+        }
+      }
+    } catch (e) {
+      console.error('[share] failed to apply view', e);
+    }
+  }, [samples4D, addComparisonCell, setSelectedDrugs, setSelectedSample, setSelectedPointIndex, setSemanticState]);
+
   return (
     <SampleContext.Provider
       value={{
@@ -322,6 +412,11 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         toggleDrugFilter,
         selectAllDrugFilter,
         clearDrugFilter,
+        comparisonCells,
+        addComparisonCell,
+        removeComparisonCell,
+        toggleComparisonCell,
+        clearComparison,
       }}
     >
       {children}

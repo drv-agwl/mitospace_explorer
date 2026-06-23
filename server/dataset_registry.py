@@ -407,9 +407,11 @@ def load_v3(parquet_path: Path) -> Dataset:
         if umap_arr.ndim == 2 and umap_arr.shape[1] == 3:
             ds.umap_points = umap_arr
 
-    # Drug + MOA labels for chat queries
+    # Drug + MOA labels for chat queries (fix legacy typo in source parquets)
     if "label_names" in df.columns:
-        ds.drug_labels = df["label_names"].to_numpy()
+        ds.drug_labels = (
+            df["label_names"].astype(str).replace({"lantrunculinb": "latrunculinb"}).to_numpy()
+        )
     if "labels_moa" in df.columns:
         ds.moa_labels = df["labels_moa"].to_numpy()
 

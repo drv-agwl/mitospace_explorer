@@ -33,9 +33,11 @@ from typing import Any, Callable, Dict, List, Optional
 try:
     from . import query_handler
     from . import drug_knowledge
+    from . import agent_actions
 except ImportError:  # absolute imports when running from server/
     import query_handler  # type: ignore
     import drug_knowledge  # type: ignore
+    import agent_actions  # type: ignore
 
 
 logger = logging.getLogger("mitospace.agent_tools")
@@ -269,6 +271,12 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
 ]
 
 
+# View-action tools (colour the atlas, filter conditions, open a cell, reset).
+# These let the agent DRIVE the explorer, not just answer questions. They carry
+# no numeric claims, so they don't affect groundedness.
+TOOL_SCHEMAS = TOOL_SCHEMAS + agent_actions.ACTION_TOOL_SCHEMAS
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Tool dispatcher
 # ─────────────────────────────────────────────────────────────────────────────
@@ -363,6 +371,10 @@ def _get_drug_pharmacology(drug: str) -> Dict[str, Any]:
 
 # Map tool name → callable.
 def _run_tool_impl(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    # View-action tools (drive the UI) are handled by the actions module.
+    if agent_actions.is_action_tool(name):
+        return agent_actions.run_action(name, args)
+
     if name == "rank_drugs_by_feature":
         feature = _resolve_feature(args.get("feature", ""))
         if not feature:

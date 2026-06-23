@@ -2,28 +2,32 @@ import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-route
 import { useEffect } from 'react';
 import Header from './components/Header';
 import Visualizer4D from './components/Visualizer4D';
-import Footer from './components/Footer';
-import SamplePanel from './components/SamplePanel';
 import About from './components/About';
 import GlobalKeyboardShortcuts from './components/GlobalKeyboardShortcuts';
 import MobileBlocker from './components/MobileBlocker';
 import { SampleProvider } from './context/SampleContext';
+import { AgentProvider } from './context/AgentContext';
+import RightDock from './components/RightDock';
+import Toaster from './components/Toaster';
 import { trackPageView } from './analytics';
-// Chat is intentionally hidden from the UI for now — the LLM occasionally
-// over-interpreted data and we don't want to ship conclusions we haven't
-// vetted. Backend (`/api/chat`, agent, tools, tests) is fully preserved so
-// re-enabling is a one-line revert below.
-// import ChatPanel from './components/ChatPanel';
 
+/**
+ * Explorer shell: a single full-bleed workspace.
+ *   [ TopBar                                   ]
+ *   [ Atlas (3D, hero)        | Right dock      ]
+ *
+ * The dock is a resizable/collapsible rail with two tabs (Ask / Cell). The
+ * agent lives there with its input anchored to the column bottom, so it never
+ * overlaps the canvas — replacing the old floating bar + standalone panel.
+ */
 function Explorer() {
   return (
-    <div className="h-screen flex flex-col overflow-hidden bg-black">
-      <Header />
-      <GlobalKeyboardShortcuts />
+    <AgentProvider>
+      <div className="h-screen flex flex-col overflow-hidden bg-black">
+        <Header />
+        <GlobalKeyboardShortcuts />
 
-      <main className="flex-1 flex flex-col min-h-0 overflow-hidden">
-        <div className="flex-1 flex min-h-0 overflow-hidden">
-          {/* Left: visualizer (controls + canvas) - no scroll, controls always visible */}
+        <main className="flex-1 flex min-h-0 overflow-hidden">
           <section
             className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden"
             aria-label="Visualization"
@@ -31,20 +35,11 @@ function Explorer() {
             <Visualizer4D />
           </section>
 
-          {/* Right: independently scrollable sample panel */}
-          <aside
-            className="w-[400px] min-w-[400px] min-h-0 flex flex-col shrink-0 overflow-hidden"
-            aria-label="Sample details"
-          >
-            <SamplePanel />
-          </aside>
-        </div>
-      </main>
-
-      {/* <ChatPanel />  — temporarily hidden, see import comment above */}
-
-      <Footer />
-    </div>
+          <RightDock />
+        </main>
+        <Toaster />
+      </div>
+    </AgentProvider>
   );
 }
 

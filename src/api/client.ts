@@ -165,11 +165,32 @@ export async function healthCheck(version?: DatasetVersion): Promise<{
   return res.json();
 }
 
+/**
+ * A view action the agent performed on the explorer. The frontend dispatches
+ * these into SampleContext so the agent can drive the 3D atlas (not just talk).
+ */
+export type AgentAction =
+  | { type: 'color_by_feature'; feature: string; label: string }
+  | { type: 'set_coloring_mode'; mode: 'treatment' | 'phenotype'; label: string }
+  | { type: 'filter_conditions'; drugs: string[] }
+  | {
+      type: 'open_cell';
+      drug: string;
+      selection: 'representative' | 'lowest' | 'highest';
+      feature?: string;
+      featureLabel?: string;
+    }
+  | { type: 'set_point_size'; size: number; label: string }
+  | { type: 'set_grid'; show: boolean }
+  | { type: 'reset_view' };
+
 export interface ChatResponse {
   answer: string;
   data?: any;
   query_type?: string;
   request_id?: string;
+  /** View actions the agent performed (color/filter/open/reset). */
+  actions?: AgentAction[];
   /** True iff every number in `answer` is verified against backend stats. */
   grounded?: boolean;
   /**
