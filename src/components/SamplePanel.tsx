@@ -67,6 +67,11 @@ const SamplePanel: React.FC = () => {
     setVideoLoading((prev) => ({ ...prev, [index]: false }));
   };
 
+  const handleVideoPlaying = (index: number) => {
+    // 'playing' is the most reliable "it's actually running" signal on Safari.
+    setVideoLoading((prev) => ({ ...prev, [index]: false }));
+  };
+
   const togglePlayPause = () => {
     const newPlayingState = !isPlaying;
     setIsPlaying(newPlayingState);
@@ -84,9 +89,40 @@ const SamplePanel: React.FC = () => {
     });
   };
 
-  // Reset to playing whenever a new sample is selected so its clip autoplays.
+  // Drive playback explicitly on sample change. Safari's `autoPlay` attribute is
+  // unreliable when `src` is assigned via a React re-render (it loads metadata
+  // and stalls), so we call muted play() after the elements commit — the same
+  // path the manual pause→play uses. Retry briefly to cover slow first buffers.
   useEffect(() => {
+    if (!selectedSample) return;
     setIsPlaying(true);
+
+    let cancelled = false;
+    let attempts = 0;
+
+    const kick = () => {
+      if (cancelled) return;
+      let allPlaying = true;
+      videoRefs.current.forEach((v) => {
+        if (!v) return;
+        v.muted = true;
+        if (v.paused) {
+          allPlaying = false;
+          void v.play().catch(() => {});
+        }
+      });
+      attempts += 1;
+      // A few spaced retries handle Safari's "not ready yet" first frames.
+      if (!allPlaying && attempts < 5) {
+        timer = window.setTimeout(kick, 350);
+      }
+    };
+
+    let timer = window.setTimeout(kick, 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [selectedSample?.id]);
 
   const handleTimeUpdate = (event: React.SyntheticEvent<HTMLVideoElement>) => {
@@ -300,18 +336,21 @@ const SamplePanel: React.FC = () => {
                               key={`${selectedSample.id}-${index}`}
                               ref={(el) => (videoRefs.current[index] = el)}
                               src={video}
-                              preload="metadata"
+                              preload="auto"
                               muted
                               playsInline
                               loop
-                              autoPlay={isPlaying}
                               className="absolute inset-0 w-full h-full object-cover"
                               onError={() => handleVideoError(index)}
                               onLoadStart={() => handleVideoLoadStart(index)}
                               onCanPlay={() => handleVideoCanPlay(index)}
+                              onPlaying={() => handleVideoPlaying(index)}
                               onLoadedData={(e) => {
-                                // Safari sometimes needs an explicit play kick.
-                                if (isPlaying) void e.currentTarget.play().catch(() => {});
+                                // Safari kick: start as soon as the first frame is ready.
+                                if (isPlaying && e.currentTarget.paused) {
+                                  e.currentTarget.muted = true;
+                                  void e.currentTarget.play().catch(() => {});
+                                }
                               }}
                               onTimeUpdate={handleTimeUpdate}
                               onEnded={handleVideoEnded}
