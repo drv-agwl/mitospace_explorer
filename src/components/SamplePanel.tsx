@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   Microscope,
   Pill,
@@ -48,7 +48,8 @@ const SamplePanel: React.FC = () => {
   const { selectedSample, visualizerOptions } = useSample();
   const [videoLoadError, setVideoLoadError] = useState<Record<number, boolean>>({});
   const [videoLoading, setVideoLoading] = useState<Record<number, boolean>>({});
-  const [isPlaying, setIsPlaying] = useState(false);
+  // Autoplay muted inline (like the strip) so Safari reliably paints/plays.
+  const [isPlaying, setIsPlaying] = useState(true);
   const [imageLoadError, setImageLoadError] = useState<Record<number, boolean>>({});
   const [imageLoading, setImageLoading] = useState<Record<number, boolean>>({});
   const videoRefs = useRef<(HTMLVideoElement | null)[]>([]);
@@ -71,17 +72,39 @@ const SamplePanel: React.FC = () => {
     setIsPlaying(newPlayingState);
     videoRefs.current.forEach((video) => {
       if (video) {
-        if (newPlayingState) video.play();
-        else video.pause();
+        if (newPlayingState) {
+          // Safari rejects the play() promise if not muted / no gesture — keep
+          // muted and swallow the rejection so one failure doesn't throw.
+          video.muted = true;
+          void video.play().catch(() => {});
+        } else {
+          video.pause();
+        }
       }
     });
   };
 
+  // Reset to playing whenever a new sample is selected so its clip autoplays.
+  useEffect(() => {
+    setIsPlaying(true);
+  }, [selectedSample?.id]);
+
   const handleTimeUpdate = (event: React.SyntheticEvent<HTMLVideoElement>) => {
     const currentVideo = event.currentTarget;
     videoRefs.current.forEach((video) => {
-      if (video && video !== currentVideo && Math.abs(video.currentTime - currentVideo.currentTime) > 0.1) {
-        video.currentTime = currentVideo.currentTime;
+      // Only sync a channel that's actually seekable — setting currentTime on a
+      // not-yet-ready video throws / stalls on Safari.
+      if (
+        video &&
+        video !== currentVideo &&
+        video.readyState >= 2 &&
+        Math.abs(video.currentTime - currentVideo.currentTime) > 0.15
+      ) {
+        try {
+          video.currentTime = currentVideo.currentTime;
+        } catch {
+          /* ignore seek race */
+        }
       }
     });
   };
@@ -274,13 +297,22 @@ const SamplePanel: React.FC = () => {
                         ) : (
                           <>
                             <video
+                              key={`${selectedSample.id}-${index}`}
                               ref={(el) => (videoRefs.current[index] = el)}
                               src={video}
                               preload="metadata"
+                              muted
+                              playsInline
+                              loop
+                              autoPlay={isPlaying}
                               className="absolute inset-0 w-full h-full object-cover"
                               onError={() => handleVideoError(index)}
                               onLoadStart={() => handleVideoLoadStart(index)}
                               onCanPlay={() => handleVideoCanPlay(index)}
+                              onLoadedData={(e) => {
+                                // Safari sometimes needs an explicit play kick.
+                                if (isPlaying) void e.currentTarget.play().catch(() => {});
+                              }}
                               onTimeUpdate={handleTimeUpdate}
                               onEnded={handleVideoEnded}
                             />
