@@ -1,4 +1,4 @@
-import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { Suspense, lazy, useEffect } from 'react';
 import Header from './components/Header';
 import Footer from './components/Footer';
@@ -8,6 +8,7 @@ import MobileBlocker from './components/MobileBlocker';
 import DatasetLoadingShell from './components/DatasetLoadingShell';
 import AppShellSkeleton from './components/AppShellSkeleton';
 import ExplorationWarmup from './components/ExplorationWarmup';
+import RootErrorBoundary from './components/RootErrorBoundary';
 import { SampleProvider, useSample } from './context/SampleContext';
 import { trackPageView } from './analytics';
 // Chat is intentionally hidden from the UI for now — the LLM occasionally
@@ -79,19 +80,23 @@ function RouteTracker() {
 
 function App() {
   return (
-    <MobileBlocker>
-      <Router>
-        <RouteTracker />
-        <SampleProvider>
-          <Suspense fallback={<AppShellSkeleton />}>
-            <Routes>
-              <Route path="/" element={<Explorer />} />
-              <Route path="/about" element={<About />} />
-            </Routes>
-          </Suspense>
-        </SampleProvider>
-      </Router>
-    </MobileBlocker>
+    <RootErrorBoundary>
+      <MobileBlocker>
+        <Router>
+          <RouteTracker />
+          <SampleProvider>
+            <Suspense fallback={<AppShellSkeleton />}>
+              <Routes>
+                <Route path="/" element={<Explorer />} />
+                <Route path="/about" element={<About />} />
+                {/* Unknown URLs (typos, stale links) → home instead of blank. */}
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </Suspense>
+          </SampleProvider>
+        </Router>
+      </MobileBlocker>
+    </RootErrorBoundary>
   );
 }
 

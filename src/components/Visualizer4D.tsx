@@ -154,7 +154,17 @@ const Visualizer4D: React.FC = () => {
     setSemanticState,
     apiEmbeddingCount,
     datasetVersion,
+    searchQuery,
+    selectedDrugs,
+    clearDrugFilter,
   } = useSample();
+
+  // True when active filters (condition/search) exclude every cell. We show a
+  // helpful overlay + reset instead of a silent empty canvas.
+  const noSamplesAfterFilter =
+    samples4D.length > 0 &&
+    filteredSamples4D.length === 0 &&
+    (selectedDrugs.size > 0 || searchQuery.trim().length > 0);
 
   const sampleIdToEmbeddingIndex = React.useMemo(
     () => buildSampleIdToIndex(samples4D),
@@ -200,7 +210,8 @@ const Visualizer4D: React.FC = () => {
   const [isDragging, setIsDragging] = useState(false);
   const pointerDownRef = useRef<{ x: number; y: number } | null>(null);
   const pointerMovedRef = useRef(false);
-  const [isDarkMode, setIsDarkMode] = useState(true);
+  // Dark mode is currently fixed on; keep as a const to avoid an unused setter.
+  const [isDarkMode] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
   // Drug-conditions overview strip — visible on first view (important overview).
   // Videos still lazy-load via LazyVideo (src-on-visible + concurrency cap).
@@ -2211,7 +2222,26 @@ const Visualizer4D: React.FC = () => {
             <div className="w-10 h-10 border-2 border-mito-500 border-t-transparent rounded-full animate-spin" />
           </div>
         )}
-        
+
+        {/* Empty-filter state: filters excluded every cell. */}
+        {noSamplesAfterFilter && !isLoading && (
+          <div className="absolute inset-0 flex items-center justify-center p-6 pointer-events-none">
+            <div className="pointer-events-auto max-w-sm text-center rounded-2xl border border-white/10 bg-black/70 backdrop-blur-sm px-6 py-5 shadow-elevated">
+              <p className="text-sm font-medium text-white/90">No cells match your filters</p>
+              <p className="mt-1 text-xs text-white/55">
+                Try removing a condition or clearing your search to see the atlas again.
+              </p>
+              <button
+                type="button"
+                onClick={clearDrugFilter}
+                className="mt-4 h-9 px-4 rounded-lg text-sm font-medium bg-white text-black hover:bg-white/90 transition-colors"
+              >
+                Clear filters
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Floating controls */}
         <div className="absolute top-4 right-4 flex flex-col gap-2">
           <button
