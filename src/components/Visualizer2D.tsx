@@ -8,9 +8,10 @@ import ColorLegend from './ColorLegend';
 import { adaptColorForDarkTheme } from '../utils/colorUtils';
 
 const Visualizer2D: React.FC = () => {
-  const { 
-    filteredSamples2D, 
-    selectedSample, 
+  // 2D dataset is no longer shipped; this component is unused in App.
+  const filteredSamples2D: import('../types').Sample[] = [];
+  const {
+    selectedSample,
     setSelectedSample,
     visualizerOptions,
     setShowGrid,

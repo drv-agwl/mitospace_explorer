@@ -2,7 +2,7 @@ import type { DatasetVersion } from '../types';
 
 /**
  * Former v1 | v3 segmented control copy; the header no longer mounts a dataset switcher.
- * `DatasetVersion` / `setDatasetVersion` and v1 sample paths remain in `SampleContext` and `sampleData`.
+ * UI is v3-only; this component is a no-op placeholder.
  */
 export const DATASET_TOGGLE_OPTIONS: Array<{ value: DatasetVersion; label: string; sub: string }> = [
   { value: 'v1', label: 'v1', sub: '2024 · 13K' },

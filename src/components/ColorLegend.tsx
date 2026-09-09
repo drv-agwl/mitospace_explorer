@@ -32,9 +32,9 @@ function getUniqueItems(
 }
 
 const ColorLegend: React.FC<ColorLegendProps> = ({ visible }) => {
-  const { filteredSamples4D, filteredSamples2D, visualizerOptions } = useSample();
+  const { filteredSamples4D, visualizerOptions } = useSample();
   const [collapsed, setCollapsed] = useState(false);
-  const samples = filteredSamples4D.length > 0 ? filteredSamples4D : filteredSamples2D;
+  const samples = filteredSamples4D;
   const items = useMemo(
     () => getUniqueItems(samples, visualizerOptions.coloringMode),
     [samples, visualizerOptions.coloringMode]

@@ -1,6 +1,9 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { Video, X, Play, Pause } from 'lucide-react';
 import type { Sample } from '../types';
+import { selectDrugRepresentatives } from '../utils/drugStripSamples';
+import { usePosterManifest } from '../utils/posterManifest';
+import LazyVideo from './LazyVideo';
 
 interface DrugConditionStripProps {
   /** Pool of samples to draw one representative per drug from. */
@@ -11,59 +14,10 @@ interface DrugConditionStripProps {
   onSelectSample?: (sample: Sample) => void;
 }
 
-// ---------------------------------------------------------------------------
-// Local visual primitives — mirror the toolbar / axis-preview pill language so
-// the strip feels native, not bolted-on.
-// ---------------------------------------------------------------------------
 const PILL_BASE =
   'inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg text-xs font-medium border transition-all duration-150 shrink-0';
 const PILL_ACTIVE = 'bg-white/[0.12] border-white/[0.22] text-white';
 
-interface DrugCard {
-  drug: string;
-  sample: Sample;
-}
-
-/**
- * Pick one representative sample per drug. Preference order:
- *   1. Samples that have a usable video (the strip is about visual phenotype).
- *   2. Samples with images (fallback).
- *   3. Anything (last resort).
- * Drugs are sorted alphabetically so the strip has a stable order independent
- * of input data shuffling.
- */
-function selectRepresentatives(samples: Sample[]): DrugCard[] {
-  const byDrug = new Map<string, Sample>();
-  for (const s of samples) {
-    const drug = s.treatment?.drug;
-    if (!drug) continue;
-    const existing = byDrug.get(drug);
-    if (!existing) {
-      byDrug.set(drug, s);
-      continue;
-    }
-    // Upgrade only if the candidate is strictly "better" media-wise.
-    const candidateHasVideo = (s.videos?.length ?? 0) > 0;
-    const existingHasVideo = (existing.videos?.length ?? 0) > 0;
-    if (candidateHasVideo && !existingHasVideo) {
-      byDrug.set(drug, s);
-      continue;
-    }
-    if (candidateHasVideo === existingHasVideo) {
-      const candidateHasImage = (s.images?.length ?? 0) > 0;
-      const existingHasImage = (existing.images?.length ?? 0) > 0;
-      if (candidateHasImage && !existingHasImage) {
-        byDrug.set(drug, s);
-      }
-    }
-  }
-  return Array.from(byDrug.entries())
-    .map(([drug, sample]) => ({ drug, sample }))
-    .sort((a, b) => a.drug.localeCompare(b.drug));
-}
-
-/** Same visual language as semantic-axis sample cards: 3px top accent from the
- * sample's treatment colour (matches the point cloud when coloured by drug). */
 function treatmentAccentCss(sample: Sample): string {
   const { r, g, b } = sample.color;
   const rr = Math.round((r ?? 0) * 255);
@@ -77,111 +31,23 @@ const DrugConditionStrip: React.FC<DrugConditionStripProps> = ({
   onClose,
   onSelectSample,
 }) => {
-  const cards = useMemo(() => selectRepresentatives(samples), [samples]);
+  const cards = useMemo(() => selectDrugRepresentatives(samples), [samples]);
+  const posters = usePosterManifest();
 
   const videoIndex = 0;
   const videoCount = cards.filter((c) => c.sample.videos?.[videoIndex]).length;
   const hasVideos = videoCount > 0;
 
-  const videoRefs = useRef<(HTMLVideoElement | null)[]>([]);
-  // All videos play in lockstep by design (no user toggle). The slider state
-  // here only drives the play/pause label.
   const [isPlaying, setIsPlaying] = useState(true);
 
-  const setAllPlaying = useCallback((next: boolean) => {
-    setIsPlaying(next);
-    videoRefs.current.forEach((v) => {
-      if (!v) return;
-      if (next) {
-        v.play().catch(() => {
-          /* autoplay policy / decode race — ignore */
-        });
-      } else {
-        v.pause();
-      }
-    });
-  }, []);
-
   const togglePlayPause = useCallback(() => {
-    const next = !isPlaying;
-    if (next) {
-      // Align timelines to the first live video before resuming so the
-      // strip "snaps back" to a coherent state.
-      const leader = videoRefs.current.find((v) => v);
-      if (leader) {
-        const t = leader.currentTime;
-        videoRefs.current.forEach((v) => {
-          if (v && v !== leader) v.currentTime = t;
-        });
-      }
-    }
-    setAllPlaying(next);
-  }, [isPlaying, setAllPlaying]);
-
-  // Continuously re-align peer videos to whichever one fires `timeupdate`.
-  // The 0.1s threshold keeps the strip visually locked without thrashing
-  // decoders on every frame.
-  const handleTimeUpdate = useCallback((leader: HTMLVideoElement) => {
-    const t = leader.currentTime;
-    videoRefs.current.forEach((v) => {
-      if (v && v !== leader && Math.abs(v.currentTime - t) > 0.1) {
-        v.currentTime = t;
-      }
-    });
+    setIsPlaying((prev) => !prev);
   }, []);
-
-  // Loop is enabled on every <video>, so this path is rarely hit; kept as a
-  // safety net to reset everyone to t=0 if a video does end.
-  const handleVideoEnded = useCallback(() => {
-    videoRefs.current.forEach((v) => {
-      if (v) v.currentTime = 0;
-    });
-  }, []);
-
-  // Keep the play/pause label honest even when the browser blocks autoplay or
-  // a video is paused individually.
-  const refreshPlayingState = useCallback(() => {
-    const anyPlaying = videoRefs.current.some(
-      (v) => v && !v.paused && !v.ended
-    );
-    setIsPlaying(anyPlaying);
-  }, []);
-
-  useEffect(() => {
-    if (!hasVideos) return;
-    const id = window.setTimeout(refreshPlayingState, 250);
-    return () => window.clearTimeout(id);
-  }, [hasVideos, refreshPlayingState]);
-
-  // Throttle CPU: only let cards that are scrolled into view actually decode.
-  // 26 simultaneous looping videos can otherwise hammer low-end laptops.
-  useEffect(() => {
-    if (!hasVideos) return;
-    if (typeof IntersectionObserver === 'undefined') return;
-    const obs = new IntersectionObserver(
-      (entries) => {
-        for (const e of entries) {
-          const v = e.target as HTMLVideoElement;
-          if (e.isIntersecting) {
-            if (isPlaying) v.play().catch(() => {});
-          } else {
-            v.pause();
-          }
-        }
-      },
-      { root: null, threshold: 0.1 }
-    );
-    videoRefs.current.forEach((v) => {
-      if (v) obs.observe(v);
-    });
-    return () => obs.disconnect();
-  }, [hasVideos, isPlaying, cards.length]);
 
   if (cards.length === 0) return null;
 
   return (
     <div className="shrink-0 border-b border-white/[0.08] bg-black/95 backdrop-blur-sm">
-      {/* ─── Header ─────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-6 pt-3 pb-2 gap-4">
         <div className="flex items-baseline gap-2 min-w-0">
           <p className="text-xs font-semibold text-white/85 uppercase tracking-wider truncate">
@@ -214,9 +80,8 @@ const DrugConditionStrip: React.FC<DrugConditionStripProps> = ({
         </div>
       </div>
 
-      {/* ─── Cards ──────────────────────────────────────────────────────── */}
       <div className="px-6 pb-4 flex gap-2.5 overflow-x-auto">
-        {cards.map(({ drug, sample }, i) => (
+        {cards.map(({ drug, sample }) => (
           <button
             key={drug}
             type="button"
@@ -231,26 +96,21 @@ const DrugConditionStrip: React.FC<DrugConditionStripProps> = ({
             />
             <div className="aspect-square relative bg-white/[0.04]">
               {sample.videos?.[videoIndex] ? (
-                <video
-                  ref={(el) => {
-                    videoRefs.current[i] = el;
-                  }}
+                <LazyVideo
                   src={sample.videos[videoIndex]}
-                  className="w-full h-full object-cover"
-                  muted
-                  loop
-                  playsInline
-                  autoPlay
-                  preload="metadata"
-                  onTimeUpdate={(e) => handleTimeUpdate(e.currentTarget)}
-                  onEnded={handleVideoEnded}
-                  onPlay={refreshPlayingState}
-                  onPause={refreshPlayingState}
+                  poster={posters?.byDrug[drug] ?? posters?.byId[String(sample.id)]}
+                  posterPriority
+                  alt={drug}
+                  shouldPlay={isPlaying}
+                  unloadWhenHidden={false}
+                  className="w-full h-full pointer-events-none"
                 />
               ) : sample.images?.[0] ? (
                 <img
                   src={sample.images[0]}
                   alt={drug}
+                  loading="lazy"
+                  decoding="async"
                   className="w-full h-full object-cover"
                 />
               ) : (
@@ -262,9 +122,7 @@ const DrugConditionStrip: React.FC<DrugConditionStripProps> = ({
               )}
             </div>
             <div className="px-2 py-1.5">
-              <p className="text-[11px] font-medium text-white/90 truncate">
-                {drug}
-              </p>
+              <p className="text-[11px] font-medium text-white/90 truncate">{drug}</p>
             </div>
           </button>
         ))}

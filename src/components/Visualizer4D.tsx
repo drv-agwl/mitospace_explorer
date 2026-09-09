@@ -187,20 +187,23 @@ const Visualizer4D: React.FC = () => {
   const grid2Ref = useRef<THREE.GridHelper | null>(null);
   /** Mean xyz (embedding space) from the last point-cloud build; used to pan camera when filtering re-centroids the cloud. */
   const prevEmbeddingCentroidRef = useRef<THREE.Vector3 | null>(null);
+  /** True once the point cloud has played its initial fade-in. */
+  const pointsHaveFadedInRef = useRef(false);
 
   const [trajectoryPoints, setTrajectoryPoints] = useState<Array<{ x: number; y: number; z: number }> | null>(null);
 
   const [isLoading, setIsLoading] = useState(true);
   const [showHelp, setShowHelp] = useState(false);
-  const [fps, setFps] = useState(0);
+  const fpsTextRef = useRef<HTMLSpanElement>(null);
+  const fpsDotRef = useRef<HTMLSpanElement>(null);
   const [pointCount, setPointCount] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const pointerDownRef = useRef<{ x: number; y: number } | null>(null);
   const pointerMovedRef = useRef(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  // Drug-conditions overview strip (renders above the canvas on first view).
-  // `drugStripVisible` toggles from the toolbar or the strip's close control.
+  // Drug-conditions overview strip — visible on first view (important overview).
+  // Videos still lazy-load via LazyVideo (src-on-visible + concurrency cap).
   // While semantic axis is on, `drugStripKilled` hides the strip (it conflicts
   // with the "samples along axis" strip). Turning semantic axis off clears
   // `drugStripKilled` so the overview can be opened again.
@@ -436,23 +439,32 @@ const Visualizer4D: React.FC = () => {
     scene.add(hoverRing);
     hoverRingRef.current = hoverRing;
     
-    // FPS counter setup
+    // FPS counter — write to DOM refs so we don't re-render the whole tree.
     let frameCount = 0;
     let lastTime = performance.now();
-    
+    let rafId = 0;
+
     const updateFPS = () => {
       const now = performance.now();
       frameCount++;
       if (now - lastTime >= 1000) {
-        setFps(Math.round(frameCount * 1000 / (now - lastTime)));
+        const fps = Math.round((frameCount * 1000) / (now - lastTime));
         frameCount = 0;
         lastTime = now;
+        if (fpsTextRef.current) fpsTextRef.current.textContent = `${fps} FPS`;
+        if (fpsDotRef.current) {
+          fpsDotRef.current.className = `w-1.5 h-1.5 rounded-full ${
+            fps > 30 ? 'bg-emerald-500' : fps > 15 ? 'bg-amber-500' : 'bg-red-500'
+          }`;
+        }
       }
     };
-    
+
     const LERP_SPEED = 0.35;
     const animate = () => {
-      requestAnimationFrame(animate);
+      rafId = 0;
+      if (document.hidden) return;
+      rafId = requestAnimationFrame(animate);
       const mesh = selectedPointMeshRef.current;
       const target = targetHighlightPosRef.current;
       if (mesh && target && mesh.position.distanceTo(target) > 0.001) {
@@ -464,8 +476,14 @@ const Visualizer4D: React.FC = () => {
       }
       updateFPS();
     };
-    
-    animate();
+
+    const onVisibility = () => {
+      if (!document.hidden && rafId === 0) {
+        rafId = requestAnimationFrame(animate);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    rafId = requestAnimationFrame(animate);
     setIsLoading(false);
     
     const handleResize = () => {
@@ -506,6 +524,8 @@ const Visualizer4D: React.FC = () => {
     containerRef.current.addEventListener('wheel', handleWheel, { passive: false });
     
     return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      if (rafId) cancelAnimationFrame(rafId);
       window.removeEventListener('resize', handleResize);
       resizeObserver.disconnect();
       if (containerRef.current) {
@@ -518,6 +538,9 @@ const Visualizer4D: React.FC = () => {
       
       if (pointsRef.current && sceneRef.current) {
         sceneRef.current.remove(pointsRef.current);
+        pointsRef.current.geometry.dispose();
+        (pointsRef.current.material as THREE.Material).dispose();
+        pointsRef.current = null;
       }
       if (selectedPointMeshRef.current && sceneRef.current) {
         sceneRef.current.remove(selectedPointMeshRef.current);
@@ -1560,14 +1583,26 @@ const Visualizer4D: React.FC = () => {
     if (!sceneRef.current) return;
     if (!filteredSamples4D?.length) {
       prevEmbeddingCentroidRef.current = null;
+      if (pointsRef.current && sceneRef.current) {
+        sceneRef.current.remove(pointsRef.current);
+        pointsRef.current.geometry.dispose();
+        const mat = pointsRef.current.material;
+        if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+        else mat.dispose();
+        pointsRef.current = null;
+      }
+      setPointCount(0);
       return;
     }
 
     setPointCount(filteredSamples4D.length);
-    if (pointsRef.current && sceneRef.current) {
-      sceneRef.current.remove(pointsRef.current);
-      pointsRef.current = null;
-    }
+
+    const disposePoints = (pts: THREE.Points) => {
+      pts.geometry.dispose();
+      const mat = pts.material;
+      if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+      else mat.dispose();
+    };
 
     const center = getCenter();
     // Re-centering the cloud in scene space when the filter changes is equivalent
@@ -1582,10 +1617,10 @@ const Visualizer4D: React.FC = () => {
     }
     prevEmbeddingCentroidRef.current = center.clone();
 
-    const geometry = new THREE.BufferGeometry();
-    const positions = new Float32Array(filteredSamples4D.length * 3);
-    const colors = new Float32Array(filteredSamples4D.length * 3);
-    const sizes = new Float32Array(filteredSamples4D.length);
+    const n = filteredSamples4D.length;
+    const positions = new Float32Array(n * 3);
+    const colors = new Float32Array(n * 3);
+    const sizes = new Float32Array(n);
     const pointsOpacity = trajectoryActive ? 0.72 : (isDarkMode ? 1.0 : 0.9);
     const pointsSize = visualizerOptions.pointSize;
     const fr = semanticState.featureRange;
@@ -1652,6 +1687,39 @@ const Visualizer4D: React.FC = () => {
       sizes[i] = pointsSize;
     });
 
+    // In-place buffer update when point count is unchanged (filter membership
+    // stable) — avoids allocating a new Points + GPU resources on color-only churn.
+    const existing = pointsRef.current;
+    const existingCount = existing
+      ? (existing.geometry.getAttribute('position')?.count ?? 0)
+      : 0;
+
+    if (existing && existingCount === n) {
+      const geom = existing.geometry;
+      const posAttr = geom.getAttribute('position') as THREE.BufferAttribute;
+      const colAttr = geom.getAttribute('color') as THREE.BufferAttribute;
+      const sizeAttr = geom.getAttribute('size') as THREE.BufferAttribute;
+      (posAttr.array as Float32Array).set(positions);
+      (colAttr.array as Float32Array).set(colors);
+      (sizeAttr.array as Float32Array).set(sizes);
+      posAttr.needsUpdate = true;
+      colAttr.needsUpdate = true;
+      sizeAttr.needsUpdate = true;
+      const mat = existing.material as THREE.PointsMaterial;
+      mat.size = pointsSize;
+      mat.opacity = pointsOpacity;
+      mat.map = generatePointTexture(isDarkMode);
+      mat.needsUpdate = true;
+      return;
+    }
+
+    if (existing && sceneRef.current) {
+      sceneRef.current.remove(existing);
+      disposePoints(existing);
+      pointsRef.current = null;
+    }
+
+    const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
@@ -1667,6 +1735,28 @@ const Visualizer4D: React.FC = () => {
     const points = new THREE.Points(geometry, material);
     sceneRef.current.add(points);
     pointsRef.current = points;
+
+    // Fade the cloud in the first time it appears so it "develops in" rather
+    // than popping. Subsequent rebuilds (filters/colors) render at full opacity.
+    if (!pointsHaveFadedInRef.current) {
+      pointsHaveFadedInRef.current = true;
+      const reduceMotion =
+        typeof window !== 'undefined' &&
+        window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      if (!reduceMotion) {
+        const target = pointsOpacity;
+        const start = performance.now();
+        const DURATION = 450;
+        material.opacity = 0;
+        const ramp = () => {
+          if (pointsRef.current?.material !== material) return; // replaced; stop
+          const t = Math.min(1, (performance.now() - start) / DURATION);
+          material.opacity = target * t;
+          if (t < 1) requestAnimationFrame(ramp);
+        };
+        requestAnimationFrame(ramp);
+      }
+    }
   }, [
     filteredSamples4D,
     visualizerOptions,
@@ -2189,8 +2279,9 @@ const Visualizer4D: React.FC = () => {
           <ColorLegend visible={!useFeatureColoring} />
           <div className={`px-3 py-2 rounded-xl text-xs font-medium backdrop-blur-sm border border-white/10 ${isDarkMode ? 'bg-black/70 text-white/80' : 'bg-white/90 text-gray-700'}`}>
             <div className="flex items-center gap-2">
-              <span className={`w-1.5 h-1.5 rounded-full ${fps > 30 ? 'bg-emerald-500' : fps > 15 ? 'bg-amber-500' : 'bg-red-500'}`} />
-              {fps} FPS · {pointCount.toLocaleString()} points
+              <span ref={fpsDotRef} className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+              <span ref={fpsTextRef}>0 FPS</span>
+              <span>· {pointCount.toLocaleString()} points</span>
             </div>
           </div>
         </div>

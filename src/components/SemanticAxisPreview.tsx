@@ -9,6 +9,8 @@ import {
   isAxisStripExcludedDrug,
   isAxisStripExcludedSampleId,
 } from '../constants/axisSampleExclusions';
+import LazyVideo from './LazyVideo';
+import { usePosterManifest } from '../utils/posterManifest';
 
 // Baseline number of axis samples — used until the strip's width is measured
 // and on small viewports. The adaptive count below grows past this on wider
@@ -247,67 +249,13 @@ const SemanticAxisPreview: React.FC<SemanticAxisPreviewProps> = ({
   const videoCount = axisSamples.filter((s) => s.sample.videos?.[videoIndex]).length;
   const hasVideos = videoCount > 0;
 
-  // All videos play in lockstep by design. No user toggle.
+  // Strip-level play intent; LazyVideo loads/plays only visible cards (capped).
   const [isPlaying, setIsPlaying] = useState(true);
-  const videoRefs = useRef<(HTMLVideoElement | null)[]>([]);
-
-  const setAllPlaying = useCallback((next: boolean) => {
-    setIsPlaying(next);
-    videoRefs.current.forEach((v) => {
-      if (!v) return;
-      if (next) {
-        v.play().catch(() => {});
-      } else {
-        v.pause();
-      }
-    });
-  }, []);
+  const posters = usePosterManifest();
 
   const togglePlayPause = useCallback(() => {
-    const next = !isPlaying;
-    if (next) {
-      // Align timelines to the first live video before resuming so the
-      // strip is coherent.
-      const first = videoRefs.current.find((v) => v);
-      if (first) {
-        const t = first.currentTime;
-        videoRefs.current.forEach((v) => {
-          if (v && v !== first) v.currentTime = t;
-        });
-      }
-    }
-    setAllPlaying(next);
-  }, [isPlaying, setAllPlaying]);
-
-  const handleTimeUpdate = useCallback((leader: HTMLVideoElement) => {
-    const t = leader.currentTime;
-    videoRefs.current.forEach((v) => {
-      if (v && v !== leader && Math.abs(v.currentTime - t) > 0.1) {
-        v.currentTime = t;
-      }
-    });
+    setIsPlaying((prev) => !prev);
   }, []);
-
-  const handleVideoEnded = useCallback(() => {
-    videoRefs.current.forEach((v) => {
-      if (v) v.currentTime = 0;
-    });
-  }, []);
-
-  // Keep the button label honest if the browser blocks autoplay or any video
-  // is paused/played individually.
-  const refreshPlayingState = useCallback(() => {
-    const anyPlaying = videoRefs.current.some((v) => v && !v.paused && !v.ended);
-    setIsPlaying(anyPlaying);
-  }, []);
-
-  // If the autoplay attribute on initial mount didn't actually start playback
-  // (e.g. some browsers gate autoplay), reflect the real state after a tick.
-  useEffect(() => {
-    if (!hasVideos) return;
-    const id = window.setTimeout(refreshPlayingState, 250);
-    return () => window.clearTimeout(id);
-  }, [hasVideos, refreshPlayingState]);
 
   if (axisSamples.length === 0) return null;
 
@@ -369,26 +317,20 @@ const SemanticAxisPreview: React.FC<SemanticAxisPreviewProps> = ({
             />
             <div className="aspect-video relative bg-white/[0.04]">
               {sample.videos?.[videoIndex] ? (
-                <video
-                  ref={(el) => {
-                    videoRefs.current[i] = el;
-                  }}
+                <LazyVideo
                   src={sample.videos[videoIndex]}
-                  className="w-full h-full object-cover"
-                  muted
-                  loop
-                  playsInline
-                  autoPlay
-                  preload="metadata"
-                  onTimeUpdate={(e) => handleTimeUpdate(e.currentTarget)}
-                  onEnded={handleVideoEnded}
-                  onPlay={refreshPlayingState}
-                  onPause={refreshPlayingState}
+                  poster={posters?.byId[String(sample.id)] ?? posters?.byDrug[sample.treatment.drug]}
+                  alt={sample.treatment.drug}
+                  shouldPlay={isPlaying}
+                  unloadWhenHidden={false}
+                  className="w-full h-full pointer-events-none"
                 />
               ) : sample.images?.[0] ? (
                 <img
                   src={sample.images[0]}
                   alt=""
+                  loading="lazy"
+                  decoding="async"
                   className="w-full h-full object-cover"
                 />
               ) : (

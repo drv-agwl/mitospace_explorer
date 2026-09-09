@@ -1,13 +1,14 @@
 import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
-import { useEffect } from 'react';
+import { Suspense, lazy, useEffect } from 'react';
 import Header from './components/Header';
-import Visualizer4D from './components/Visualizer4D';
 import Footer from './components/Footer';
 import SamplePanel from './components/SamplePanel';
-import About from './components/About';
 import GlobalKeyboardShortcuts from './components/GlobalKeyboardShortcuts';
 import MobileBlocker from './components/MobileBlocker';
-import { SampleProvider } from './context/SampleContext';
+import DatasetLoadingShell from './components/DatasetLoadingShell';
+import AppShellSkeleton from './components/AppShellSkeleton';
+import ExplorationWarmup from './components/ExplorationWarmup';
+import { SampleProvider, useSample } from './context/SampleContext';
 import { trackPageView } from './analytics';
 // Chat is intentionally hidden from the UI for now — the LLM occasionally
 // over-interpreted data and we don't want to ship conclusions we haven't
@@ -15,11 +16,27 @@ import { trackPageView } from './analytics';
 // re-enabling is a one-line revert below.
 // import ChatPanel from './components/ChatPanel';
 
+const Visualizer4D = lazy(() => import('./components/Visualizer4D'));
+const About = lazy(() => import('./components/About'));
+
 function Explorer() {
+  const { datasetLoading, datasetError, samples4D, retryDatasetLoad } = useSample();
+  const waitingForData = datasetLoading || (samples4D.length === 0 && !datasetError);
+
+  if (datasetError && samples4D.length === 0) {
+    return <DatasetLoadingShell error={datasetError} onRetry={retryDatasetLoad} />;
+  }
+
+  if (waitingForData) {
+    // Seamless continuation of the pre-JS HTML app-shell.
+    return <AppShellSkeleton />;
+  }
+
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-black">
       <Header />
       <GlobalKeyboardShortcuts />
+      <ExplorationWarmup />
 
       <main className="flex-1 flex flex-col min-h-0 overflow-hidden">
         <div className="flex-1 flex min-h-0 overflow-hidden">
@@ -28,7 +45,9 @@ function Explorer() {
             className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden"
             aria-label="Visualization"
           >
-            <Visualizer4D />
+            <Suspense fallback={<DatasetLoadingShell compact />}>
+              <Visualizer4D />
+            </Suspense>
           </section>
 
           {/* Right: independently scrollable sample panel */}
@@ -64,10 +83,12 @@ function App() {
       <Router>
         <RouteTracker />
         <SampleProvider>
-          <Routes>
-            <Route path="/" element={<Explorer />} />
-            <Route path="/about" element={<About />} />
-          </Routes>
+          <Suspense fallback={<AppShellSkeleton />}>
+            <Routes>
+              <Route path="/" element={<Explorer />} />
+              <Route path="/about" element={<About />} />
+            </Routes>
+          </Suspense>
         </SampleProvider>
       </Router>
     </MobileBlocker>

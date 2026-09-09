@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useMemo, ReactNode } from 'react';
 import { Sample, ColoringMode, VisualizerOptions, RenderingMode, LabelVisibility, PerformanceMode, SemanticState, AxisStyle, DatasetVersion } from '../types';
-import { samples2D, samples4D as samples4DV1, loadSamples4DV3 } from '../data/sampleData';
+import { loadSamples4DV3 } from '../data/sampleData';
 
 // Persist the user's preferred 3D axis representation across reloads so the
 // A/B comparison sticks. Default = 'cursor' (no axis geometry; a smooth
@@ -32,12 +32,13 @@ const initialSemanticState: SemanticState = {
 };
 
 interface SampleContextType {
-  samples2D: Sample[];
   samples4D: Sample[];
-  /** Active 4D dataset version. v1 is bundled; v3 is fetched on first use. */
+  /** Active 4D dataset version (UI is v3-only). */
   datasetVersion: DatasetVersion;
-  /** True while v3 is being fetched after a toggle. */
+  /** True while the v3 point data is being fetched/parsed (never gated on videos). */
   datasetLoading: boolean;
+  /** Set when the v3 fetch fails. */
+  datasetError: string | null;
   setDatasetVersion: (v: DatasetVersion) => void;
   selectedSample: Sample | null;
   selectedPointIndex: number | null;
@@ -63,7 +64,6 @@ interface SampleContextType {
   setPerformanceMode: (mode: PerformanceMode) => void;
   setSemanticState: (prev: SemanticState | ((s: SemanticState) => SemanticState)) => void;
   setFeatureValues: (feature: string, values: number[]) => void;
-  filteredSamples2D: Sample[];
   filteredSamples4D: Sample[];
   selectedDrugs: Set<string>;
   availableDrugs: string[];
@@ -71,12 +71,13 @@ interface SampleContextType {
   toggleDrugFilter: (drug: string) => void;
   selectAllDrugFilter: () => void;
   clearDrugFilter: () => void;
+  retryDatasetLoad: () => void;
 }
 
 const defaultOptions: VisualizerOptions = {
   coloringMode: 'treatment',
-  pointSize: 1.5,
-  backgroundColor: '#ffffff', // White background as requested
+  pointSize: 1.0,
+  backgroundColor: '#ffffff',
   renderingMode: 'instanced',
   labelVisibility: 'selected',
   showAxes: true,
@@ -89,7 +90,6 @@ const SampleContext = createContext<SampleContextType | null>(null);
 
 // Persisted key kept for migration; public UI no longer offers v1 (see `DatasetToggle.tsx`).
 const DATASET_STORAGE_KEY = 'mitospace.datasetVersion';
-const initialDatasetVersion: DatasetVersion = 'v3';
 
 export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   // Normalize stored preference now that only v3 is exposed in the UI.
@@ -105,10 +105,7 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDrugs, setSelectedDrugs] = useState<Set<string>>(new Set());
-  const [visualizerOptions, setVisualizerOptions] = useState<VisualizerOptions>(() => ({
-    ...defaultOptions,
-    pointSize: initialDatasetVersion === 'v3' ? 1.0 : 1.5,
-  }));
+  const [visualizerOptions, setVisualizerOptions] = useState<VisualizerOptions>(defaultOptions);
   const [semanticState, setSemanticState] = useState<SemanticState>(initialSemanticState);
   // Persist `axisStyle` changes to localStorage so the A/B preference survives
   // reloads (only the field we care about — avoids churning storage on every
@@ -128,22 +125,27 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setFeatureValuesState(prev => ({ ...prev, [feature]: values }));
   }, []);
 
-  // Dataset version + 4D samples (v1 is bundled; v3 fetched on demand)
-  const [datasetVersion, setDatasetVersionState] = useState<DatasetVersion>(initialDatasetVersion);
-  const [samples4DV3, setSamples4DV3] = useState<Sample[] | null>(null);
-  const [datasetLoading, setDatasetLoading] = useState(false);
+  const [datasetVersion] = useState<DatasetVersion>('v3');
+  const [samples4D, setSamples4D] = useState<Sample[]>([]);
+  const [datasetLoading, setDatasetLoading] = useState(true);
+  const [datasetError, setDatasetError] = useState<string | null>(null);
+  const [loadGeneration, setLoadGeneration] = useState(0);
 
   useEffect(() => {
-    if (datasetVersion !== 'v3') return;
-    if (samples4DV3) return;
     let cancelled = false;
     setDatasetLoading(true);
+    setDatasetError(null);
     loadSamples4DV3()
       .then((pts) => {
-        if (!cancelled) setSamples4DV3(pts);
+        if (cancelled) return;
+        setSamples4D(pts);
+        setDatasetError(null);
       })
       .catch((err) => {
         console.error('[dataset] failed to load v3 samples', err);
+        if (!cancelled) {
+          setDatasetError(err instanceof Error ? err.message : 'Failed to load dataset');
+        }
       })
       .finally(() => {
         if (!cancelled) setDatasetLoading(false);
@@ -151,85 +153,62 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     return () => {
       cancelled = true;
     };
-  }, [datasetVersion, samples4DV3]);
+  }, [loadGeneration]);
 
-  const setDatasetVersion = useCallback((v: DatasetVersion) => {
-    setDatasetVersionState(v);
+  const retryDatasetLoad = useCallback(() => {
+    setLoadGeneration((g) => g + 1);
+  }, []);
+
+  // Kept for API callers / future toggles; UI is locked to v3.
+  const setDatasetVersion = useCallback((_v: DatasetVersion) => {
     try {
-      window.localStorage?.setItem(DATASET_STORAGE_KEY, v);
+      window.localStorage?.setItem(DATASET_STORAGE_KEY, 'v3');
     } catch {
       // ignore
     }
-    // Per-dataset defaults (camera is handled in Visualizer4D)
-    setVisualizerOptions((prev) => ({
-      ...prev,
-      pointSize: v === 'v3' ? 1.0 : 1.5,
-    }));
-    // When switching datasets, drop point-specific state (indices won't align)
-    setSelectedSample(null);
-    setSelectedPointIndex(null);
-    setSemanticState((prev) => ({
-      ...initialSemanticState,
-      // Preserve the user's chosen axis-style across dataset switches.
-      axisStyle: prev.axisStyle ?? initialSemanticState.axisStyle,
-    }));
-    setFeatureValuesState({});
-    setApiEmbeddingCount(null);
   }, []);
 
-  const samples4D: Sample[] = datasetVersion === 'v3' ? (samples4DV3 ?? []) : samples4DV1;
-  
   const setColoringMode = (mode: ColoringMode) => {
     setVisualizerOptions(prev => ({ ...prev, coloringMode: mode }));
   };
-  
+
   const setPointSize = (size: number) => {
     setVisualizerOptions(prev => ({ ...prev, pointSize: size }));
   };
-  
+
   const setBackgroundColor = (color: string) => {
     setVisualizerOptions(prev => ({ ...prev, backgroundColor: color }));
   };
-  
+
   const setRenderingMode = (mode: RenderingMode) => {
     setVisualizerOptions(prev => ({ ...prev, renderingMode: mode }));
   };
-  
+
   const setLabelVisibility = (visibility: LabelVisibility) => {
     setVisualizerOptions(prev => ({ ...prev, labelVisibility: visibility }));
   };
-  
+
   const setShowAxes = (show: boolean) => {
     setVisualizerOptions(prev => ({ ...prev, showAxes: show }));
   };
-  
+
   const setShowGrid = (show: boolean) => {
     setVisualizerOptions(prev => ({ ...prev, showGrid: show }));
   };
-  
+
   const setHighlightSelected = (highlight: boolean) => {
     setVisualizerOptions(prev => ({ ...prev, highlightSelected: highlight }));
   };
-  
+
   const setPerformanceMode = (mode: PerformanceMode) => {
     setVisualizerOptions(prev => ({ ...prev, performance: mode }));
   };
 
   const availableDrugs = useMemo(() => {
     const drugs = new Set<string>();
-    // v3 4D points use different drug slugs than the bundled v1 `points2d.json`
-    // (e.g. correct "latrunculinb" in v1 vs legacy typo "lantrunculinb" in v3).
-    // Merging both into one filter list produced two checkboxes for the same
-    // compound; picking the v1-only slug hid every v3 point. Only list drugs
-    // present in the active dataset's 4D samples when on v3.
-    if (datasetVersion === 'v3') {
-      samples4D.forEach((s) => drugs.add(s.treatment.drug));
-    } else {
-      samples2D.forEach((s) => drugs.add(s.treatment.drug));
-      samples4D.forEach((s) => drugs.add(s.treatment.drug));
-    }
+    samples4D.forEach((s) => drugs.add(s.treatment.drug));
     return Array.from(drugs).sort((a, b) => a.localeCompare(b));
-  }, [datasetVersion, samples4D]);
+  }, [samples4D]);
 
   const toggleDrugFilter = useCallback((drug: string) => {
     setSelectedDrugs(prev => {
@@ -270,27 +249,24 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     return result;
   }, [selectedDrugs, searchQuery]);
 
-  const filteredSamples2D = useMemo(() => filterSamples(samples2D), [filterSamples]);
   const filteredSamples4D = useMemo(() => filterSamples(samples4D), [filterSamples, samples4D]);
 
   useEffect(() => {
     if (!selectedSample) return;
-    const inFiltered =
-      filteredSamples2D.some(s => s.id === selectedSample.id) ||
-      filteredSamples4D.some(s => s.id === selectedSample.id);
+    const inFiltered = filteredSamples4D.some(s => s.id === selectedSample.id);
     if (!inFiltered) {
       setSelectedSample(null);
       setSelectedPointIndex(null);
     }
-  }, [filteredSamples2D, filteredSamples4D, selectedSample, setSelectedSample, setSelectedPointIndex]);
+  }, [filteredSamples4D, selectedSample, setSelectedSample, setSelectedPointIndex]);
 
   return (
     <SampleContext.Provider
       value={{
-        samples2D,
         samples4D,
         datasetVersion,
         datasetLoading,
+        datasetError,
         setDatasetVersion,
         selectedSample,
         selectedPointIndex,
@@ -314,7 +290,6 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         setFeatureValues,
         apiEmbeddingCount,
         setApiEmbeddingCount,
-        filteredSamples2D,
         filteredSamples4D,
         selectedDrugs,
         availableDrugs,
@@ -322,6 +297,7 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         toggleDrugFilter,
         selectAllDrugFilter,
         clearDrugFilter,
+        retryDatasetLoad,
       }}
     >
       {children}
