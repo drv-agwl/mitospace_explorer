@@ -43,7 +43,18 @@ export interface PointsErrorMsg {
 self.onmessage = async (e: MessageEvent<RequestMsg>) => {
   const { url } = e.data;
   try {
-    const res = await fetch(url, { cache: 'force-cache' });
+    // Prefer absolute URLs from the main thread. If a relative path slips
+    // through, try resolving against the worker's own location (works for
+    // same-origin classic workers; blob workers still need an absolute URL).
+    let fetchUrl = url;
+    if (url && !/^https?:\/\//i.test(url)) {
+      try {
+        fetchUrl = new URL(url, self.location.href).href;
+      } catch {
+        fetchUrl = url;
+      }
+    }
+    const res = await fetch(fetchUrl, { cache: 'force-cache' });
     if (!res.ok) {
       throw new Error(`Failed to load v3 dataset (${res.status} ${res.statusText})`);
     }

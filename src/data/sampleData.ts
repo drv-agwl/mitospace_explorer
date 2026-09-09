@@ -30,7 +30,13 @@ function normalizeV3Sample(s: Sample): Sample {
 function datasetUrl(): string {
   // Use Vite's BASE_URL so it works under any deploy path.
   const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
-  return `${base}/data/points4d_v3.json`;
+  const path = `${base}/data/points4d_v3.json`;
+  // Workers (esp. Vite blob: workers in production) have no document base URL,
+  // so fetch('/data/...') throws "Failed to parse URL". Always absolute.
+  if (typeof window !== 'undefined' && window.location?.href) {
+    return new URL(path, window.location.href).href;
+  }
+  return path;
 }
 
 /** Main-thread fallback when Web Workers are unavailable. */
@@ -65,7 +71,10 @@ function fetchSamples4DV3ViaWorker(): Promise<Sample[]> {
       if (msg?.ok) {
         resolve(msg.samples as Sample[]);
       } else {
-        reject(new Error(msg?.error ?? 'Failed to load dataset'));
+        // Worker fetch/parse failed — fall back to main thread rather than
+        // hard-failing (covers edge cases like opaque worker origins).
+        console.warn('[dataset] worker failed, falling back to main thread:', msg?.error);
+        fetchSamples4DV3OnMain().then(resolve, reject);
       }
     };
     worker.onerror = () => {
