@@ -15,7 +15,7 @@ Schema (per point — kept stable for backward compatibility):
   "phenotype": label name (drug),
   "color":     {r, g, b} from `cmap_label` (0..1),
   "treatment": {"drug": label_name, "dose": "10 nM", "time": "1h"},
-  "images":    ["https://mitospace-website.s3.us-east-2.amazonaws.com/v3/mtg_{i:06d}.mp4"],
+  "images":    ["https://mitospace4d-website.s3.us-east-2.amazonaws.com/v3/mtg_{i:06d}.mp4"],
   "metadata":  {"cellLine": "Cal27", "experimentDate": "2025-03-15",
                 "sampleId": "MS{i}", "quality": 100,
                 "labelMoa": "Antioxidant" (optional)}
@@ -53,7 +53,7 @@ DEFAULT_TIME = "1h"
 DEFAULT_CELL_LINE = "Cal27"
 DEFAULT_EXPERIMENT_DATE = "2025-03-15"
 DEFAULT_QUALITY = 100
-S3_MOVIE_BASE = "https://mitospace-website.s3.us-east-2.amazonaws.com/v3"
+S3_MOVIE_BASE = "https://mitospace4d-website.s3.us-east-2.amazonaws.com/v3"
 
 
 def resolve_source() -> Path:
