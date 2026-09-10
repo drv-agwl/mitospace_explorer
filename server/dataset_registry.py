@@ -402,10 +402,15 @@ def load_v3(parquet_path: Path) -> Dataset:
     wanted = [c for c in wanted if c != "tmrm_last"]
     try:
         import pyarrow.parquet as pq
-        available = set(pq.ParquetFile(parquet_path).schema.names)
+        # Use schema_arrow.names (top-level fields). ParquetFile.schema.names
+        # flattens list children to "element", which dropped embeddings_umap
+        # and made ds.loaded False → 503 on every axis endpoint.
+        available = set(pq.ParquetFile(parquet_path).schema_arrow.names)
         cols = [c for c in wanted if c in available]
+        print(f"[dataset_registry][v3] reading columns: {cols}")
         df = pd.read_parquet(parquet_path, columns=cols or None)
-    except Exception:
+    except Exception as exc:
+        print(f"[dataset_registry][v3] column prune failed ({exc}); reading full parquet")
         df = pd.read_parquet(parquet_path)
     n = len(df)
     print(f"[dataset_registry][v3] rows={n} cols={len(df.columns)}")
