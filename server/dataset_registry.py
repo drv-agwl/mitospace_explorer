@@ -397,45 +397,54 @@ def load_v3(parquet_path: Path) -> Dataset:
         return ds
 
     print(f"[dataset_registry][v3] loading {parquet_path.name} ({parquet_path.stat().st_size / 1e6:.1f} MB)...")
-    df = pd.read_parquet(parquet_path)
+    wanted = ["embeddings_umap", "tmrm_intensities", *V3_AXIS_FEATURES]
+    # tmrm_last is derived; parquet may not have it as a column.
+    wanted = [c for c in wanted if c != "tmrm_last"]
+    try:
+        import pyarrow.parquet as pq
+        available = set(pq.ParquetFile(parquet_path).schema.names)
+        cols = [c for c in wanted if c in available]
+        df = pd.read_parquet(parquet_path, columns=cols or None)
+    except Exception:
+        df = pd.read_parquet(parquet_path)
     n = len(df)
     print(f"[dataset_registry][v3] rows={n} cols={len(df.columns)}")
 
     # 3D UMAP (stored as a list-per-row column)
     if "embeddings_umap" in df.columns:
-        umap_arr = np.array([np.asarray(v, dtype=np.float64) for v in df["embeddings_umap"]])
+        umap_arr = np.array([np.asarray(v, dtype=np.float32) for v in df["embeddings_umap"]])
         if umap_arr.ndim == 2 and umap_arr.shape[1] == 3:
             ds.umap_points = umap_arr
 
-    # Drug + MOA labels for chat queries
-    if "label_names" in df.columns:
-        ds.drug_labels = df["label_names"].to_numpy()
-    if "labels_moa" in df.columns:
-        ds.moa_labels = df["labels_moa"].to_numpy()
-
-    # Carry over every numeric column verbatim — this lets the chat handler use
-    # any of the 80+ statistics. The axis API only fits the curated subset.
-    for col in df.columns:
-        if df[col].dtype.kind in "biufc":  # numeric kinds
-            try:
-                vals = df[col].astype(np.float64)
-                if vals.notna().sum() == 0:
-                    continue
-                # Backfill NaNs with column mean so MLP fitting won't fail
-                vals = vals.fillna(vals.mean())
-                ds.feature_values[col] = vals.values
-            except Exception:
+    # Carry only the semantic-axis features. Copying every numeric column used
+    # to keep ~80 float64 arrays in RAM and blew a 512Mi Render instance.
+    for col in V3_AXIS_FEATURES:
+        if col == "tmrm_last":
+            continue
+        if col not in df.columns:
+            continue
+        try:
+            vals = pd.to_numeric(df[col], errors="coerce")
+            if vals.notna().sum() == 0:
                 continue
+            vals = vals.fillna(vals.mean())
+            ds.feature_values[col] = vals.to_numpy(dtype=np.float32)
+        except Exception:
+            continue
 
     # Synthetic: last-timepoint TMRM intensity (used as Membrane Potential axis)
     if "tmrm_intensities" in df.columns:
         ds.feature_values["tmrm_last"] = np.array(
-            [_array_last(v) for v in df["tmrm_intensities"]], dtype=np.float64
+            [_array_last(v) for v in df["tmrm_intensities"]], dtype=np.float32
         )
     if "morph_intensities" in df.columns:
         ds.feature_values["morph_last"] = np.array(
-            [_array_last(v) for v in df["morph_intensities"]], dtype=np.float64
+            [_array_last(v) for v in df["morph_intensities"]], dtype=np.float32
         )
+
+    del df
+    import gc
+    gc.collect()
 
     print(f"[dataset_registry][v3] loaded {len(ds.feature_values)} numeric features")
 

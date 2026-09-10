@@ -273,13 +273,16 @@ def _project_spatial(
 
 @app.on_event("startup")
 def startup():
-    # ── Load v1 (existing CSV + npy) ──
-    try:
-        v1 = load_v1(DATA)
-        register(v1)
-        print(f"[startup] v1 loaded: umap={'yes' if v1.umap_points is not None else 'no'}  features={list(v1.feature_values.keys())}")
-    except Exception as e:
-        print(f"[startup] v1 load failed: {e}")
+    # ── v1 is not used by the public UI (v3-only). Skip it on small hosts.
+    if os.environ.get("LOAD_V1", "").strip() in {"1", "true", "True", "yes"}:
+        try:
+            v1 = load_v1(DATA)
+            register(v1)
+            print(f"[startup] v1 loaded: umap={'yes' if v1.umap_points is not None else 'no'}  features={list(v1.feature_values.keys())}")
+        except Exception as e:
+            print(f"[startup] v1 load failed: {e}")
+    else:
+        print("[startup] skipping v1 (set LOAD_V1=1 to enable)")
 
     # ── Load v3 (slim parquet) ──
     try:
@@ -289,30 +292,32 @@ def startup():
     except Exception as e:
         print(f"[startup] v3 load failed: {e}")
 
-    # ── Chat: load both v1 (legacy CSV) and v3 (parquet) so the chat endpoint
-    #    can route per-request to the dataset the user is currently exploring.
-    try:
-        if V3_PARQUET.exists():
-            metadata_json = ROOT / "public" / "data" / "points4d_v3.json"
-            load_data(
-                str(V3_PARQUET),
-                str(metadata_json) if metadata_json.exists() else None,
-                version="v3",
-            )
-    except Exception as e:
-        log.warning("startup.chat_v3_failed", extra={"error": str(e)})
+    # Chat is hidden in the UI and re-reads the same parquet + a 20MB JSON,
+    # which OOMs a 512Mi Render instance. Opt in with ENABLE_CHAT=1.
+    enable_chat = os.environ.get("ENABLE_CHAT", "").strip() in {"1", "true", "True", "yes"}
+    if enable_chat:
+        try:
+            if V3_PARQUET.exists():
+                load_data(
+                    str(V3_PARQUET),
+                    None,  # derive drug labels from parquet; skip 20MB JSON
+                    version="v3",
+                )
+        except Exception as e:
+            log.warning("startup.chat_v3_failed", extra={"error": str(e)})
 
-    try:
-        feature_csv = DATA / "mitotnt_features.csv"
-        metadata_json = ROOT / "src" / "data" / "points4d.json"
-        if feature_csv.exists():
-            load_data(
-                str(feature_csv),
-                str(metadata_json) if metadata_json.exists() else None,
-                version="v1",
-            )
-    except Exception as e:
-        log.warning("startup.chat_v1_failed", extra={"error": str(e)})
+        try:
+            feature_csv = DATA / "mitotnt_features.csv"
+            if feature_csv.exists() and os.environ.get("LOAD_V1", "").strip() in {"1", "true", "True", "yes"}:
+                load_data(
+                    str(feature_csv),
+                    None,
+                    version="v1",
+                )
+        except Exception as e:
+            log.warning("startup.chat_v1_failed", extra={"error": str(e)})
+    else:
+        print("[startup] skipping chat datasets (set ENABLE_CHAT=1 to enable)")
 
     # ── LLM ──
     try:
