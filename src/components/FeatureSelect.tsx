@@ -18,6 +18,7 @@ interface FeatureSelectProps {
   value: string | null;
   onChange: (apiName: string | null) => void;
   disabled?: boolean;
+  loading?: boolean;
   placeholder?: string;
 }
 
@@ -35,6 +36,7 @@ const FeatureSelect: React.FC<FeatureSelectProps> = ({
   value,
   onChange,
   disabled = false,
+  loading = false,
   placeholder = 'Select feature',
 }) => {
   const [open, setOpen] = useState(false);
@@ -118,6 +120,7 @@ const FeatureSelect: React.FC<FeatureSelectProps> = ({
         type="button"
         onClick={() => !disabled && setOpen((o) => !o)}
         disabled={disabled}
+        aria-busy={loading}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={selectedLabel || placeholder}
@@ -129,17 +132,26 @@ const FeatureSelect: React.FC<FeatureSelectProps> = ({
             ? 'opacity-60 cursor-not-allowed border-white/10 bg-white/5 text-white/60'
             : open
               ? 'border-white/30 bg-white/10 text-white ring-1 ring-white/20'
-              : 'border-white/15 bg-white/5 text-white hover:bg-white/8 hover:border-white/25'
+              : loading
+                ? 'border-white/25 bg-white/[0.08] text-white'
+                : 'border-white/15 bg-white/5 text-white hover:bg-white/8 hover:border-white/25'
           }
         `}
       >
         <span className={`flex-1 min-w-0 truncate text-left ${selectedLabel ? 'text-white' : 'text-white/50'}`}>
           {selectedLabel || placeholder}
         </span>
-        <ChevronDown
-          size={16}
-          className={`shrink-0 text-white/50 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
-        />
+        {loading ? (
+          <span
+            className="shrink-0 h-3.5 w-3.5 rounded-full border-2 border-white/25 border-t-white animate-spin motion-reduce:animate-none"
+            aria-hidden="true"
+          />
+        ) : (
+          <ChevronDown
+            size={16}
+            className={`shrink-0 text-white/50 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
+          />
+        )}
       </button>
 
       {open && (

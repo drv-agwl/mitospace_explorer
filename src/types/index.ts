@@ -64,6 +64,8 @@ export interface SemanticState {
   /** 1 = on manifold, <1 when extrapolating (for confidence indicator) */
   projectedConfidence: number | null;
   featureRange: { min: number; max: number } | null;
+  /** Feature name that `featureRange` was computed for (avoids cross-feature flashes). */
+  featureRangeFeature?: string | null;
   /** Show 5 samples uniformly spread along the axis */
   axisSamplesVisible?: boolean;
   /** Active 3D representation of the semantic axis. */

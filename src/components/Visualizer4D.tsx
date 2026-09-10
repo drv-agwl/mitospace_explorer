@@ -30,6 +30,7 @@ import {
   type CursorPath,
 } from '../utils/axisCursorPath';
 import type { AxisStyle } from '../types';
+import { getFeatureDisplayLabel } from '../constants/features';
 
 const SCALE_FACTOR = 4;
 
@@ -150,6 +151,7 @@ const Visualizer4D: React.FC = () => {
     visualizerOptions,
     setShowGrid,
     semanticState,
+    coloringFeature,
     featureValues,
     setSemanticState,
     apiEmbeddingCount,
@@ -158,6 +160,15 @@ const Visualizer4D: React.FC = () => {
     selectedDrugs,
     clearDrugFilter,
   } = useSample();
+
+  const axisColorPending = Boolean(
+    semanticState.advancedMode &&
+      semanticState.selectedFeature &&
+      coloringFeature !== semanticState.selectedFeature
+  );
+  const pendingFeatureLabel = semanticState.selectedFeature
+    ? getFeatureDisplayLabel(semanticState.selectedFeature, datasetVersion)
+    : null;
 
   // True when active filters (condition/search) exclude every cell. We show a
   // helpful overlay + reset instead of a silent empty canvas.
@@ -633,23 +644,24 @@ const Visualizer4D: React.FC = () => {
     if (grid2Ref.current) grid2Ref.current.visible = show;
   }, [visualizerOptions.showGrid]);
 
-  const useFeatureColoring =
+  const useFeatureColoring = Boolean(
     semanticState.advancedMode &&
-    semanticState.selectedFeature &&
-    featureValues[semanticState.selectedFeature]?.length &&
-    semanticState.featureRange;
+      coloringFeature &&
+      featureValues[coloringFeature]?.length &&
+      semanticState.featureRange
+  );
 
   // Per-feature plasma tuning (gamma + contrast) computed from the selected
   // feature's distribution and cached by array reference.
   const plasmaParams = React.useMemo(() => {
     if (!useFeatureColoring) return { gamma: undefined, contrast: undefined } as const;
-    const fname = semanticState.selectedFeature;
+    const fname = coloringFeature;
     if (!fname) return { gamma: undefined, contrast: undefined } as const;
     const fv = featureValues[fname];
     if (!fv) return { gamma: undefined, contrast: undefined } as const;
     const p = estimatePlasmaParams(fv);
     return { gamma: p.gamma, contrast: p.contrast } as const;
-  }, [useFeatureColoring, semanticState.selectedFeature, featureValues]);
+  }, [useFeatureColoring, coloringFeature, featureValues]);
 
   // ─── New axis-style state (A/B switch) ────────────────────────────────
   // We precompute quantile beads, endpoint anchors and a dense cursor path
@@ -683,7 +695,7 @@ const Visualizer4D: React.FC = () => {
    */
   const quantileBeads = React.useMemo<AxisBead[]>(() => {
     if (!useFeatureColoring) return [];
-    const fname = semanticState.selectedFeature;
+    const fname = coloringFeature;
     if (!fname) return [];
     const fv = featureValues[fname];
     const fr = semanticState.featureRange;
@@ -691,7 +703,7 @@ const Visualizer4D: React.FC = () => {
     return computeQuantileBeads(filteredSamples4D, fv, filteredEmbeddingIndexOf, fr, 7, 24);
   }, [
     useFeatureColoring,
-    semanticState.selectedFeature,
+    coloringFeature,
     semanticState.featureRange,
     featureValues,
     filteredSamples4D,
@@ -703,14 +715,14 @@ const Visualizer4D: React.FC = () => {
    */
   const endpointAnchors = React.useMemo<EndpointAnchors | null>(() => {
     if (!useFeatureColoring) return null;
-    const fname = semanticState.selectedFeature;
+    const fname = coloringFeature;
     if (!fname) return null;
     const fv = featureValues[fname];
     if (!fv) return null;
     return computeEndpointAnchors(filteredSamples4D, fv, filteredEmbeddingIndexOf, 0.05);
   }, [
     useFeatureColoring,
-    semanticState.selectedFeature,
+    coloringFeature,
     featureValues,
     filteredSamples4D,
     filteredEmbeddingIndexOf,
@@ -733,7 +745,7 @@ const Visualizer4D: React.FC = () => {
    */
   const cursorPath = React.useMemo<CursorPath | null>(() => {
     if (!useFeatureColoring) return null;
-    const fname = semanticState.selectedFeature;
+    const fname = coloringFeature;
     if (!fname) return null;
     const fv = featureValues[fname];
     const fr = semanticState.featureRange;
@@ -760,7 +772,7 @@ const Visualizer4D: React.FC = () => {
   }, [
     axisStyle,
     useFeatureColoring,
-    semanticState.selectedFeature,
+    coloringFeature,
     semanticState.featureRange,
     featureValues,
     filteredSamples4D,
@@ -1570,7 +1582,7 @@ const Visualizer4D: React.FC = () => {
    */
   const smoothedFeatureValues = React.useMemo<Float32Array | null>(() => {
     if (!useFeatureColoring) return null;
-    const fname = semanticState.selectedFeature;
+    const fname = coloringFeature;
     if (!fname) return null;
     const fvCol = featureValues[fname];
     if (!fvCol || filteredSamples4D.length === 0) return null;
@@ -1583,7 +1595,7 @@ const Visualizer4D: React.FC = () => {
     );
   }, [
     useFeatureColoring,
-    semanticState.selectedFeature,
+    coloringFeature,
     featureValues,
     filteredSamples4D,
     sampleIdToEmbeddingIndex,
@@ -1636,8 +1648,8 @@ const Visualizer4D: React.FC = () => {
     const pointsSize = visualizerOptions.pointSize;
     const fr = semanticState.featureRange;
     const fvCol =
-      useFeatureColoring && semanticState.selectedFeature
-        ? featureValues[semanticState.selectedFeature]
+      useFeatureColoring && coloringFeature
+        ? featureValues[coloringFeature]
         : null;
 
     filteredSamples4D.forEach((sample, i) => {
@@ -1773,7 +1785,7 @@ const Visualizer4D: React.FC = () => {
     visualizerOptions,
     isDarkMode,
     semanticState.advancedMode,
-    semanticState.selectedFeature,
+    coloringFeature,
     semanticState.projectedPosition,
     semanticState.featureRange,
     featureValues,
@@ -1809,10 +1821,10 @@ const Visualizer4D: React.FC = () => {
     }
     targetHighlightPosRef.current = pos.clone();
     const useFeatureHighlight =
-      useFeatureColoring && selectedSample && semanticState.selectedFeature && semanticState.featureRange;
+      useFeatureColoring && selectedSample && coloringFeature && semanticState.featureRange;
     let featureHighlightColor: THREE.Color | null = null;
     if (useFeatureHighlight) {
-      const fvH = featureValues[semanticState.selectedFeature!];
+      const fvH = featureValues[coloringFeature!];
       const ei = sampleIdToEmbeddingIndex.get(selectedSample!.id) ?? -1;
       if (fvH && ei >= 0 && ei < fvH.length) {
         const c = featureToColorPlasmaAdaptive(
@@ -1883,7 +1895,7 @@ const Visualizer4D: React.FC = () => {
     semanticState.semanticSliderValue,
     semanticState.featureRange,
     selectedSample,
-    semanticState.selectedFeature,
+    coloringFeature,
     featureValues,
     useFeatureColoring,
     sampleIdToEmbeddingIndex,
@@ -1984,7 +1996,7 @@ const Visualizer4D: React.FC = () => {
     handleSemanticSliderChange(0, val);
   }, [
     semanticState.advancedMode,
-    semanticState.selectedFeature,
+    coloringFeature,
     semanticState.featureRange,
     semanticState.semanticSliderValue,
     handleSemanticSliderChange,
@@ -2220,6 +2232,24 @@ const Visualizer4D: React.FC = () => {
         {isLoading && (
           <div className="absolute inset-0 flex items-center justify-center bg-ink-900/50">
             <div className="w-10 h-10 border-2 border-mito-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        )}
+
+        {axisColorPending && !isLoading && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 pointer-events-none">
+            <div
+              className="flex items-center gap-2.5 rounded-full border border-white/15 bg-black/75 backdrop-blur-md px-3.5 py-1.5 shadow-[0_8px_24px_rgba(0,0,0,0.45)]"
+              role="status"
+              aria-live="polite"
+            >
+              <span
+                className="h-3.5 w-3.5 rounded-full border-2 border-white/25 border-t-white animate-spin motion-reduce:animate-none"
+                aria-hidden="true"
+              />
+              <span className="text-xs font-medium text-white/90 tracking-wide">
+                Mapping {pendingFeatureLabel || 'feature'}…
+              </span>
+            </div>
           </div>
         )}
 

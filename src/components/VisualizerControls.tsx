@@ -65,6 +65,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({
     setPointSize,
     selectedPointIndex,
     semanticState,
+    coloringFeature,
     setSemanticState,
     setFeatureValues,
     setApiEmbeddingCount,
@@ -140,19 +141,35 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({
 
   useEffect(() => {
     if (type !== '4d' || !selectedFeature) return;
+    const feature = selectedFeature;
+    let cancelled = false;
     setFeatureLoading(true);
     Promise.all([
-      getFeatureValues(selectedFeature, datasetVersion).then((values) => setFeatureValues(selectedFeature, values)).catch(() => {}),
-      getFeatureStats(selectedFeature, datasetVersion)
-        .then((stats) => {
-          setApiConnected(true);
-          setSemanticState((s) => ({
+      getFeatureValues(feature, datasetVersion),
+      getFeatureStats(feature, datasetVersion),
+    ])
+      .then(([values, stats]) => {
+        if (cancelled) return;
+        setFeatureValues(feature, values);
+        setApiConnected(true);
+        setSemanticState((s) => {
+          if (s.selectedFeature !== feature) return s;
+          return {
             ...s,
             featureRange: { min: stats.min, max: stats.max },
-          }));
-        })
-        .catch(() => {}),
-    ]).finally(() => setFeatureLoading(false));
+            featureRangeFeature: feature,
+          };
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setApiConnected(false);
+      })
+      .finally(() => {
+        if (!cancelled) setFeatureLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [type, selectedFeature, datasetVersion, setFeatureValues, setSemanticState]);
 
   const handleSliderChange = (value: number) => {
@@ -194,11 +211,12 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({
   // the cloud's colouring exactly. Re-uses the same estimator that
   // FeatureColorBar / SemanticAxisPreview do.
   const plasmaParams = React.useMemo(() => {
-    if (!selectedFeature) return null;
-    const fv = featureValues[selectedFeature];
+    const fname = coloringFeature ?? selectedFeature;
+    if (!fname) return null;
+    const fv = featureValues[fname];
     if (!fv || fv.length === 0) return null;
     return estimatePlasmaParams(fv);
-  }, [selectedFeature, featureValues]);
+  }, [coloringFeature, selectedFeature, featureValues]);
 
   const plasmaGradient = React.useMemo(
     () => plasmaGradientCss(17, plasmaParams?.gamma, plasmaParams?.contrast, 'to right'),
@@ -407,15 +425,9 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({
                   axisSamplesVisible: true,
                 }));
               }}
-              disabled={featureLoading}
+              loading={featureLoading}
               placeholder="Select feature"
             />
-            {featureLoading && (
-              <div
-                className="ml-2 w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin shrink-0"
-                aria-label="Loading feature"
-              />
-            )}
           </div>
 
           {/* Axis-style segmented control is intentionally hidden. We

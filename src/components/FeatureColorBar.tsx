@@ -19,16 +19,16 @@ interface FeatureColorBarProps {
  * value position on the gradient.
  */
 const FeatureColorBar: React.FC<FeatureColorBarProps> = ({ visible }) => {
-  const { semanticState, datasetVersion, featureValues } = useSample();
+  const { semanticState, coloringFeature, datasetVersion, featureValues } = useSample();
 
   const plasmaParams = React.useMemo(() => {
-    const fname = semanticState.selectedFeature;
+    const fname = coloringFeature;
     if (!fname) return { gamma: undefined, contrast: undefined } as const;
     const fv = featureValues[fname];
     if (!fv) return { gamma: undefined, contrast: undefined } as const;
     const p = estimatePlasmaParams(fv);
     return { gamma: p.gamma, contrast: p.contrast } as const;
-  }, [semanticState.selectedFeature, featureValues]);
+  }, [coloringFeature, featureValues]);
 
   const gradientCss = React.useMemo(
     () => plasmaGradientCss(11, plasmaParams.gamma, plasmaParams.contrast),
@@ -37,7 +37,7 @@ const FeatureColorBar: React.FC<FeatureColorBarProps> = ({ visible }) => {
 
   if (!visible) return null;
 
-  const featureLabel = getFeatureDisplayLabel(semanticState.selectedFeature, datasetVersion);
+  const featureLabel = getFeatureDisplayLabel(coloringFeature, datasetVersion);
   const range = semanticState.featureRange;
   const sliderValue = typeof semanticState.semanticSliderValue === 'number'
     ? semanticState.semanticSliderValue

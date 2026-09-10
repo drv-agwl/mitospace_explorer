@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useEffect, useMemo, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef, ReactNode } from 'react';
 import { Sample, ColoringMode, VisualizerOptions, RenderingMode, LabelVisibility, PerformanceMode, SemanticState, AxisStyle, DatasetVersion } from '../types';
 import { loadSamples4DV3 } from '../data/sampleData';
 
@@ -28,6 +28,7 @@ const initialSemanticState: SemanticState = {
   projectedPosition: null,
   projectedConfidence: null,
   featureRange: null,
+  featureRangeFeature: null,
   axisStyle: initialAxisStyle,
 };
 
@@ -45,6 +46,8 @@ interface SampleContextType {
   searchQuery: string;
   visualizerOptions: VisualizerOptions;
   semanticState: SemanticState;
+  /** Feature whose plasma is currently painted (holds previous while a switch loads). */
+  coloringFeature: string | null;
   /** Feature values by feature name (e.g. "Fragment Length") for coloring; index-aligned with samples. */
   featureValues: Record<string, number[]>;
   /** Max valid embedding index from API (0 to apiEmbeddingCount - 1). */
@@ -251,6 +254,27 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
   const filteredSamples4D = useMemo(() => filterSamples(samples4D), [filterSamples, samples4D]);
 
+  // Last feature that had both values + a matching range. While a switch is
+  // in-flight we keep painting this so the cloud never drops to drug colors.
+  const lastReadyFeatureRef = useRef<string | null>(null);
+  const selectedFeatureReady = Boolean(
+    semanticState.advancedMode &&
+      semanticState.selectedFeature &&
+      featureValues[semanticState.selectedFeature]?.length &&
+      semanticState.featureRange &&
+      semanticState.featureRangeFeature === semanticState.selectedFeature
+  );
+  if (selectedFeatureReady && semanticState.selectedFeature) {
+    lastReadyFeatureRef.current = semanticState.selectedFeature;
+  }
+  const coloringFeature = (() => {
+    if (!semanticState.advancedMode) return null;
+    if (selectedFeatureReady) return semanticState.selectedFeature;
+    const held = lastReadyFeatureRef.current;
+    if (held && featureValues[held]?.length) return held;
+    return null;
+  })();
+
   useEffect(() => {
     if (!selectedSample) return;
     const inFiltered = filteredSamples4D.some(s => s.id === selectedSample.id);
@@ -273,6 +297,7 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         searchQuery,
         visualizerOptions,
         semanticState,
+        coloringFeature,
         featureValues,
         setSelectedSample,
         setSelectedPointIndex,
