@@ -14,6 +14,12 @@ import {
 } from 'lucide-react';
 import Header from './Header';
 import Footer from './Footer';
+import {
+  RESEARCH_LINKS,
+  PaperIcon,
+  GitHubIcon,
+  HuggingFaceIcon,
+} from './ResearchLinks';
 
 // Match VisualizerControls / explorer chrome: h-9, rounded-lg, same border weights.
 const PILL_BASE =
@@ -69,6 +75,16 @@ const About: React.FC = () => {
                 >
                   Visit lab website
                   <ExternalLink size={14} className="opacity-70" />
+                </a>
+                <a
+                  href={RESEARCH_LINKS.paper.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={`${PILL_BASE} ${PILL_IDLE}`}
+                >
+                  <PaperIcon size={16} />
+                  Paper
+                  <span className="text-white/40 font-normal">Cell</span>
                 </a>
               </div>
             </header>
@@ -205,6 +221,51 @@ const About: React.FC = () => {
                     ))}
                   </ul>
                 </div>
+              </div>
+            </section>
+
+            <div className="border-t border-white/[0.08] mb-16 lg:mb-20" aria-hidden />
+
+            {/* Paper, code, model — citation + reproducibility, not buried in the footer. */}
+            <section className="mb-16 lg:mb-20" aria-labelledby="about-resources">
+              <h2
+                id="about-resources"
+                className="text-xs font-semibold uppercase tracking-[0.18em] text-white/40 mb-5"
+              >
+                Paper, code & model
+              </h2>
+              <div className="grid sm:grid-cols-3 gap-3">
+                {(
+                  [
+                    { key: 'paper' as const, Icon: PaperIcon },
+                    { key: 'github' as const, Icon: GitHubIcon },
+                    { key: 'huggingface' as const, Icon: HuggingFaceIcon },
+                  ]
+                ).map(({ key, Icon }) => {
+                  const link = RESEARCH_LINKS[key];
+                  return (
+                    <a
+                      key={key}
+                      href={link.href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={`${PANEL} p-5 group hover:border-white/[0.16] hover:bg-white/[0.055] transition-colors`}
+                    >
+                      <div className="w-11 h-11 rounded-xl bg-white/[0.06] border border-white/[0.08] flex items-center justify-center mb-3 text-white/90">
+                        <Icon size={key === 'huggingface' ? 26 : 22} />
+                      </div>
+                      <h3 className="text-sm font-semibold text-white mb-1 flex items-center gap-1.5">
+                        {link.label}
+                        <span className="text-xs font-normal text-white/40">{link.hint}</span>
+                        <ExternalLink
+                          size={12}
+                          className="ml-auto text-white/30 group-hover:text-white/55 transition-colors"
+                        />
+                      </h3>
+                      <p className="text-sm text-white/55 leading-relaxed">{link.description}</p>
+                    </a>
+                  );
+                })}
               </div>
             </section>
 

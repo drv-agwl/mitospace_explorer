@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import MitoSpaceLogo from './MitoSpaceLogo';
+import { HeaderResearchNav } from './ResearchLinks';
 
 const Header: React.FC = () => {
   const location = useLocation();
@@ -24,10 +25,10 @@ const Header: React.FC = () => {
             </div>
           </Link>
 
-          <nav className="flex items-center gap-2 shrink-0">
+          <nav className="flex items-center gap-1 shrink-0">
             <Link
               to="/about"
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              className={`inline-flex items-center h-11 px-4 rounded-xl text-sm font-medium transition-colors ${
                 isAbout ? 'bg-white/10 text-white' : 'text-white/60 hover:text-white hover:bg-white/[0.06]'
               }`}
             >
@@ -37,10 +38,11 @@ const Header: React.FC = () => {
               href="https://www.schoeneberglab.org/"
               target="_blank"
               rel="noopener noreferrer"
-              className="px-4 py-2 rounded-lg text-sm font-medium text-white/60 hover:text-white hover:bg-white/[0.06] transition-colors"
+              className="inline-flex items-center h-11 px-4 rounded-xl text-sm font-medium text-white/60 hover:text-white hover:bg-white/[0.06] transition-colors"
             >
               Lab
             </a>
+            <HeaderResearchNav />
           </nav>
         </div>
       </div>

@@ -2,6 +2,7 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { ExternalLink } from 'lucide-react';
 import MitoSpaceLogo from './MitoSpaceLogo';
+import { FooterResearchLinks } from './ResearchLinks';
 
 const Footer: React.FC = () => {
   return (
@@ -14,7 +15,8 @@ const Footer: React.FC = () => {
             </div>
             <span className="text-sm text-white/45">MitoSpace Explorer · Schöneberg Lab</span>
           </div>
-          <div className="flex items-center gap-6 text-sm text-white/45">
+          <div className="flex items-center gap-5 text-sm text-white/45">
+            <FooterResearchLinks />
             <Link to="/about" className="hover:text-white/80 transition-colors">
               About
             </Link>
