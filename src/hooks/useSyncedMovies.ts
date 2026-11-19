@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-/** Every v3 cell movie has 49 frames at 10 frames per second. */
+/** Playback rate of the encoded mp4. The file has more pictures than recorded frames. */
 export const MOVIE_FPS = 10;
+/** Volumes acquired on the lattice light-sheet microscope. The mp4 plays these back at MOVIE_FPS. */
+export const RECORDED_FRAMES = 20;
 const DEFAULT_FRAME_COUNT = 49;
 /** Start together once every movie can play, or after this long with the ones that can. */
 const START_GATE_MS = 2500;

@@ -9,7 +9,7 @@ import { rgbCss } from '../utils/colorUtils';
 import { prefersReducedMotion } from '../utils/motion';
 import { largePosterForId, usePosterManifest } from '../utils/posterManifest';
 import { getCellFeatures } from '../api/client';
-import { useSyncedMovies, type SyncedMovies } from '../hooks/useSyncedMovies';
+import { MOVIE_FPS, RECORDED_FRAMES, useSyncedMovies, type SyncedMovies } from '../hooks/useSyncedMovies';
 import { trackEvent } from '../analytics';
 
 type Measurement = { value: number | null; percentile: number | null };
@@ -147,11 +147,17 @@ const Transport: React.FC<{ sync: SyncedMovies }> = ({ sync }) => {
         value={frame}
         onChange={(e) => sync.showFrame(Number(e.target.value))}
         aria-label="Frame"
-        aria-valuetext={`Frame ${frame + 1} of ${sync.frameCount}`}
+        aria-valuetext={`Frame ${frame + 1} of ${sync.frameCount}. ${RECORDED_FRAMES} frames recorded on the lattice light-sheet microscope, played back here at ${MOVIE_FPS} frames per second.`}
         className="mx-2 w-full max-w-md cursor-pointer accent-white"
       />
-      <span className="shrink-0 text-xs text-white/65 tabular-nums">
-        Frame {frame + 1} of {sync.frameCount}
+      <span
+        className="shrink-0 text-xs leading-tight text-white/65 tabular-nums"
+        title={`Recorded as ${RECORDED_FRAMES} frames on the lattice light-sheet microscope. Playback here is ${MOVIE_FPS} frames per second, so this file has more pictures than the ${RECORDED_FRAMES} that were acquired.`}
+      >
+        <span className="block">Frame {frame + 1} of {sync.frameCount}</span>
+        <span className="block text-white/40">
+          {RECORDED_FRAMES} LLSM frames, played back at {MOVIE_FPS} fps
+        </span>
       </span>
       <p className="ml-auto hidden shrink-0 text-[11px] text-white/40 xl:block">
         All movies show the same frame · Space plays or pauses · ← → step
