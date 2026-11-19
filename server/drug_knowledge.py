@@ -68,7 +68,7 @@ DRUG_KB: Dict[str, DrugFact] = {
         expected_phenotype="Strong Δψm loss, fragmentation, high mitochondrial ROS.",
     ),
     "azide": DrugFact(
-        display_name="Sodium azide",
+        display_name="Azide",
         pharm_class="ETC Complex IV inhibitor",
         target="Cytochrome c oxidase (Complex IV)",
         mechanism="Binds the heme a3 site of Complex IV, blocking O2 reduction and collapsing the proton-motive force.",
@@ -89,7 +89,7 @@ DRUG_KB: Dict[str, DrugFact] = {
         expected_phenotype="Near-complete Δψm collapse, fragmentation, increased fission.",
     ),
     "dnp": DrugFact(
-        display_name="2,4-DNP",
+        display_name="DNP",
         pharm_class="Protonophore / uncoupler",
         target="Inner mitochondrial membrane (proton carrier)",
         mechanism="Weak-acid protonophore that uncouples respiration from ATP synthesis, lowering Δψm.",
