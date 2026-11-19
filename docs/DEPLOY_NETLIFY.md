@@ -239,10 +239,13 @@ Sent to Umami, GA4 and Clarity:
 |-------|------|-----------|
 | `explorer_ready` | `ms` | How long the map took to appear (once per page load) |
 | `map_interact` | | The visitor rotated, zoomed or panned the map (once per page load) |
-| `select_cell` | `source`, `condition`, `cell` | Which cells and conditions people open, and from where (map, strip, axis strip) |
+| `select_cell` | `source`, `condition`, `cell` | Which cells and conditions people open, and from where (map, strip, axis strip, comparison tray or view) |
 | `semantic_axis`, `select_feature`, `filter_conditions` | feature or condition | Which analyses people use |
-| `open_view_link` | `cell`, `feature`, `conditions` | Someone opened a shared link to a view |
-| `copy_link`, `share_link`, `copy_text` | | Sharing and citing |
+| `compare_add`, `compare_remove` | `source`, `cells` | Cells added to or removed from the comparison, and how many it now holds. `source`: `map` (Shift-click), `pick` (click while picking), `strip`, `panel`, `tray`, `view` |
+| `compare_pick` | `source` | Picking mode turned on: `toolbar` (Compare cells), `tray` (Add cells), `view` (Add cells), `key` (C) |
+| `compare_open`, `compare_clear` | `cells`, `conditions` | Comparisons opened, with how many cells and distinct conditions |
+| `open_view_link` | `cell`, `feature`, `conditions`, `compare` | Someone opened a shared link to a view or a comparison |
+| `copy_link`, `share_link`, `copy_text` | `where` | Sharing and citing (`where: compare` for a comparison link) |
 | `about_section` | `section` | How far people read the About page |
 | `cta_click` | `where` | Which "Open the explorer" button was used |
 | `outbound_click` | `host`, `path` | Clicks to the paper, code, model and lab |
@@ -269,21 +272,44 @@ Each address is looked up at most once a day, and lookups pause if the quota run
 ### Alerts and a spreadsheet
 
 - **`VISIT_ALERT_WEBHOOK_URL`** (Render): a Slack incoming-webhook URL (Discord and Google Chat webhooks work too). It gets one message when a notable visit starts (a named organization, a personal link or a campaign) and a summary when the visitor leaves.
-- **`VISIT_LOG_WEBHOOK_URL`** (Render): gets every visit as JSON, `{"text": …, "visit": {…}}`. To collect them in a Google Sheet:
+- **`VISIT_LOG_WEBHOOK_URL`** (Render): gets every visit, as JSON `{"text": …, "visit": {…}}` (or as a plain message when it is a Slack or Discord URL). To collect them in a Google Sheet:
   1. Create a sheet, open **Extensions → Apps Script** and paste:
      ```js
      function doPost(e) {
-       const visit = JSON.parse(e.postData.contents).visit;
-       const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
-       const headers = sheet.getLastColumn() ? sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0] : [];
-       Object.keys(visit).forEach((key) => { if (!headers.includes(key)) headers.push(key); });
-       sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
-       sheet.appendRow(headers.map((key) => visit[key] ?? ''));
-       return ContentService.createTextOutput('ok');
+       const lock = LockService.getScriptLock();
+       lock.waitLock(10000);
+       try {
+         const body = JSON.parse(e.postData.contents);
+         const visit = body.visit || { text: body.text };
+         const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
+         const headers = sheet.getLastColumn() ? sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0] : [];
+         Object.keys(visit).forEach((key) => { if (!headers.includes(key)) headers.push(key); });
+         sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+         sheet.appendRow(headers.map((key) => visit[key] ?? ''));
+         return ContentService.createTextOutput('ok');
+       } finally {
+         lock.releaseLock();
+       }
      }
      ```
-  2. **Deploy → New deployment → Web app**, execute as **Me**, access **Anyone**, and put the web app URL in `VISIT_LOG_WEBHOOK_URL`. Keep it private: anyone with the URL can add rows.
+  2. **Deploy → New deployment → Web app**, execute as **Me**, access **Anyone** (not "Anyone with Google account"), and put the web app URL in `VISIT_LOG_WEBHOOK_URL`. If only "Anyone within *your organization*" is offered, your Google Workspace (often the case for university accounts) blocks public web apps: create the sheet with a personal Google account instead. Keep the URL private: anyone with it can add rows. After editing the script, publish it again with **Deploy → Manage deployments → Edit → Version: New version**; the URL stays the same.
 - Without webhooks, every visit is still one line in the Render logs (search for `visit |`).
+- **Test a webhook** from your computer. Paste the real URLs (the values of the two Render variables), then run the tests; each prints `ok` and `HTTP 200` when the URL works:
+  ```bash
+  SLACK_URL='https://hooks.slack.com/services/…'
+  SHEET_URL='https://script.google.com/macros/s/…/exec'
+  curl -sS -w '\nHTTP %{http_code}\n' -H 'Content-Type: application/json' -d '{"text":"MitoSpace test"}' "$SLACK_URL"
+  curl -sSL -w '\nHTTP %{http_code}\n' -H 'Content-Type: application/json' -d '{"text":"MitoSpace test","visit":{"event":"test"}}' "$SHEET_URL"
+  ```
+- **`visit webhook failed`** in the Render logs names the service (`host`), its HTTP `status` and its `reply`:
+
+  | Log | Cause and fix |
+  |-----|---------------|
+  | `host=hooks.slack.com status=404` (`no_service`, `no_team`) or `403` (`invalid_token`) | The Slack URL is wrong or the webhook was removed: create a new one and update `VISIT_ALERT_WEBHOOK_URL` |
+  | `host=hooks.slack.com status=410` (`channel_is_archived`) | The channel was archived: add the webhook to another channel |
+  | `host=script.google.com status=404` | Not the web app URL: copy the URL ending in `/exec` from **Deploy → Manage deployments** (not the deployment ID, the `/dev` test URL or the editor URL) |
+  | `host=script.google.com status=401` or `403` | The web app is not open to **Anyone**: edit the deployment's access |
+  | `host=script.google.com`, any other status | The script failed: open **Executions** in Apps Script to see the error |
 
 The organization, its type and domain, the personal-link code and the campaign are also attached to the visitor in the other tools:
 

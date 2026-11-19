@@ -20,11 +20,22 @@ import { trackPageView } from './analytics';
 
 const Visualizer4D = lazy(() => import('./components/Visualizer4D'));
 const About = lazy(() => import('./components/About'));
+const CompareView = lazy(() => import('./components/CompareView'));
 
 function Explorer() {
-  const { datasetLoading, datasetError, samples4D, retryDatasetLoad, requestDataset } = useSample();
+  const { datasetLoading, datasetError, samples4D, retryDatasetLoad, requestDataset, compareOpen } = useSample();
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   const waitingForData = datasetLoading || (samples4D.length === 0 && !datasetError);
+  // Stays mounted briefly after closing so the view can fade out.
+  const [compareMounted, setCompareMounted] = useState(compareOpen);
+  useEffect(() => {
+    if (compareOpen) {
+      setCompareMounted(true);
+      return;
+    }
+    const timer = window.setTimeout(() => setCompareMounted(false), 160);
+    return () => window.clearTimeout(timer);
+  }, [compareOpen]);
 
   useEffect(() => {
     requestDataset();
@@ -48,7 +59,7 @@ function Explorer() {
       <ExplorationWarmup />
 
       <main className="flex-1 flex flex-col min-h-0 overflow-hidden">
-        <div data-fullscreen-root className="flex-1 flex min-h-0 overflow-hidden bg-black">
+        <div data-fullscreen-root className="relative flex-1 flex min-h-0 overflow-hidden bg-black">
           {/* Left: visualizer (controls + canvas) - no scroll, controls always visible */}
           <section
             className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden"
@@ -73,6 +84,12 @@ function Explorer() {
               onToggleCollapsed={() => setPanelCollapsed((v) => !v)}
             />
           </aside>
+
+          {compareMounted && (
+            <Suspense fallback={null}>
+              <CompareView leaving={!compareOpen} />
+            </Suspense>
+          )}
         </div>
       </main>
 

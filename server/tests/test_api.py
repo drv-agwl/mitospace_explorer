@@ -108,6 +108,26 @@ class DataApiTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(len(r.json()["points"]), 12)
 
+    def test_cell_features(self):
+        values = dataset_registry.get("v3").feature_values[FEATURE]
+        rows = [0, int(np.nanargmin(values)), int(np.nanargmax(values))]
+        r = self.client.get(f"/api/cell-features?cells={','.join(map(str, rows))}")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["cells"], rows)
+        feature = next(f for f in r.json()["features"] if f["name"] == FEATURE)
+        self.assertEqual(feature["measured"], N - MISSING)
+        # Row 0 has no measurement.
+        self.assertEqual((feature["values"][0], feature["percentiles"][0]), (None, None))
+        lowest, highest = feature["percentiles"][1:]
+        self.assertLess(lowest, 1)
+        self.assertGreater(highest, 99)
+        self.assertAlmostEqual(feature["values"][2], float(np.nanmax(values)), places=5)
+        self.assertAlmostEqual(feature["median"], float(np.nanmedian(values)), places=5)
+
+    def test_cell_features_rejects_bad_rows(self):
+        for cells in ("", "x", "-1", str(N), ",".join(["1"] * (main.MAX_COMPARE_CELLS + 1))):
+            self.assertEqual(self.client.get(f"/api/cell-features?cells={cells}").status_code, 400, cells)
+
     def test_project(self):
         r = self.client.post("/api/project", json={"pointIndex": 0, "targetValue": 2.0, "feature": FEATURE})
         self.assertEqual(r.status_code, 200)

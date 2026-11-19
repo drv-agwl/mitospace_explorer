@@ -7,8 +7,9 @@ import {
   X,
   Crosshair,
   AlertTriangle,
+  Columns3,
 } from 'lucide-react';
-import { useSample } from '../context/SampleContext';
+import { MAX_COMPARE_CELLS, useSample } from '../context/SampleContext';
 import { getFeatureStats, getFeatureValues, healthCheck } from '../api/client';
 import { findNearestSampleIndex } from './SemanticAxisPreview';
 import FeatureSelect from './FeatureSelect';
@@ -75,8 +76,12 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({
     selectAllDrugFilter,
     clearDrugFilter,
     datasetVersion,
+    compareSamples,
+    comparePicking,
+    setComparePicking,
   } = useSample();
   const featureGroups = getFeatureGroups(datasetVersion);
+  const compareCount = compareSamples.length;
 
   const [drugFilterOpen, setDrugFilterOpen] = useState(false);
   const drugFilterRef = useRef<HTMLDivElement>(null);
@@ -286,7 +291,7 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({
               step="0.1"
               value={visualizerOptions.pointSize}
               onChange={(e) => setPointSize(parseFloat(e.target.value))}
-              className="w-24 h-1.5 accent-white"
+              className="w-16 xl:w-24 h-1.5 accent-white"
             />
             <span className="text-[11px] tabular-nums font-mono text-white/55 w-7 text-right">
               {visualizerOptions.pointSize.toFixed(1)}
@@ -389,6 +394,34 @@ const VisualizerControls: React.FC<VisualizerControlsProps> = ({
                 <span>API offline</span>
               </span>
             )}
+
+            {/* Compare cells: picking mode, where clicking cells adds them to the comparison. */}
+            <button
+              type="button"
+              onClick={() => setComparePicking(!comparePicking, 'toolbar')}
+              aria-pressed={comparePicking}
+              title={
+                comparePicking
+                  ? 'Stop picking cells (Esc)'
+                  : `Pick up to ${MAX_COMPARE_CELLS} cells and compare their movies and measurements side by side (C). Shift-clicking a dot also adds it.`
+              }
+              className={`${PILL_BASE} ${comparePicking ? PILL_PRIMARY_ACTIVE : PILL_IDLE} group`}
+            >
+              <Columns3
+                size={14}
+                className={`shrink-0 transition-colors ${
+                  comparePicking ? 'text-white' : 'text-white/55 group-hover:text-white/75'
+                }`}
+              />
+              <span>
+                Compare<span className="sr-only xl:not-sr-only"> cells</span>
+              </span>
+              {compareCount > 0 && (
+                <span className="ml-0.5 text-[10px] font-semibold tabular-nums bg-white/15 text-white px-1.5 py-0.5 rounded">
+                  {compareCount}
+                </span>
+              )}
+            </button>
 
             {/* Semantic axis toggle — primary action */}
             <button

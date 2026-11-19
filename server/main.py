@@ -620,6 +620,54 @@ def get_feature_values(
     )
 
 
+MAX_COMPARE_CELLS = 12
+
+
+@app.get("/api/cell-features")
+def cell_features(
+    request: Request,
+    cells: str = Query(..., max_length=200),
+    version: Optional[str] = Query(default=None),
+):
+    """Every feature of a few cells (rows), with each value's percentile among all measured cells."""
+    ds = _require_api_dataset(version)
+    n = len(ds.umap_points)
+    try:
+        rows = [int(part) for part in cells.split(",")]
+    except ValueError:
+        raise HTTPException(status_code=400, detail="cells must be comma-separated row numbers")
+    if not 1 <= len(rows) <= MAX_COMPARE_CELLS or not all(0 <= r < n for r in rows):
+        raise HTTPException(
+            status_code=400, detail=f"Give 1 to {MAX_COMPARE_CELLS} row numbers between 0 and {n - 1}"
+        )
+
+    features = []
+    for key, arr in ds.feature_values.items():
+        ranked = dataset_registry.ranked_values(ds, key)
+        values: List[Optional[float]] = []
+        percentiles: List[Optional[float]] = []
+        for r in rows:
+            v = float(arr[r])
+            if not np.isfinite(v) or ranked.size == 0:
+                values.append(None)
+                percentiles.append(None)
+                continue
+            # Mid-rank, so cells with the same value share one percentile.
+            rank = (np.searchsorted(ranked, v, side="left") + np.searchsorted(ranked, v, side="right")) / 2
+            values.append(v)
+            percentiles.append(round(100.0 * float(rank) / ranked.size, 1))
+        features.append(
+            {
+                "name": key,
+                "values": values,
+                "percentiles": percentiles,
+                "median": float(np.median(ranked)) if ranked.size else None,
+                "measured": int(ranked.size),
+            }
+        )
+    return _cacheable(request, _json_bytes({"cells": rows, "features": features}), "application/json")
+
+
 @app.get("/api/health")
 def health(version: Optional[str] = Query(default=None)):
     ds = _get_dataset(version)

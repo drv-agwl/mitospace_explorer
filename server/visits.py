@@ -7,6 +7,8 @@ are used only for the lookup; they are never logged, stored or forwarded.
 """
 from __future__ import annotations
 
+import html
+import http.client
 import ipaddress
 import json
 import logging
@@ -287,12 +289,24 @@ def describe(record: Mapping[str, Any]) -> str:
     return " · ".join(part for part in parts if part)
 
 
-def alert_payload(url: str, text: str) -> dict:
-    """Discord wants `content`; Slack, Google Chat and Mattermost take `text`."""
+def webhook_payload(url: str, text: str, record: Optional[dict] = None) -> dict:
+    """Discord wants `content`, Slack `text`; any other endpoint (a Google Sheet, Zapier…) also gets the record."""
     host = (urlsplit(url).hostname or "").lower()
     if host == "discord.com" or host.endswith((".discord.com", "discordapp.com")):
         return {"content": text[:2000]}
-    return {"text": text}
+    if host == "hooks.slack.com" or record is None:
+        return {"text": text}
+    return {"text": text, "visit": record}
+
+
+def _reply_text(error: urllib.error.HTTPError) -> str:
+    """The start of the service's error reply as plain text (Slack answers e.g. `no_service`)."""
+    try:
+        body = error.read(8000).decode("utf-8", "replace")
+    except (OSError, ValueError, http.client.HTTPException):
+        return ""
+    body = re.sub(r"(?is)<(script|style)\b.*?</\1>", " ", body)
+    return " ".join(_CONTROL.sub(" ", html.unescape(re.sub(r"<[^>]+>", " ", body))).split())[:160]
 
 
 def send_webhook(url: str, payload: dict) -> None:
@@ -302,11 +316,17 @@ def send_webhook(url: str, payload: dict) -> None:
         headers={"Content-Type": "application/json", "User-Agent": "mitospace-api"},
         method="POST",
     )
+    # Only the host is logged: the rest of a webhook URL is its secret.
+    host = urlsplit(url).hostname
     try:
         with urllib.request.urlopen(request, timeout=WEBHOOK_TIMEOUT_S):
             pass
+    except urllib.error.HTTPError as exc:
+        log.warning(
+            "visit webhook failed", extra={"host": host, "status": exc.code, "reply": _reply_text(exc)}
+        )
     except (OSError, ValueError) as exc:
-        log.warning("visit webhook failed", extra={"error": type(exc).__name__})
+        log.warning("visit webhook failed", extra={"host": host, "error": type(exc).__name__})
 
 
 class _ForwardedSummaries:
@@ -344,13 +364,14 @@ def record_visit(
         beacon.kind == "start" or _forwarded.should_forward(beacon.sid, beacon.active_s or 0)
     )
     if forward:
+        text = describe(record)
         log_url = env.get("VISIT_LOG_WEBHOOK_URL", "").strip()
         if log_url:
-            deliveries.append((log_url, {"text": describe(record), "visit": record}))
+            deliveries.append((log_url, webhook_payload(log_url, text, record)))
         alert_url = env.get("VISIT_ALERT_WEBHOOK_URL", "").strip()
         notable = is_identified(network) or bool(beacon.ref or beacon.utm.get("campaign"))
         if alert_url and notable:
-            deliveries.append((alert_url, alert_payload(alert_url, describe(record))))
+            deliveries.append((alert_url, webhook_payload(alert_url, text)))
 
     reply: dict = {}
     if beacon.kind == "start":

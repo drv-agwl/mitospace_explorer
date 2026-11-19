@@ -106,9 +106,22 @@ class VisitHelpersTests(unittest.TestCase):
         self.assertEqual(beacon.pages, ["/", "/about", "3"])
         self.assertEqual(beacon.events, {"select_cell": 4})
 
-    def test_alert_payload_shapes(self):
-        self.assertEqual(visits.alert_payload("https://discord.com/api/webhooks/1/x", "hi"), {"content": "hi"})
-        self.assertEqual(visits.alert_payload(SLACK_URL, "hi"), {"text": "hi"})
+    def test_webhook_payload_shapes(self):
+        record = {"event": "visit_start", "org": "X"}
+        self.assertEqual(visits.webhook_payload("https://discord.com/api/webhooks/1/x", "hi", record), {"content": "hi"})
+        self.assertEqual(visits.webhook_payload(SLACK_URL, "hi", record), {"text": "hi"})
+        self.assertEqual(visits.webhook_payload(SHEET_URL, "hi", record), {"text": "hi", "visit": record})
+        self.assertEqual(visits.webhook_payload(SHEET_URL, "hi"), {"text": "hi"})
+
+    def test_webhook_failure_is_logged_without_the_secret_path(self):
+        refused = urllib.error.HTTPError(SLACK_URL, 404, "Not Found", Message(), io.BytesIO(b"no_service"))
+        with mock.patch.object(visits.urllib.request, "urlopen", side_effect=refused), self.assertLogs(
+            "mitospace.visits", level="WARNING"
+        ) as logs:
+            visits.send_webhook(SLACK_URL, {"text": "hi"})
+        record = logs.records[0]
+        self.assertEqual((record.host, record.status, record.reply), ("hooks.slack.com", 404, "no_service"))
+        self.assertNotIn("XXXX", json.dumps(vars(record), default=str))
 
     def test_quota_refusal_pauses_lookups(self):
         lookup = visits.NetworkLookup()

@@ -2,17 +2,18 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Home, ZoomIn, ZoomOut, HelpCircle, Maximize2, Minimize2, Grid3X3 } from 'lucide-react';
-import { useSample } from '../context/SampleContext';
+import { MAX_COMPARE_CELLS, useSample } from '../context/SampleContext';
 import VisualizerControls from './VisualizerControls';
 import SemanticAxisPreview from './SemanticAxisPreview';
 import DrugConditionStrip from './DrugConditionStrip';
 import SmoothHeight from './SmoothHeight';
+import CompareTray from './CompareTray';
 import { prefersReducedMotion } from '../utils/motion';
 import { projectOnAxis, getAxisTrajectory } from '../api/client';
 import { loadFeatureAxis } from '../data/sampleData';
 import type { FeatureAxis } from '../utils/featureAxis';
 import { featureToColorPlasmaAdaptive, NO_MEASUREMENT_RGB, plasmaAtT } from '../utils/featureColor';
-import { adaptColorForDarkTheme } from '../utils/colorUtils';
+import { adaptColorForDarkTheme, rgbCss } from '../utils/colorUtils';
 import { dropdownCloseInProgressRef } from '../utils/dropdownCloseRef';
 import { buildSampleIdToIndex } from '../utils/sampleIndexMap';
 import { computeDistancesToPolyline, buildFadeFactors } from '../utils/axisDistance';
@@ -281,6 +282,13 @@ const Visualizer4D: React.FC = () => {
     searchQuery,
     selectedDrugs,
     clearDrugFilter,
+    compareSamples,
+    compareHidden,
+    compareOpen,
+    toggleCompare,
+    comparePicking,
+    setComparePicking,
+    setMapFocusHandler,
   } = useSample();
 
   const axisColorPending = Boolean(
@@ -331,6 +339,9 @@ const Visualizer4D: React.FC = () => {
   const hoverRingRef = useRef<THREE.Mesh | null>(null);
   /** Condition name next to the hovered dot (written directly, no re-render). */
   const hoverLabelRef = useRef<HTMLDivElement>(null);
+  const hoverTextRef = useRef<HTMLSpanElement>(null);
+  /** What a click on the hovered dot will do, while that is not obvious. */
+  const hoverHintRef = useRef<HTMLSpanElement>(null);
   const hoverFrameQueuedRef = useRef(false);
   const lastPointerCssRef = useRef<{ x: number; y: number } | null>(null);
   const selectedSampleIdRef = useRef<string | null>(null);
@@ -348,6 +359,17 @@ const Visualizer4D: React.FC = () => {
   const prevEmbeddingCentroidRef = useRef<THREE.Vector3 | null>(null);
   /** True once the point cloud has played its initial fade-in. */
   const pointsHaveFadedInRef = useRef(false);
+  /** Numbered tags on compared cells; repositioned after every frame. */
+  const compareMarkersRef = useRef<HTMLDivElement>(null);
+  const afterRenderRef = useRef<() => void>(() => {});
+  const flyToRafRef = useRef(0);
+  const [compareFullNotice, setCompareFullNotice] = useState(false);
+  const compareNoticeTimerRef = useRef(0);
+  const flashCompareFull = useCallback(() => {
+    setCompareFullNotice(true);
+    window.clearTimeout(compareNoticeTimerRef.current);
+    compareNoticeTimerRef.current = window.setTimeout(() => setCompareFullNotice(false), 2400);
+  }, []);
 
   const [trajectoryPoints, setTrajectoryPoints] = useState<Array<{ x: number; y: number; z: number }> | null>(null);
 
@@ -599,6 +621,7 @@ const Visualizer4D: React.FC = () => {
       controls.update();
       if (mesh) fitSelectionMarker(mesh, camera, renderer.domElement.clientHeight, pointSizeRef.current);
       renderer.render(scene, camera);
+      afterRenderRef.current();
       updateFPS();
       if (gliding) requestRender();
     };
@@ -2217,17 +2240,44 @@ const Visualizer4D: React.FC = () => {
         const v = featureValues[coloringFeature]?.[sampleIdToEmbeddingIndex.get(sample.id) ?? -1];
         text += Number.isFinite(v) ? ` · ${formatFeatureValue(v)}` : ' · no measurement';
       }
-      label.textContent = text;
+      const inComparison = compareSamples.some((s) => s.id === sample.id);
+      const hint = inComparison
+        ? `${comparePicking ? 'Click' : 'Shift-click'} to remove from the comparison`
+        : compareSamples.length >= MAX_COMPARE_CELLS
+          ? `The comparison is full (${MAX_COMPARE_CELLS} cells)`
+          : comparePicking
+            ? 'Click to add to the comparison'
+            : 'Shift-click to compare';
+      if (hoverTextRef.current) hoverTextRef.current.textContent = text;
+      if (hoverHintRef.current) hoverHintRef.current.textContent = hint;
       label.style.display = 'block';
       const x = pos.x - rect.left;
       const y = pos.y - rect.top;
       // Keep the label inside the canvas: flip left near the right edge, below near the top.
       const flipX = x > rect.width - label.offsetWidth - 28;
-      const flipY = y < 40;
+      const flipY = y < label.offsetHeight + 18;
       label.style.left = `${flipX ? x - label.offsetWidth - 14 : x + 14}px`;
-      label.style.top = `${flipY ? y + 18 : y - 34}px`;
+      label.style.top = `${flipY ? y + 18 : y - label.offsetHeight - 12}px`;
     }
-  }, [filteredSamples4D, visualizerOptions.pointSize, useFeatureColoring, coloringFeature, featureValues, sampleIdToEmbeddingIndex]);
+  }, [
+    filteredSamples4D,
+    visualizerOptions.pointSize,
+    useFeatureColoring,
+    coloringFeature,
+    featureValues,
+    sampleIdToEmbeddingIndex,
+    comparePicking,
+    compareSamples,
+  ]);
+
+  // Refresh the label under a still pointer when a click changed what the next click would do.
+  useEffect(() => {
+    if (lastPointerCssRef.current && hoverLabelRef.current?.style.display === 'block') updateHoverPreview();
+  }, [updateHoverPreview]);
+
+  // Frames queued by pointer moves run the latest version, so a click's effect shows at once.
+  const updateHoverPreviewRef = useRef(updateHoverPreview);
+  updateHoverPreviewRef.current = updateHoverPreview;
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
     if (pointerDownRef.current && !pointerMovedRef.current) {
@@ -2238,9 +2288,9 @@ const Visualizer4D: React.FC = () => {
     lastPointerCssRef.current = { x: e.clientX, y: e.clientY };
     if (!hoverFrameQueuedRef.current) {
       hoverFrameQueuedRef.current = true;
-      requestAnimationFrame(updateHoverPreview);
+      requestAnimationFrame(() => updateHoverPreviewRef.current());
     }
-  }, [updateHoverPreview]);
+  }, []);
 
   const handlePointerUp = useCallback(() => {
     pointerDownRef.current = null;
@@ -2280,6 +2330,18 @@ const Visualizer4D: React.FC = () => {
       count,
       pointSizeWorld
     );
+
+    // Shift- or Cmd/Ctrl-click, or any click while picking, collects cells for comparison and
+    // leaves the open cell as it is.
+    const modifier = event.shiftKey || event.metaKey || event.ctrlKey;
+    if (modifier || comparePicking) {
+      dropdownCloseInProgressRef.current = false;
+      if (bestIdx >= 0) {
+        if (introVisible) dismissIntro();
+        if (!toggleCompare(filteredSamples4D[bestIdx], modifier ? 'map' : 'pick')) flashCompareFull();
+      }
+      return;
+    }
 
     if (bestIdx >= 0) {
       if (introVisible) dismissIntro();
@@ -2430,15 +2492,93 @@ const Visualizer4D: React.FC = () => {
   }, [mappingPending]);
 
   const selectFromStrip = useCallback(
-    (source: 'strip' | 'axis_strip') => (sample: Sample) => {
+    (source: 'strip' | 'axis_strip') => (sample: Sample, event: React.MouseEvent) => {
+      if (comparePicking || event.shiftKey || event.metaKey || event.ctrlKey) {
+        if (!toggleCompare(sample, 'strip')) flashCompareFull();
+        return;
+      }
       setSelectedSample(sample);
       trackEvent('select_cell', { source, condition: sample.treatment.drug, cell: sample.id });
     },
-    [setSelectedSample]
+    [setSelectedSample, comparePicking, toggleCompare, flashCompareFull]
   );
+
+  // Picking ends when the map goes away (e.g. on the About page).
+  useEffect(() => () => setComparePicking(false), [setComparePicking]);
+
+  const compareNumbers = React.useMemo(
+    () => new Map(compareSamples.map((s, i) => [s.id, i + 1])),
+    [compareSamples]
+  );
+
+  // Where each compared cell sits in the scene (null when the filter hides it).
+  const comparePositions = React.useMemo(
+    () => compareSamples.map((s, i) => (compareHidden[i] ? null : toScenePos(s.x, s.y, s.z))),
+    [compareSamples, compareHidden, toScenePos]
+  );
+  useEffect(() => {
+    const projected = new THREE.Vector3();
+    afterRenderRef.current = () => {
+      const root = compareMarkersRef.current;
+      const cam = cameraRef.current;
+      const container = containerRef.current;
+      if (!root || !cam || !container) return;
+      const w = container.clientWidth;
+      const h = container.clientHeight;
+      comparePositions.forEach((pos, i) => {
+        const el = root.children[i] as HTMLElement | undefined;
+        if (!el) return;
+        if (pos) projected.copy(pos).project(cam);
+        const onScreen = Boolean(pos) && projected.z < 1 && Math.abs(projected.x) <= 1 && Math.abs(projected.y) <= 1;
+        el.style.display = onScreen ? 'block' : 'none';
+        if (onScreen) el.style.transform = `translate(${((projected.x + 1) / 2) * w}px, ${((1 - projected.y) / 2) * h}px)`;
+      });
+    };
+    requestRenderRef.current();
+    return () => {
+      afterRenderRef.current = () => {};
+    };
+  }, [comparePositions]);
+
+  /** Select a cell and glide the orbit centre to it, keeping the current angle and distance. */
+  const focusCellOnMap = useCallback(
+    (sample: Sample) => {
+      setSelectedSample(sample);
+      const idx = filteredSamples4D.findIndex((s) => s.id === sample.id);
+      setSelectedPointIndex(idx >= 0 ? idx : null);
+      setSemanticState((s) => ({ ...s, projectedPosition: null, projectedConfidence: null }));
+      const cam = cameraRef.current;
+      const controls = controlsRef.current;
+      if (!cam || !controls || idx < 0) return;
+      const fromTarget = controls.target.clone();
+      const fromPosition = cam.position.clone();
+      const delta = toScenePos(sample.x, sample.y, sample.z).sub(fromTarget);
+      const duration = prefersReducedMotion() ? 0 : 550;
+      cancelAnimationFrame(flyToRafRef.current);
+      let start = -1;
+      const step = (now: number) => {
+        if (start < 0) start = now;
+        const e = duration ? easeInOutCubic(Math.min(1, (now - start) / duration)) : 1;
+        controls.target.copy(fromTarget).addScaledVector(delta, e);
+        cam.position.copy(fromPosition).addScaledVector(delta, e);
+        controls.update();
+        requestRenderRef.current();
+        flyToRafRef.current = e < 1 ? requestAnimationFrame(step) : 0;
+      };
+      flyToRafRef.current = requestAnimationFrame(step);
+    },
+    [filteredSamples4D, setSelectedSample, setSelectedPointIndex, setSemanticState, toScenePos]
+  );
+  useEffect(() => {
+    setMapFocusHandler(focusCellOnMap);
+    return () => setMapFocusHandler(null);
+  }, [focusCellOnMap, setMapFocusHandler]);
+  useEffect(() => () => cancelAnimationFrame(flyToRafRef.current), []);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      // The comparison covers the map and handles its own keys.
+      if (compareOpen) return;
       // Leave browser shortcuts (Cmd/Ctrl+F, Cmd/Ctrl+R, …) alone.
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const target = e.target as HTMLElement;
@@ -2463,11 +2603,15 @@ const Visualizer4D: React.FC = () => {
         e.preventDefault();
         toggleFullscreen();
       }
+      if (e.key === 'c' || e.key === 'C') {
+        e.preventDefault();
+        setComparePicking(!comparePicking, 'key');
+      }
     };
     // Capture phase so closing the help overlay wins over the global Esc handler.
     window.addEventListener('keydown', handler, true);
     return () => window.removeEventListener('keydown', handler, true);
-  }, [handleResetView, toggleFullscreen, showHelp]);
+  }, [handleResetView, toggleFullscreen, showHelp, compareOpen, comparePicking, setComparePicking]);
 
   return (
     <div ref={fullscreenContainerRef} className={`${isDarkMode ? 'bg-black' : 'bg-white'} h-full flex flex-col overflow-hidden`}>
@@ -2492,6 +2636,9 @@ const Visualizer4D: React.FC = () => {
             expanded={drugStripExpanded}
             onToggleExpanded={() => setDrugStripExpanded((v) => !v)}
             onSelectSample={selectFromStrip('strip')}
+            paused={compareOpen}
+            compareNumbers={compareNumbers}
+            picking={comparePicking}
           />
         )}
         {showAxisStrip && axisStrip && (
@@ -2508,13 +2655,16 @@ const Visualizer4D: React.FC = () => {
               setSemanticState((s) => ({ ...s, axisSamplesVisible: false }))
             }
             onSelectSample={selectFromStrip('axis_strip')}
+            paused={compareOpen}
+            compareNumbers={compareNumbers}
+            picking={comparePicking}
           />
         )}
       </SmoothHeight>
 
       <div
         ref={containerRef}
-        className="flex-1 min-h-0 relative overflow-hidden"
+        className={`flex-1 min-h-0 relative overflow-hidden ${comparePicking ? 'cursor-crosshair' : ''}`}
         role="region"
         aria-label="Cell map"
         aria-describedby="cell-map-help"
@@ -2543,7 +2693,26 @@ const Visualizer4D: React.FC = () => {
           ref={hoverLabelRef}
           className="pointer-events-none absolute z-10 hidden whitespace-nowrap rounded-md border border-white/15 bg-black/80 px-2 py-1 text-[11px] font-medium text-white/90 shadow-elevated backdrop-blur-sm"
           aria-hidden="true"
-        />
+        >
+          <span ref={hoverTextRef} className="block" />
+          <span ref={hoverHintRef} className="mt-0.5 block text-[10px] font-normal text-white/55" />
+        </div>
+
+        <div ref={compareMarkersRef} className="pointer-events-none absolute inset-0 z-[5] overflow-hidden" aria-hidden="true">
+          {compareSamples.map((sample, i) => (
+            <div key={sample.id} className="absolute left-0 top-0" style={{ display: 'none' }}>
+              {/* One filled dot over the cell: its number, edged in the condition color. */}
+              <span
+                className="absolute -left-[10px] -top-[10px] flex h-5 w-5 items-center justify-center rounded-full bg-white text-[11px] font-semibold text-black tabular-nums"
+                style={{ boxShadow: `0 0 0 2px ${rgbCss(sample.color)}, 0 0 0 3.5px rgba(0, 0, 0, 0.55)` }}
+              >
+                {i + 1}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        <CompareTray fullNotice={compareFullNotice} />
 
         {introVisible && !isLoading && (
           <div
@@ -2555,7 +2724,7 @@ const Visualizer4D: React.FC = () => {
               motion sit close together.
             </p>
             <p className="mt-1.5 text-xs text-white/55">
-              Drag to rotate · Scroll to zoom · Click a dot to watch its movie
+              Drag to rotate · Scroll to zoom · Click a dot to watch its movie · Shift-click dots to compare cells
             </p>
             <button
               type="button"
@@ -2724,6 +2893,8 @@ const Visualizer4D: React.FC = () => {
                   ['Right-drag or Shift-drag', 'Pan'],
                   ['Scroll or pinch', 'Zoom'],
                   ['Click a dot', 'Open that cell'],
+                  ['Shift-click a dot', 'Add it to the comparison'],
+                  ['Compare cells, then click dots', 'Pick cells to compare'],
                   ['Click empty space', 'Clear the selection'],
                 ].map(([action, effect]) => (
                   <div key={action} className="flex justify-between gap-4">
@@ -2738,7 +2909,8 @@ const Visualizer4D: React.FC = () => {
                   {[
                     ['F', 'Full screen'],
                     ['R', 'Reset view'],
-                    ['Esc', 'Clear the selection'],
+                    ['C', 'Start or stop picking cells to compare'],
+                    ['Esc', 'Stop picking, or clear the selection'],
                     ['?', 'Show or hide this panel'],
                   ].map(([key, effect]) => (
                     <div key={key} className="flex items-center justify-between gap-4">

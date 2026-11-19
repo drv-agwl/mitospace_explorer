@@ -70,6 +70,7 @@ Deploys install the pinned `server/requirements.lock` (see `render.yaml`); after
 - `GET /api/ready` – 200 once the v3 data is loaded, else 503 (the host's health check)
 - `GET /api/feature-stats?feature=fragment_length_mean` – min/max for a feature
 - `GET /api/features/fragment_length_mean` – array of feature values (index-aligned); `?format=f32` returns little-endian float32 bytes
+- `GET /api/cell-features?cells=0,100,5000` – up to 12 dataset rows; per feature: `values` and `percentiles` (`null` where the cell has no measurement; percentile = share of measured cells with a lower value, ties at mid-rank), `median` and `measured`. Used by the cell comparison.
 - Unknown `version` values return 400; request bodies over 64 KB return 413.
 - `POST /api/project` – body: `{ "pointIndex", "targetValue", "feature", "method?" }` → `{ "x", "y", "z", "predictedValue" }`  
   - **method `"spatial"`** (default): highlight = kernel-weighted centroid in 3D UMAP (slider goes from region with min feature to region with max feature).  

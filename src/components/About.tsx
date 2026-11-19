@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, ArrowUpRight, Check, Clapperboard, Copy, Rotate3d, Sparkles } from 'lucide-react';
+import { ArrowRight, ArrowUpRight, Check, Clapperboard, Columns3, Copy, Rotate3d, Sparkles } from 'lucide-react';
 import Header from './Header';
 import Footer from './Footer';
 import ExplorerPreview from './ExplorerPreview';
@@ -70,6 +70,11 @@ const FEATURES = [
     Icon: Sparkles,
     title: 'Semantic axes',
     body: 'Visualize continuous gradients of mitochondrial features directly within the embedding space, and relate learned representations to interpretable biological properties.',
+  },
+  {
+    Icon: Columns3,
+    title: 'Cell comparison',
+    body: 'Place up to six cells from the same or different conditions side by side, with frame-locked movies and every image-derived feature ranked as a percentile among all measured cells.',
   },
 ];
 
@@ -244,7 +249,7 @@ const About: React.FC = () => {
             <h2 id="about-features" className={H2}>
               In the explorer
             </h2>
-            <div className="mt-10 grid gap-4 sm:grid-cols-3">
+            <div className="mt-10 grid gap-4 sm:grid-cols-2">
               {FEATURES.map(({ Icon, title, body }) => (
                 <div key={title} className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-6">
                   <span className={ICON_TILE}>

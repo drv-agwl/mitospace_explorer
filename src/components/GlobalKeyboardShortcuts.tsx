@@ -2,12 +2,14 @@ import React, { useCallback } from 'react';
 import { useSample } from '../context/SampleContext';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 
-/** Handles global Esc to close sample panel. R reset is handled per-visualizer. */
+/** Handles global Esc: closes the comparison, else ends picking cells, else clears the selected cell. R reset is handled per-visualizer. */
 const GlobalKeyboardShortcuts: React.FC = () => {
-  const { setSelectedSample } = useSample();
+  const { setSelectedSample, compareOpen, setCompareOpen, comparePicking, setComparePicking } = useSample();
   const onEscape = useCallback(() => {
-    setSelectedSample(null);
-  }, [setSelectedSample]);
+    if (compareOpen) setCompareOpen(false);
+    else if (comparePicking) setComparePicking(false);
+    else setSelectedSample(null);
+  }, [compareOpen, setCompareOpen, comparePicking, setComparePicking, setSelectedSample]);
 
   useKeyboardShortcuts({ onEscape });
   return null;

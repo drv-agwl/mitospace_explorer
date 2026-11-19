@@ -139,10 +139,22 @@ class Dataset:
     moa_labels: Optional[np.ndarray] = None
     # FNV-1a of the per-row condition labels (see `row_order_hash`).
     row_hash: Optional[str] = None
+    # Measured values of each feature in ascending order, built on first use (see `ranked_values`).
+    ranked: Dict[str, np.ndarray] = field(default_factory=dict, repr=False)
 
     @property
     def loaded(self) -> bool:
         return self.umap_points is not None and len(self.feature_values) > 0
+
+
+def ranked_values(ds: Dataset, key: str) -> np.ndarray:
+    """The feature's measured (non-NaN) values, sorted, for percentile lookups."""
+    ranked = ds.ranked.get(key)
+    if ranked is None:
+        arr = ds.feature_values[key]
+        ranked = np.sort(arr[np.isfinite(arr)])
+        ds.ranked[key] = ranked
+    return ranked
 
 
 class BinnedPrincipalCurve:

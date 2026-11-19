@@ -136,7 +136,13 @@ interface SemanticAxisPreviewProps {
   apiEmbeddingCount: number | null;
   datasetVersion: DatasetVersion;
   onClose: () => void;
-  onSelectSample?: (sample: Sample) => void;
+  onSelectSample?: (sample: Sample, event: React.MouseEvent) => void;
+  /** Hold every movie (e.g. while the comparison covers the strip). */
+  paused?: boolean;
+  /** Each compared cell's number in the comparison. */
+  compareNumbers?: ReadonlyMap<string, number>;
+  /** Picking cells to compare: a click adds the cell instead of opening it. */
+  picking?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -162,6 +168,9 @@ const SemanticAxisPreview: React.FC<SemanticAxisPreviewProps> = ({
   datasetVersion,
   onClose,
   onSelectSample,
+  paused = false,
+  compareNumbers,
+  picking = false,
 }) => {
   // Measure the cards container so we can grow the sample count to fill
   // wider displays. Without this, the strip caps each card at 180px and
@@ -307,59 +316,80 @@ const SemanticAxisPreview: React.FC<SemanticAxisPreviewProps> = ({
         className={`px-6 pb-4 flex gap-3 overflow-x-auto transition-opacity duration-200 ${pending ? 'opacity-40' : 'opacity-100'}`}
         aria-busy={pending}
       >
-        {axisSamples.map(({ sample, value }, i) => (
-          <button
-            key={sample.id + i}
-            type="button"
-            onClick={() => onSelectSample?.(sample)}
-            title={`${conditionLabel(sample.treatment.drug)} · ${formatFeatureValue(value)}`}
-            className="flex-1 min-w-[96px] max-w-[160px] rounded-xl overflow-hidden border border-white/[0.08] bg-white/[0.03] group hover:border-white/25 hover:ring-1 hover:ring-white/20 transition-all text-left focus:outline-none focus:ring-1 focus:ring-white/30 animate-fade-in-soft"
-          >
-            {/* Plasma color accent — links the card to its gradient position. */}
-            <div
-              className="h-[3px] w-full"
-              style={{ background: sampleColorsCss[i] }}
-              aria-hidden="true"
-            />
-            <div className="aspect-square relative bg-white/[0.04]">
-              {sample.videos?.[videoIndex] ? (
-                <LazyVideo
-                  src={previewMovieUrl(sample.videos[videoIndex])}
-                  poster={posters?.byId[String(sample.id)] ?? posters?.byDrug[sample.treatment.drug]}
-                  alt={conditionLabel(sample.treatment.drug)}
-                  shouldPlay={isPlaying}
-                  unloadWhenHidden={false}
-                  className="w-full h-full pointer-events-none"
-                />
-              ) : sample.images?.[0] ? (
-                <img
-                  src={sample.images[0]}
-                  alt=""
-                  loading="lazy"
-                  decoding="async"
-                  className="w-full h-full object-cover"
-                />
-              ) : (
-                <div className="absolute inset-0 flex items-center justify-center bg-white/[0.04]">
-                  <div className="w-12 h-12 rounded-lg bg-white/[0.06] flex items-center justify-center">
-                    <Video size={24} className="text-white/30" />
+        {axisSamples.map(({ sample, value }, i) => {
+          const n = compareNumbers?.get(sample.id);
+          const label = conditionLabel(sample.treatment.drug);
+          return (
+            <button
+              key={sample.id + i}
+              type="button"
+              onClick={(e) => onSelectSample?.(sample, e)}
+              title={
+                picking
+                  ? n !== undefined
+                    ? `Remove this ${label} cell from the comparison`
+                    : `Add this ${label} cell to the comparison`
+                  : `${label} · ${formatFeatureValue(value)}`
+              }
+              className={`flex-1 min-w-[96px] max-w-[160px] rounded-xl overflow-hidden border bg-white/[0.03] group hover:ring-1 hover:ring-white/20 transition-all text-left focus:outline-none focus:ring-1 focus:ring-white/30 animate-fade-in-soft ${
+                n !== undefined ? 'border-white/60' : 'border-white/[0.08] hover:border-white/25'
+              }`}
+            >
+              {/* Plasma color accent — links the card to its gradient position. */}
+              <div
+                className="h-[3px] w-full"
+                style={{ background: sampleColorsCss[i] }}
+                aria-hidden="true"
+              />
+              <div className="aspect-square relative bg-white/[0.04]">
+                {sample.videos?.[videoIndex] ? (
+                  <LazyVideo
+                    src={previewMovieUrl(sample.videos[videoIndex])}
+                    poster={posters?.byId[String(sample.id)] ?? posters?.byDrug[sample.treatment.drug]}
+                    alt={label}
+                    shouldPlay={isPlaying && !paused}
+                    unloadWhenHidden={false}
+                    className="w-full h-full pointer-events-none"
+                  />
+                ) : sample.images?.[0] ? (
+                  <img
+                    src={sample.images[0]}
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <div className="absolute inset-0 flex items-center justify-center bg-white/[0.04]">
+                    <div className="w-12 h-12 rounded-lg bg-white/[0.06] flex items-center justify-center">
+                      <Video size={24} className="text-white/30" />
+                    </div>
                   </div>
-                </div>
-              )}
-            </div>
-            <div className="px-2.5 py-1.5 flex flex-col gap-0.5 min-w-0">
-              <p className="text-[11px] font-medium text-white/90 truncate">
-                {conditionLabel(sample.treatment.drug)}
-              </p>
-              <span
-                className="text-[10px] font-mono tabular-nums text-white/60 truncate"
-                title={`${getFeatureDisplayLabel(selectedFeature, datasetVersion)} value`}
-              >
-                {formatFeatureValue(value)}
-              </span>
-            </div>
-          </button>
-        ))}
+                )}
+                {n !== undefined && (
+                  <span
+                    className="absolute left-1.5 top-1.5 h-5 min-w-[20px] rounded-full bg-white px-1 text-center text-[11px] font-semibold leading-5 text-black shadow-elevated tabular-nums"
+                    aria-hidden="true"
+                  >
+                    {n}
+                  </span>
+                )}
+              </div>
+              <div className="px-2.5 py-1.5 flex flex-col gap-0.5 min-w-0">
+                <p className="text-[11px] font-medium text-white/90 truncate">
+                  {label}
+                  {n !== undefined && <span className="sr-only">, cell {n} in the comparison</span>}
+                </p>
+                <span
+                  className="text-[10px] font-mono tabular-nums text-white/60 truncate"
+                  title={`${getFeatureDisplayLabel(selectedFeature, datasetVersion)} value`}
+                >
+                  {formatFeatureValue(value)}
+                </span>
+              </div>
+            </button>
+          );
+        })}
       </div>
     </div>
   );

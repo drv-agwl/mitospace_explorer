@@ -14,7 +14,13 @@ interface DrugConditionStripProps {
   expanded: boolean;
   onToggleExpanded: () => void;
   /** Called when the user clicks a card or chip. */
-  onSelectSample?: (sample: Sample) => void;
+  onSelectSample?: (sample: Sample, event: React.MouseEvent) => void;
+  /** Hold every movie (e.g. while the comparison covers the strip). */
+  paused?: boolean;
+  /** Each compared cell's number in the comparison. */
+  compareNumbers?: ReadonlyMap<string, number>;
+  /** Picking cells to compare: a click adds the cell instead of opening it. */
+  picking?: boolean;
 }
 
 const PILL_BASE =
@@ -38,11 +44,19 @@ function scrollSideways(e: React.WheelEvent<HTMLDivElement>) {
 
 const EDGE_FADE_PX = 40;
 
+function tileTitle(label: string, picking: boolean, inComparison: boolean, otherwise: string): string {
+  if (!picking) return otherwise;
+  return inComparison ? `Remove this ${label} cell from the comparison` : `Add this ${label} cell to the comparison`;
+}
+
 const DrugConditionStrip: React.FC<DrugConditionStripProps> = ({
   samples,
   expanded,
   onToggleExpanded,
   onSelectSample,
+  paused = false,
+  compareNumbers,
+  picking = false,
 }) => {
   const cards = useMemo(() => selectDrugRepresentatives(samples), [samples]);
   const posters = usePosterManifest();
@@ -90,22 +104,36 @@ const DrugConditionStrip: React.FC<DrugConditionStripProps> = ({
           className="flex-1 min-w-0 flex items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [mask-image:linear-gradient(to_right,black_calc(100%-32px),transparent)]"
           onWheel={scrollSideways}
         >
-          {cards.map(({ drug, sample }) => (
-            <button
-              key={drug}
-              type="button"
-              onClick={() => onSelectSample?.(sample)}
-              title={`Show a ${conditionLabel(drug)} cell`}
-              className="shrink-0 inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full text-[11px] font-medium text-white/80 bg-white/[0.04] border border-white/[0.08] hover:bg-white/[0.08] hover:text-white transition-colors"
-            >
-              <span
-                className="w-2 h-2 rounded-full shrink-0"
-                style={{ background: treatmentAccentCss(sample) }}
-                aria-hidden="true"
-              />
-              {conditionLabel(drug)}
-            </button>
-          ))}
+          {cards.map(({ drug, sample }) => {
+            const n = compareNumbers?.get(sample.id);
+            return (
+              <button
+                key={drug}
+                type="button"
+                onClick={(e) => onSelectSample?.(sample, e)}
+                title={tileTitle(conditionLabel(drug), picking, n !== undefined, `Show a ${conditionLabel(drug)} cell`)}
+                className="shrink-0 inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full text-[11px] font-medium text-white/80 bg-white/[0.04] border border-white/[0.08] hover:bg-white/[0.08] hover:text-white transition-colors"
+              >
+                <span
+                  className="w-2 h-2 rounded-full shrink-0"
+                  style={{ background: treatmentAccentCss(sample) }}
+                  aria-hidden="true"
+                />
+                {conditionLabel(drug)}
+                {n !== undefined && (
+                  <>
+                    <span
+                      className="h-4 min-w-[16px] rounded-full bg-white px-1 text-center text-[10px] font-semibold leading-4 text-black tabular-nums"
+                      aria-hidden="true"
+                    >
+                      {n}
+                    </span>
+                    <span className="sr-only">, cell {n} in the comparison</span>
+                  </>
+                )}
+              </button>
+            );
+          })}
         </div>
         {hasVideos && (
           <button
@@ -165,62 +193,76 @@ const DrugConditionStrip: React.FC<DrugConditionStripProps> = ({
         className="px-6 pb-4 flex gap-2.5 overflow-x-auto scrollbar-thin"
         style={{ maskImage: edgeMask, WebkitMaskImage: edgeMask }}
       >
-        {cards.map(({ drug, sample }) => (
-          <button
-            key={drug}
-            type="button"
-            onClick={() => onSelectSample?.(sample)}
-            title={conditionLabel(drug)}
-            className="shrink-0 w-[112px] rounded-xl overflow-hidden border border-white/[0.08] bg-white/[0.03] group hover:border-white/25 hover:ring-1 hover:ring-white/20 transition-all text-left focus:outline-none focus:ring-1 focus:ring-white/30"
-          >
-            <div
-              className="h-[3px] w-full"
-              style={{ background: treatmentAccentCss(sample) }}
-              aria-hidden="true"
-            />
-            <div className="aspect-square relative bg-white/[0.04]">
-              {sample.videos?.[videoIndex] ? (
-                // Wait for the manifest so the tile never starts the 1.3 MB original instead of its clip.
-                posters && (
-                  <LazyVideo
-                    src={posters.clipById?.[String(sample.id)] ?? sample.videos[videoIndex]}
-                    poster={posters.byDrug[drug] ?? posters.byId[String(sample.id)]}
-                    posterPriority
-                    alt={conditionLabel(drug)}
-                    shouldPlay={isPlaying}
-                    unloadWhenHidden={false}
-                    // Tiles about three cards past either edge are already playing in phase when scrolled in.
-                    rootRef={scrollRef}
-                    rootMargin="0px 360px"
-                    className="w-full h-full pointer-events-none"
-                  />
-                )
-              ) : sample.images?.[0] ? (
-                <img
-                  src={sample.images[0]}
-                  alt={conditionLabel(drug)}
-                  loading="lazy"
-                  decoding="async"
-                  className="w-full h-full object-cover"
-                />
-              ) : (
-                <div className="absolute inset-0 flex items-center justify-center bg-white/[0.04]">
-                  <div className="w-10 h-10 rounded-lg bg-white/[0.06] flex items-center justify-center">
-                    <Video size={20} className="text-white/30" />
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="px-2 py-1.5 flex items-center gap-1 min-w-0">
-              <span
-                className="w-1.5 h-1.5 rounded-full shrink-0"
+        {cards.map(({ drug, sample }) => {
+          const n = compareNumbers?.get(sample.id);
+          return (
+            <button
+              key={drug}
+              type="button"
+              onClick={(e) => onSelectSample?.(sample, e)}
+              title={tileTitle(conditionLabel(drug), picking, n !== undefined, conditionLabel(drug))}
+              className={`shrink-0 w-[112px] rounded-xl overflow-hidden border bg-white/[0.03] group hover:ring-1 hover:ring-white/20 transition-all text-left focus:outline-none focus:ring-1 focus:ring-white/30 ${
+                n !== undefined ? 'border-white/60' : 'border-white/[0.08] hover:border-white/25'
+              }`}
+            >
+              <div
+                className="h-[3px] w-full"
                 style={{ background: treatmentAccentCss(sample) }}
                 aria-hidden="true"
               />
-              <p className="text-[11px] font-medium text-white/90 truncate">{conditionLabel(drug)}</p>
-            </div>
-          </button>
-        ))}
+              <div className="aspect-square relative bg-white/[0.04]">
+                {sample.videos?.[videoIndex] ? (
+                  // Wait for the manifest so the tile never starts the 1.3 MB original instead of its clip.
+                  posters && (
+                    <LazyVideo
+                      src={posters.clipById?.[String(sample.id)] ?? sample.videos[videoIndex]}
+                      poster={posters.byDrug[drug] ?? posters.byId[String(sample.id)]}
+                      posterPriority
+                      alt={conditionLabel(drug)}
+                      shouldPlay={isPlaying && !paused}
+                      unloadWhenHidden={false}
+                      // Tiles about three cards past either edge are already playing in phase when scrolled in.
+                      rootRef={scrollRef}
+                      rootMargin="0px 360px"
+                      className="w-full h-full pointer-events-none"
+                    />
+                  )
+                ) : sample.images?.[0] ? (
+                  <img
+                    src={sample.images[0]}
+                    alt={conditionLabel(drug)}
+                    loading="lazy"
+                    decoding="async"
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <div className="absolute inset-0 flex items-center justify-center bg-white/[0.04]">
+                    <div className="w-10 h-10 rounded-lg bg-white/[0.06] flex items-center justify-center">
+                      <Video size={20} className="text-white/30" />
+                    </div>
+                  </div>
+                )}
+                {n !== undefined && (
+                  <span
+                    className="absolute left-1.5 top-1.5 h-5 min-w-[20px] rounded-full bg-white px-1 text-center text-[11px] font-semibold leading-5 text-black shadow-elevated tabular-nums"
+                    aria-hidden="true"
+                  >
+                    {n}
+                  </span>
+                )}
+              </div>
+              <div className="px-2 py-1.5 flex items-center gap-1 min-w-0">
+                <span
+                  className="w-1.5 h-1.5 rounded-full shrink-0"
+                  style={{ background: treatmentAccentCss(sample) }}
+                  aria-hidden="true"
+                />
+                <p className="text-[11px] font-medium text-white/90 truncate">{conditionLabel(drug)}</p>
+                {n !== undefined && <span className="sr-only">, cell {n} in the comparison</span>}
+              </div>
+            </button>
+          );
+        })}
       </div>
     </div>
   );

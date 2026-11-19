@@ -121,7 +121,7 @@ const isInternalVisit = () => {
 };
 
 // The explorer mirrors its view into the URL; Umami would count each change as a page view.
-const IGNORED_PARAMS = ["cell", "feature", "conditions", "internal"];
+const IGNORED_PARAMS = ["cell", "feature", "conditions", "compare", "internal"];
 let lastUmamiPage = "";
 
 const withoutViewState = (value: string) => {

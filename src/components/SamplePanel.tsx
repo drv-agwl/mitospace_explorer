@@ -15,8 +15,10 @@ import {
   Link2,
   PanelRightClose,
   PanelRightOpen,
+  Columns3,
 } from 'lucide-react';
-import { useSample } from '../context/SampleContext';
+import { MAX_COMPARE_CELLS, useSample } from '../context/SampleContext';
+import type { Sample } from '../types';
 import { conditionLabel, conditionMechanism } from '../constants/conditions';
 import { prefersReducedMotion } from '../utils/motion';
 import { largePosterForId, usePosterManifest } from '../utils/posterManifest';
@@ -82,6 +84,36 @@ const CopyLinkButton: React.FC = () => {
 const PANEL_TOGGLE =
   'shrink-0 inline-flex items-center justify-center w-8 h-8 rounded-lg text-white/55 hover:text-white hover:bg-white/[0.08] border border-transparent hover:border-white/[0.12] transition-colors';
 
+/** Adds the open cell to the comparison (the same as Shift-clicking it on the map), or takes it out. */
+const CompareToggle: React.FC<{ sample: Sample }> = ({ sample }) => {
+  const { compareSamples, toggleCompare } = useSample();
+  const inComparison = compareSamples.some((s) => s.id === sample.id);
+  const full = !inComparison && compareSamples.length >= MAX_COMPARE_CELLS;
+  return (
+    <button
+      type="button"
+      onClick={() => toggleCompare(sample, 'panel')}
+      disabled={full}
+      aria-pressed={inComparison}
+      title={
+        full
+          ? `Up to ${MAX_COMPARE_CELLS} cells can be compared`
+          : inComparison
+            ? 'Take this cell out of the comparison'
+            : 'Add this cell to the comparison (or Shift-click it on the map)'
+      }
+      className={`inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md text-[11px] font-medium border transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+        inComparison
+          ? 'bg-white/[0.12] border-white/[0.22] text-white'
+          : 'text-white/75 hover:text-white bg-white/[0.04] hover:bg-white/[0.08] border-white/[0.08]'
+      }`}
+    >
+      {inComparison ? <Check size={12} strokeWidth={2.5} /> : <Columns3 size={12} strokeWidth={2} />}
+      {inComparison ? 'In comparison' : 'Compare'}
+    </button>
+  );
+};
+
 interface SamplePanelProps {
   /** Show only a thin rail so the atlas gets the width. */
   collapsed?: boolean;
@@ -89,7 +121,7 @@ interface SamplePanelProps {
 }
 
 const SamplePanel: React.FC<SamplePanelProps> = ({ collapsed = false, onToggleCollapsed }) => {
-  const { selectedSample, visualizerOptions } = useSample();
+  const { selectedSample, visualizerOptions, compareOpen } = useSample();
   const [videoLoadError, setVideoLoadError] = useState<Record<number, boolean>>({});
   const [videoLoading, setVideoLoading] = useState<Record<number, boolean>>({});
   // Autoplay muted inline (like the strip) so Safari reliably paints/plays.
@@ -187,6 +219,19 @@ const SamplePanel: React.FC<SamplePanelProps> = ({ collapsed = false, onToggleCo
       window.clearTimeout(timer);
     };
   }, [selectedSample?.id]);
+
+  // The comparison covers this panel: hold its movie, and resume afterwards if it was playing.
+  useEffect(() => {
+    videoRefs.current.forEach((video) => {
+      if (!video) return;
+      if (compareOpen) {
+        video.pause();
+      } else if (isPlaying) {
+        video.muted = true;
+        void video.play().catch(() => {});
+      }
+    });
+  }, [compareOpen, isPlaying]);
 
   const handleTimeUpdate = (event: React.SyntheticEvent<HTMLVideoElement>) => {
     const currentVideo = event.currentTarget;
@@ -370,8 +415,9 @@ const SamplePanel: React.FC<SamplePanelProps> = ({ collapsed = false, onToggleCo
               )}
             </div>
 
-            <div className="mt-3">
+            <div className="mt-3 flex flex-wrap items-center gap-2">
               <CopyLinkButton />
+              <CompareToggle sample={selectedSample} />
             </div>
           </div>
         </div>

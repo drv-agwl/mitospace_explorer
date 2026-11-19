@@ -6,6 +6,12 @@ import type { ApiHealth } from '../api/client';
 import { trackError, trackEvent } from '../analytics';
 import { compareConditions } from '../constants/conditions';
 import { getFeatureGroups } from '../constants/features';
+import { buildSampleIdToIndex } from '../utils/sampleIndexMap';
+
+/** Most cells the comparison lays out side by side. */
+export const MAX_COMPARE_CELLS = 6;
+/** map = Shift-click, pick = click while picking cells, strip = a strip tile. */
+export type CompareSource = 'map' | 'pick' | 'strip' | 'panel' | 'tray' | 'view';
 
 // Persist the user's preferred 3D axis representation across reloads so the
 // A/B comparison sticks. Default = 'cursor' (no axis geometry; a smooth
@@ -86,6 +92,24 @@ interface SampleContextType {
   selectAllDrugFilter: () => void;
   clearDrugFilter: () => void;
   retryDatasetLoad: () => void;
+  /** Cells collected for side-by-side comparison, in the order they were added. */
+  compareSamples: Sample[];
+  /** Dataset row (the API's feature order) of each compared cell. */
+  compareRows: number[];
+  /** Per compared cell: true when the condition filter hides it from the map. */
+  compareHidden: boolean[];
+  compareOpen: boolean;
+  /** Adds the cell, or removes it if already there. False when the comparison is full. */
+  toggleCompare: (sample: Sample, source: CompareSource) => boolean;
+  removeFromCompare: (id: string, source: CompareSource) => void;
+  clearCompare: () => void;
+  setCompareOpen: (open: boolean) => void;
+  /** Picking mode: a plain click on a cell (map or strip) adds it to the comparison. */
+  comparePicking: boolean;
+  setComparePicking: (on: boolean, source?: 'toolbar' | 'tray' | 'view' | 'key') => void;
+  /** Select a cell and bring it into view on the map. */
+  focusOnMap: (sample: Sample) => void;
+  setMapFocusHandler: (handler: ((sample: Sample) => void) | null) => void;
 }
 
 const defaultOptions: VisualizerOptions = {
@@ -315,6 +339,90 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setSelectedPointIndex(null);
   }, [filteredSamples4D, selectedSample, setSelectedSample, setSelectedPointIndex]);
 
+  const sampleIndexById = useMemo(() => buildSampleIdToIndex(samples4D), [samples4D]);
+  const [compareIds, setCompareIds] = useState<string[]>([]);
+  const [compareOpen, setCompareOpenState] = useState(false);
+  const [comparePicking, setComparePickingState] = useState(false);
+  const compareSamples = useMemo(
+    () =>
+      compareIds.flatMap((id) => {
+        const row = sampleIndexById.get(id);
+        return row === undefined ? [] : [samples4D[row]];
+      }),
+    [compareIds, sampleIndexById, samples4D]
+  );
+  const compareRows = useMemo(
+    () => compareSamples.map((s) => sampleIndexById.get(s.id) ?? -1),
+    [compareSamples, sampleIndexById]
+  );
+  const compareHidden = useMemo(() => {
+    if (compareSamples.length === 0 || filteredSamples4D.length === samples4D.length) {
+      return compareSamples.map(() => false);
+    }
+    const visible = new Set(filteredSamples4D.map((s) => s.id));
+    return compareSamples.map((s) => !visible.has(s.id));
+  }, [compareSamples, filteredSamples4D, samples4D.length]);
+
+  const toggleCompare = useCallback(
+    (sample: Sample, source: CompareSource) => {
+      const present = compareIds.includes(sample.id);
+      if (!present && compareIds.length >= MAX_COMPARE_CELLS) return false;
+      const next = present ? compareIds.filter((id) => id !== sample.id) : [...compareIds, sample.id];
+      setCompareIds(next);
+      if (next.length === 0) setCompareOpenState(false);
+      trackEvent(present ? 'compare_remove' : 'compare_add', { source, cells: next.length });
+      return true;
+    },
+    [compareIds]
+  );
+
+  const removeFromCompare = useCallback(
+    (id: string, source: CompareSource) => {
+      const next = compareIds.filter((x) => x !== id);
+      setCompareIds(next);
+      if (next.length === 0) setCompareOpenState(false);
+      trackEvent('compare_remove', { source, cells: next.length });
+    },
+    [compareIds]
+  );
+
+  const clearCompare = useCallback(() => {
+    setCompareIds([]);
+    setCompareOpenState(false);
+    trackEvent('compare_clear');
+  }, []);
+
+  const setCompareOpen = useCallback(
+    (open: boolean) => {
+      setCompareOpenState(open);
+      if (open) {
+        setComparePickingState(false);
+        const conditions = new Set(compareSamples.map((s) => s.treatment.drug)).size;
+        trackEvent('compare_open', { cells: compareSamples.length, conditions });
+      }
+    },
+    [compareSamples]
+  );
+
+  // Keep stable: the map ends picking in an unmount cleanup that depends on it.
+  const setComparePicking = useCallback(
+    (on: boolean, source: 'toolbar' | 'tray' | 'view' | 'key' = 'toolbar') => {
+      setComparePickingState(on);
+      if (on) trackEvent('compare_pick', { source });
+    },
+    []
+  );
+
+  // The map registers how to fly to a cell; without it (no map mounted) focusing just selects.
+  const mapFocusRef = useRef<((sample: Sample) => void) | null>(null);
+  const setMapFocusHandler = useCallback((handler: ((sample: Sample) => void) | null) => {
+    mapFocusRef.current = handler;
+  }, []);
+  const focusOnMap = useCallback((sample: Sample) => {
+    if (mapFocusRef.current) mapFocusRef.current(sample);
+    else setSelectedSample(sample);
+  }, []);
+
   // Restore a shared view (?cell=…&feature=…&conditions=…) once the dataset is in.
   const urlStateAppliedRef = useRef(false);
   useEffect(() => {
@@ -332,15 +440,24 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     if (feature && knownFeature) {
       setSemanticState((s) => ({ ...s, advancedMode: true, selectedFeature: feature, axisSamplesVisible: true }));
     }
+    // A shared comparison opens straight into the side-by-side view.
+    const compare = Array.from(new Set((params.get('compare') ?? '').split(',')))
+      .filter((id) => sampleIndexById.has(id))
+      .slice(0, MAX_COMPARE_CELLS);
+    if (compare.length) {
+      setCompareIds(compare);
+      setCompareOpenState(compare.length >= 2);
+    }
     const navigation = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
-    if ((cell || conditions.length || knownFeature) && navigation?.type !== 'reload') {
+    if ((cell || conditions.length || knownFeature || compare.length) && navigation?.type !== 'reload') {
       trackEvent('open_view_link', {
         cell: cell?.id,
         feature: knownFeature ? (feature ?? undefined) : undefined,
         conditions: conditions.length || undefined,
+        compare: compare.length || undefined,
       });
     }
-  }, [samples4D, availableDrugs, datasetVersion]);
+  }, [samples4D, availableDrugs, datasetVersion, sampleIndexById]);
 
   // Mirror the view into the URL; replaceState keeps history and page-view analytics quiet.
   const location = useLocation();
@@ -354,6 +471,8 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     put('cell', selectedSample?.id);
     put('feature', semanticState.advancedMode ? semanticState.selectedFeature : null);
     put('conditions', Array.from(selectedDrugs).sort(compareConditions).join(','));
+    // Only while the comparison is open, so a copied cell link doesn't open a comparison.
+    put('compare', compareOpen ? compareSamples.map((s) => s.id).join(',') : null);
     const qs = params.toString().replace(/%2C/gi, ',');
     const next = `${location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`;
     if (next !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
@@ -365,6 +484,8 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     semanticState.advancedMode,
     semanticState.selectedFeature,
     selectedDrugs,
+    compareOpen,
+    compareSamples,
   ]);
 
   return (
@@ -409,6 +530,18 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         selectAllDrugFilter,
         clearDrugFilter,
         retryDatasetLoad,
+        compareSamples,
+        compareRows,
+        compareHidden,
+        compareOpen,
+        toggleCompare,
+        removeFromCompare,
+        clearCompare,
+        setCompareOpen,
+        comparePicking,
+        setComparePicking,
+        focusOnMap,
+        setMapFocusHandler,
       }}
     >
       {children}

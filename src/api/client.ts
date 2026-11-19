@@ -201,6 +201,33 @@ export async function healthCheck(version?: DatasetVersion): Promise<ApiHealth> 
   return res.json();
 }
 
+export interface CellFeature {
+  name: string;
+  /** One per requested cell; null when the cell has no measurement. */
+  values: Array<number | null>;
+  /** Share of all measured cells with a lower value (0-100), per requested cell. */
+  percentiles: Array<number | null>;
+  median: number | null;
+  /** Cells with a measurement for this feature. */
+  measured: number;
+}
+
+export interface CellFeaturesResponse {
+  /** Dataset rows, in the order requested. */
+  cells: number[];
+  features: CellFeature[];
+}
+
+/** Every feature of a few cells (dataset rows), each value placed among all measured cells. */
+export async function getCellFeatures(rows: number[], version?: DatasetVersion): Promise<CellFeaturesResponse> {
+  const params = withVersion(new URLSearchParams({ cells: rows.join(',') }), version);
+  return once(`cell-features?${params}`, async () => {
+    const res = await fetchWithTimeout(`${API_BASE}/api/cell-features?${params}`);
+    if (!res.ok) throw new Error(`Cell features request failed: ${res.status}`);
+    return (await res.json()) as CellFeaturesResponse;
+  });
+}
+
 /** What the visit log knows about this visitor's network (never the IP address). */
 export interface VisitInfo {
   org?: string;
