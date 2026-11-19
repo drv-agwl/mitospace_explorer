@@ -48,16 +48,29 @@ Restart the API; startup will log when the reducer is loaded and use it for proj
 From project root:
 
 ```bash
-uvicorn server.main:app --reload --host 0.0.0.0 --port 8000
+ENABLE_DOCS=1 uvicorn server.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 Frontend expects the API at `http://127.0.0.1:8000` by default. Override with `VITE_API_URL` in `.env`.
+The server refuses to start if `data/v3_data/features_v3.parquet` does not load.
+
+Deploys install the pinned `server/requirements.lock` (see `render.yaml`); after editing
+`requirements.txt`, regenerate the lock in a clean venv with `pip freeze`.
+
+## Configuration
+
+- `ENABLE_DOCS=1` – serve `/docs` and `/openapi.json` (off by default).
+- `CORS_ORIGINS` – extra browser origins, comma-separated (`https://mitospace.ai` and `https://www.mitospace.ai` are always allowed; localhost only when not on Render).
+- `NETLIFY_SITE_NAME` – also allow that Netlify site's branch and deploy-preview URLs.
+- `ENABLE_CHAT=1`, `OPENROUTER_API_KEY` – chat backend (hidden in the UI).
 
 ## Endpoints
 
-- `GET /api/health` – data load status
-- `GET /api/feature-stats?feature=Fragment%20Length` – min/max for a feature
-- `GET /api/features/Fragment_Length` – array of feature values (index-aligned)
+- `GET /api/health` – `{ status, version, point_count, row_order }` (`row_order` is a hash of the per-row condition order; the explorer compares it with its dataset)
+- `GET /api/ready` – 200 once the v3 data is loaded, else 503 (the host's health check)
+- `GET /api/feature-stats?feature=fragment_length_mean` – min/max for a feature
+- `GET /api/features/fragment_length_mean` – array of feature values (index-aligned); `?format=f32` returns little-endian float32 bytes
+- Unknown `version` values return 400; request bodies over 64 KB return 413.
 - `POST /api/project` – body: `{ "pointIndex", "targetValue", "feature", "method?" }` → `{ "x", "y", "z", "predictedValue" }`  
   - **method `"spatial"`** (default): highlight = kernel-weighted centroid in 3D UMAP (slider goes from region with min feature to region with max feature).  
   - **method `"axis"`**: highlight = position along the learned embedding axis, projected to 3D (reducer or k-NN).

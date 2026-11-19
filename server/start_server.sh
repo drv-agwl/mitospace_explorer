@@ -44,8 +44,8 @@ pip install -q -r requirements.txt
 echo ""
 echo "✅ Dependencies installed"
 echo ""
-echo "🌐 Starting server on http://127.0.0.1:8000"
+echo "🌐 Starting server on http://127.0.0.1:8000 (API docs at /docs)"
 echo "   Press Ctrl+C to stop"
 echo ""
 
-python -m uvicorn main:app --reload --port 8000
+ENABLE_DOCS=1 python -m uvicorn main:app --reload --port 8000

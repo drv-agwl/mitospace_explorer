@@ -81,11 +81,11 @@ def _adaptive_percentiles(valid: np.ndarray) -> Tuple[float, float]:
     return float(lo_pct), float(hi_pct)
 
 
-def feature_bounds(
+def feature_clip(
     arr: np.ndarray,
     feature: Optional[str] = None,
-) -> Tuple[float, float]:
-    """Return (min, max) clipped to robust percentile bounds.
+) -> Tuple[float, float, float, float]:
+    """Return (min, max, low_pct, high_pct): robust bounds and the percentiles they sit at.
 
     Strategy:
     1. If a manual override is registered for `feature`, use it verbatim.
@@ -97,19 +97,22 @@ def feature_bounds(
     if len(valid) < 2:
         if len(valid) == 1:
             v = float(valid[0])
-            return (v, v)
-        return (0.0, 1.0)
+            return (v, v, 0.0, 100.0)
+        return (0.0, 1.0, 0.0, 100.0)
 
-    if feature:
-        override = FEATURE_PERCENTILE_OVERRIDES.get(feature.lower())
-        if override:
-            lo_pct, hi_pct = override
-            lo, hi = np.nanpercentile(arr, [lo_pct, hi_pct])
-            return float(lo), float(hi)
-
-    lo_pct, hi_pct = _adaptive_percentiles(valid)
+    override = FEATURE_PERCENTILE_OVERRIDES.get(feature.lower()) if feature else None
+    lo_pct, hi_pct = override if override else _adaptive_percentiles(valid)
     lo, hi = np.nanpercentile(arr, [lo_pct, hi_pct])
-    return float(lo), float(hi)
+    return float(lo), float(hi), float(lo_pct), float(hi_pct)
+
+
+def feature_bounds(
+    arr: np.ndarray,
+    feature: Optional[str] = None,
+) -> Tuple[float, float]:
+    """Return (min, max) clipped to robust percentile bounds (see `feature_clip`)."""
+    lo, hi, _, _ = feature_clip(arr, feature=feature)
+    return lo, hi
 
 
 def _debug_feature_bounds(name: str, arr: np.ndarray) -> None:
@@ -134,6 +137,8 @@ class Dataset:
     # Per-row drug labels (for chat queries that filter by drug)
     drug_labels: Optional[np.ndarray] = None
     moa_labels: Optional[np.ndarray] = None
+    # FNV-1a of the per-row condition labels (see `row_order_hash`).
+    row_hash: Optional[str] = None
 
     @property
     def loaded(self) -> bool:
@@ -389,6 +394,14 @@ def _array_last(value) -> float:
         return float("nan")
 
 
+def row_order_hash(labels: Iterable[str]) -> str:
+    """32-bit FNV-1a of the labels joined by newlines; the explorer hashes its rows the same way."""
+    h = 0x811C9DC5
+    for b in "\n".join(labels).encode("utf-8"):
+        h = ((h ^ b) * 0x01000193) & 0xFFFFFFFF
+    return f"{h:08x}"
+
+
 def load_v3(parquet_path: Path) -> Dataset:
     """v3 = 2025 expanded dataset stored in a single slim parquet."""
     ds = Dataset(version="v3")
@@ -397,7 +410,7 @@ def load_v3(parquet_path: Path) -> Dataset:
         return ds
 
     print(f"[dataset_registry][v3] loading {parquet_path.name} ({parquet_path.stat().st_size / 1e6:.1f} MB)...")
-    wanted = ["embeddings_umap", "tmrm_intensities", *V3_AXIS_FEATURES]
+    wanted = ["embeddings_umap", "tmrm_intensities", "label_names", *V3_AXIS_FEATURES]
     # tmrm_last is derived; parquet may not have it as a column.
     wanted = [c for c in wanted if c != "tmrm_last"]
     try:
@@ -432,7 +445,7 @@ def load_v3(parquet_path: Path) -> Dataset:
             vals = pd.to_numeric(df[col], errors="coerce")
             if vals.notna().sum() == 0:
                 continue
-            vals = vals.fillna(vals.mean())
+            # Keep NaN: unmeasured cells (e.g. all MitoQ rows) must not get invented values.
             ds.feature_values[col] = vals.to_numpy(dtype=np.float32)
         except Exception:
             continue
@@ -446,6 +459,8 @@ def load_v3(parquet_path: Path) -> Dataset:
         ds.feature_values["morph_last"] = np.array(
             [_array_last(v) for v in df["morph_intensities"]], dtype=np.float32
         )
+    if "label_names" in df.columns:
+        ds.row_hash = row_order_hash(str(v) for v in df["label_names"])
 
     del df
     import gc

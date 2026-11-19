@@ -52,8 +52,9 @@ Render will show a form. Use these values **exactly** (copy-paste where possible
 | **Branch** | `main` (or your default branch, e.g. `improved_ui`). |
 | **Root Directory** | Leave **empty**. |
 | **Runtime** | **Python 3**. |
-| **Build Command** | `pip install -r server/requirements.txt` |
+| **Build Command** | `pip install -r server/requirements.lock` |
 | **Start Command** | `uvicorn server.main:app --host 0.0.0.0 --port $PORT` |
+| **Health Check Path** | `/api/ready` |
 
 - **Instance Type:** leave **Free** (or pick a paid plan if you prefer).
 
@@ -68,6 +69,7 @@ You can add these **now** or later:
 - **CORS_ORIGINS** – only if your frontend uses a **custom domain**.  
   Value: your frontend URL, e.g. `https://yourdomain.com` (no trailing slash).  
   If you only use the Netlify URL (`https://something.netlify.app`), you can leave this blank.
+- **IPAPI_KEY**, **VISIT_ALERT_WEBHOOK_URL**, **VISIT_LOG_WEBHOOK_URL** – the visit log: which organizations visit, Slack alerts, a Google Sheet. See **Visitor analytics** in `docs/DEPLOY_NETLIFY.md`.
 
 Click **“Advanced”** if you don’t see the environment variables section; add the key and value there.
 
@@ -78,7 +80,7 @@ Click **“Advanced”** if you don’t see the environment variables section; a
 1. Click **“Create Web Service”** at the bottom.
 2. Render will:
    - Clone your repo from the branch you chose.
-   - Run the **Build Command** (`pip install -r server/requirements.txt`).
+   - Run the **Build Command** (`pip install -r server/requirements.lock`).
    - Run the **Start Command** (`uvicorn server.main:app ...`).
 3. Watch the **Logs** tab. The first deploy can take **3–5 minutes**. You should see:
    - Build: `Successfully installed ...`
@@ -94,7 +96,7 @@ Click **“Advanced”** if you don’t see the environment variables section; a
 2. **Copy that URL** (no trailing slash). You’ll use it in Netlify as **`VITE_API_URL`**.
 3. Test it in the browser:
    - Open: `https://mitospace-api.onrender.com/api/health`
-   - You should see JSON like: `{"umap_points_loaded": true, "point_count": 13000, "features": ["Fragment Length", "Segment Length"], ...}`
+   - You should see JSON like: `{"status": "ok", "version": "v3", "point_count": 36106, "row_order": "c440081b"}`
 
 If you see that JSON, the backend is deployed and ready for the frontend.
 
@@ -129,7 +131,7 @@ If you see that JSON, the backend is deployed and ready for the frontend.
 | 1 | Signed in to Render with GitHub. |
 | 2 | Created a **Web Service**. |
 | 3 | Connected the **mitospace_explorer** repo. |
-| 4 | Set **Build:** `pip install -r server/requirements.txt`, **Start:** `uvicorn server.main:app --host 0.0.0.0 --port $PORT`, **Branch:** `main` (or yours). |
+| 4 | Set **Build:** `pip install -r server/requirements.lock`, **Start:** `uvicorn server.main:app --host 0.0.0.0 --port $PORT`, **Health check:** `/api/ready`, **Branch:** `main` (or yours). |
 | 5 | (Optional) Set **CORS_ORIGINS** to your custom domain. |
 | 6 | Clicked **Create Web Service** and waited for the deploy. |
 | 7 | Copied the URL (e.g. `https://mitospace-api.onrender.com`) and tested `/api/health`. |

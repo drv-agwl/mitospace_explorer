@@ -6,15 +6,24 @@ import {
   Video,
   Play,
   Pause,
-  MapPin,
   Database,
   Beaker,
   ExternalLink,
   Copy,
   Check,
   ChevronDown,
+  Link2,
+  PanelRightClose,
+  PanelRightOpen,
 } from 'lucide-react';
 import { useSample } from '../context/SampleContext';
+import { conditionLabel, conditionMechanism } from '../constants/conditions';
+import { prefersReducedMotion } from '../utils/motion';
+import { largePosterForId, usePosterManifest } from '../utils/posterManifest';
+import { trackEvent } from '../analytics';
+
+// labelMoa is shown (corrected) as the mechanism under the name; quality and experimentDate are export placeholders.
+const HIDDEN_METADATA_KEYS = new Set(['quality', 'labelmoa', 'experimentdate']);
 
 /**
  * A small inline "copy to clipboard" button that swaps to a check-mark for ~1s
@@ -44,15 +53,67 @@ const CopyChip: React.FC<{ value: string; label?: string }> = ({ value, label })
   );
 };
 
-const SamplePanel: React.FC = () => {
+/** Copies the page URL, which mirrors the selected cell, feature and condition filter. */
+const CopyLinkButton: React.FC = () => {
+  const [copied, setCopied] = useState(false);
+  const onCopy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setCopied(true);
+      trackEvent('copy_link');
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard is best-effort (permissions / insecure context).
+    }
+  }, []);
+  return (
+    <button
+      type="button"
+      onClick={onCopy}
+      title="Copy a link to this cell, feature and filter"
+      className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md text-[11px] font-medium text-white/75 hover:text-white bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] transition-colors"
+    >
+      {copied ? <Check size={12} strokeWidth={2.5} /> : <Link2 size={12} strokeWidth={2} />}
+      {copied ? 'Link copied' : 'Copy link'}
+    </button>
+  );
+};
+
+const PANEL_TOGGLE =
+  'shrink-0 inline-flex items-center justify-center w-8 h-8 rounded-lg text-white/55 hover:text-white hover:bg-white/[0.08] border border-transparent hover:border-white/[0.12] transition-colors';
+
+interface SamplePanelProps {
+  /** Show only a thin rail so the atlas gets the width. */
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
+}
+
+const SamplePanel: React.FC<SamplePanelProps> = ({ collapsed = false, onToggleCollapsed }) => {
   const { selectedSample, visualizerOptions } = useSample();
   const [videoLoadError, setVideoLoadError] = useState<Record<number, boolean>>({});
   const [videoLoading, setVideoLoading] = useState<Record<number, boolean>>({});
   // Autoplay muted inline (like the strip) so Safari reliably paints/plays.
-  const [isPlaying, setIsPlaying] = useState(true);
+  const [isPlaying, setIsPlaying] = useState(() => !prefersReducedMotion());
   const [imageLoadError, setImageLoadError] = useState<Record<number, boolean>>({});
   const [imageLoading, setImageLoading] = useState<Record<number, boolean>>({});
+  const [videoAttempt, setVideoAttempt] = useState(0);
   const videoRefs = useRef<(HTMLVideoElement | null)[]>([]);
+  const posters = usePosterManifest();
+
+  // Media state is per slot, so drop it when another cell is shown (one failure must not stick).
+  const [mediaStateFor, setMediaStateFor] = useState<string | null>(selectedSample?.id ?? null);
+  if ((selectedSample?.id ?? null) !== mediaStateFor) {
+    setMediaStateFor(selectedSample?.id ?? null);
+    setVideoLoadError({});
+    setVideoLoading({});
+    setImageLoadError({});
+    setImageLoading({});
+  }
+
+  const retryVideo = (index: number) => {
+    setVideoLoadError((prev) => ({ ...prev, [index]: false }));
+    setVideoAttempt((n) => n + 1);
+  };
 
   const handleVideoError = (index: number) => {
     setVideoLoadError((prev) => ({ ...prev, [index]: true }));
@@ -95,7 +156,9 @@ const SamplePanel: React.FC = () => {
   // path the manual pause→play uses. Retry briefly to cover slow first buffers.
   useEffect(() => {
     if (!selectedSample) return;
-    setIsPlaying(true);
+    const autoplay = !prefersReducedMotion();
+    setIsPlaying(autoplay);
+    if (!autoplay) return;
 
     let cancelled = false;
     let attempts = 0;
@@ -191,75 +254,111 @@ const SamplePanel: React.FC = () => {
     return { borderLeftWidth: 4, borderLeftColor: `rgb(${r}, ${g}, ${b})` };
   };
 
-  const getContrastColor = () => {
-    if (!sampleColor) return 'text-black';
-    const luminance =
-      0.299 * (sampleColor.r ?? 0) + 0.587 * (sampleColor.g ?? 0) + 0.114 * (sampleColor.b ?? 0);
-    return luminance > 0.5 ? 'text-black' : 'text-white';
-  };
+  if (collapsed) {
+    return (
+      <div className="flex-1 min-h-0 w-full flex flex-col items-center gap-3 py-4 bg-black/95 border-l border-white/[0.08]">
+        <button
+          type="button"
+          onClick={onToggleCollapsed}
+          title="Show cell details"
+          aria-label="Show cell details"
+          aria-expanded={false}
+          className={PANEL_TOGGLE}
+        >
+          <PanelRightOpen size={16} />
+        </button>
+        {selectedSample && (
+          <span
+            className="w-2.5 h-2.5 rounded-full border border-white/20"
+            style={getColorStyle()}
+            title={conditionLabel(selectedSample.treatment.drug)}
+          />
+        )}
+      </div>
+    );
+  }
+
+  const collapseButton = onToggleCollapsed && (
+    <button
+      type="button"
+      onClick={onToggleCollapsed}
+      title="Hide cell details"
+      aria-label="Hide cell details"
+      aria-expanded
+      className={PANEL_TOGGLE}
+    >
+      <PanelRightClose size={16} />
+    </button>
+  );
 
   if (!selectedSample) {
     return (
-      <div className="flex-1 min-h-0 w-full flex flex-col overflow-hidden bg-black/95 border-l border-white/[0.08] backdrop-blur-sm">
+      <div className="relative flex-1 min-h-0 w-full flex flex-col overflow-hidden bg-black/95 border-l border-white/[0.08] backdrop-blur-sm">
+        <div className="absolute top-3 right-3">{collapseButton}</div>
         <div className="flex-1 flex flex-col items-center justify-center px-10 text-center">
           <div className="w-20 h-20 rounded-2xl bg-white/[0.04] border border-white/[0.06] flex items-center justify-center mb-5">
             <Microscope size={32} strokeWidth={1.5} className="text-white/30" />
           </div>
           <p className="text-base font-medium text-white/90 mb-2 tracking-tight">
-            No sample selected
+            No cell selected
           </p>
-          <p className="text-sm text-white/45 max-w-[260px] leading-relaxed">
-            Click any point in the visualization to view sample details, media, and treatment data.
+          <p className="text-sm text-white/60 max-w-[260px] leading-relaxed">
+            Click a dot on the map, or a movie in the strip, to see that cell&apos;s movie and treatment.
           </p>
         </div>
       </div>
     );
   }
 
-  const { treatment, phenotype, x, y, z, t, videos, images, metadata } = selectedSample;
-  const coordsString = `${x.toFixed(3)}, ${y.toFixed(3)}, ${z.toFixed(3)}`;
+  const { treatment, t, videos, images, metadata } = selectedSample;
   const hasCompoundData = Boolean(treatment.smiles || treatment.pubchem);
+  const label = conditionLabel(treatment.drug);
+  const mechanism = conditionMechanism(treatment.drug);
+  // Representative cells have a still of this movie's first frame: shown until it plays.
+  const videoPoster = largePosterForId(posters, selectedSample.id);
   const metadataEntries = Object.entries(metadata ?? {}).filter(
-    ([key]) => key.toLowerCase() !== 'quality'
+    ([key]) => !HIDDEN_METADATA_KEYS.has(key.toLowerCase())
   );
   const hasMetadata = metadataEntries.length > 0;
 
   return (
     <div className="flex-1 min-h-0 w-full flex flex-col overflow-hidden bg-black/95 border-l border-white/[0.08] backdrop-blur-sm">
-      {/* ── HEADER — left accent + phenotype chip colours match the cloud legend */}
+      {/* ── HEADER — left accent + colour dot match the cloud legend */}
       <div className="shrink-0 px-6 pt-5 pb-4 border-b border-white/[0.08]">
         <div
           className="rounded-xl border border-white/[0.08] overflow-hidden bg-white/[0.03] flex"
           style={getAccentBorderStyle()}
         >
           <div className="p-4 flex-1 min-w-0">
-            <div className="flex items-baseline justify-between gap-3">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <span
+                className="shrink-0 w-3 h-3 rounded-full border border-white/20"
+                style={getColorStyle()}
+                aria-hidden="true"
+              />
               <h3
-                className="text-[20px] font-semibold text-white tracking-tight truncate leading-tight"
-                title={treatment.drug}
+                className="flex-1 min-w-0 text-[20px] font-semibold text-white tracking-tight truncate leading-tight"
+                title={label}
               >
-                {treatment.drug}
+                {label}
               </h3>
-              {phenotype && (
-                <span
-                  className={`shrink-0 inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium ${getContrastColor()}`}
-                  style={getColorStyle()}
-                  title="Morphological phenotype"
-                >
-                  {phenotype}
-                </span>
-              )}
+              {collapseButton}
             </div>
+            {mechanism && (
+              <p className="mt-1.5 text-[12px] text-white/65 leading-snug" title="Mechanism class">
+                {mechanism}
+              </p>
+            )}
 
             <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12px]">
               {treatment.dose && treatment.dose !== 'N/A' && (
-                <span className="inline-flex items-center gap-1.5 text-white/75">
+                <span className="inline-flex items-center gap-1.5 text-white/75" title="Dose">
                   <Pill size={12} strokeWidth={2} className="text-white/45" />
                   <span className="font-medium">{treatment.dose}</span>
                 </span>
               )}
               {treatment.time && treatment.time !== 'N/A' && (
-                <span className="inline-flex items-center gap-1.5 text-white/75">
+                <span className="inline-flex items-center gap-1.5 text-white/75" title="Treatment time">
                   <Clock size={12} strokeWidth={2} className="text-white/45" />
                   <span className="font-medium">{treatment.time}</span>
                 </span>
@@ -271,9 +370,8 @@ const SamplePanel: React.FC = () => {
               )}
             </div>
 
-            <div className="mt-2 flex items-center gap-1.5 text-[11px] text-white/45">
-              <MapPin size={11} strokeWidth={2} className="text-white/40 shrink-0" />
-              <span className="font-mono tabular-nums">({coordsString})</span>
+            <div className="mt-3">
+              <CopyLinkButton />
             </div>
           </div>
         </div>
@@ -284,36 +382,34 @@ const SamplePanel: React.FC = () => {
         {/* Media */}
         {(videos || images) && (
           <section>
-            <h4 className="text-[11px] font-semibold text-white/50 uppercase tracking-widest mb-3 flex items-center gap-2">
-              {videos ? (
-                <>
-                  <Video size={13} strokeWidth={2} className="text-white/50" />
-                  Cell movie
-                </>
-              ) : (
-                <>
-                  <Microscope size={13} strokeWidth={2} className="text-white/50" />
-                  Images
-                </>
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <h4 className="text-[11px] font-semibold text-white/50 uppercase tracking-widest flex items-center gap-2">
+                {videos ? (
+                  <>
+                    <Video size={13} strokeWidth={2} className="text-white/50" />
+                    Cell movie
+                  </>
+                ) : (
+                  <>
+                    <Microscope size={13} strokeWidth={2} className="text-white/50" />
+                    Images
+                  </>
+                )}
+              </h4>
+              {videos && videos.length >= 1 && (
+                <button
+                  type="button"
+                  onClick={togglePlayPause}
+                  aria-label={isPlaying ? 'Pause movie' : 'Play movie'}
+                  className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md text-[11px] font-medium text-white/80 hover:text-white bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] transition-colors"
+                >
+                  {isPlaying ? <Pause size={12} /> : <Play size={12} />}
+                  {isPlaying ? 'Pause' : 'Play'}
+                </button>
               )}
-            </h4>
+            </div>
             {videos ? (
               <div className="space-y-3">
-                {videos.length >= 1 && (
-                  <button onClick={togglePlayPause} className="btn-primary w-full text-sm">
-                    {isPlaying ? (
-                      <>
-                        <Pause size={14} className="mr-2" />
-                        Pause
-                      </>
-                    ) : (
-                      <>
-                        <Play size={14} className="mr-2" />
-                        {videos.length > 1 ? 'Play all' : 'Play'}
-                      </>
-                    )}
-                  </button>
-                )}
                 {videos.map((video, index) => {
                   const channelLabels = ['MitoTracker Green', 'TMRM'];
                   const channelLabel =
@@ -324,23 +420,32 @@ const SamplePanel: React.FC = () => {
                       className="rounded-xl overflow-hidden bg-white/[0.03] border border-white/[0.08]"
                       style={getAccentBorderStyle()}
                     >
-                      <div className="relative aspect-video">
+                      <div className="relative aspect-square">
                         {videoLoadError[index] ? (
-                          <div className="absolute inset-0 flex flex-col items-center justify-center text-white/40">
-                            <Video size={24} className="mb-2" />
+                          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-white/50">
+                            <Video size={24} />
                             <p className="text-xs">Video unavailable</p>
+                            <button
+                              type="button"
+                              onClick={() => retryVideo(index)}
+                              className="h-7 px-3 rounded-md text-[11px] font-medium text-white bg-white/[0.08] hover:bg-white/[0.14] border border-white/[0.10] transition-colors"
+                            >
+                              Retry
+                            </button>
                           </div>
                         ) : (
                           <>
                             <video
-                              key={`${selectedSample.id}-${index}`}
+                              key={`${selectedSample.id}-${index}-${videoAttempt}`}
                               ref={(el) => (videoRefs.current[index] = el)}
                               src={video}
+                              poster={index === 0 ? videoPoster : undefined}
                               preload="auto"
                               muted
                               playsInline
                               loop
-                              className="absolute inset-0 w-full h-full object-cover"
+                              onClick={togglePlayPause}
+                              className="absolute inset-0 w-full h-full object-cover cursor-pointer"
                               onError={() => handleVideoError(index)}
                               onLoadStart={() => handleVideoLoadStart(index)}
                               onCanPlay={() => handleVideoCanPlay(index)}
@@ -355,11 +460,14 @@ const SamplePanel: React.FC = () => {
                               onTimeUpdate={handleTimeUpdate}
                               onEnded={handleVideoEnded}
                             />
-                            {videoLoading[index] && (
-                              <div className="absolute inset-0 flex items-center justify-center bg-black/60">
-                                <div className="w-8 h-8 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                              </div>
-                            )}
+                            {videoLoading[index] &&
+                              (index === 0 && videoPoster ? (
+                                <div className="absolute bottom-2 right-2 w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                              ) : (
+                                <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+                                  <div className="w-8 h-8 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                </div>
+                              ))}
                           </>
                         )}
                       </div>
@@ -380,9 +488,9 @@ const SamplePanel: React.FC = () => {
                     className="rounded-xl overflow-hidden bg-white/[0.03] border border-white/[0.08]"
                     style={getAccentBorderStyle()}
                   >
-                    <div className="relative aspect-video">
+                    <div className="relative aspect-square">
                       {imageLoadError[index] ? (
-                        <div className="absolute inset-0 flex flex-col items-center justify-center text-white/40">
+                        <div className="absolute inset-0 flex flex-col items-center justify-center text-white/60">
                           <Microscope size={24} className="mb-2" />
                           <p className="text-xs">Image unavailable</p>
                         </div>
@@ -424,7 +532,7 @@ const SamplePanel: React.FC = () => {
               {treatment.smiles && (
                 <div className="p-3.5 flex items-start gap-2">
                   <div className="flex-1 min-w-0">
-                    <p className="text-[10px] font-semibold text-white/45 uppercase tracking-wider mb-1">
+                    <p className="text-[10px] font-semibold text-white/60 uppercase tracking-wider mb-1">
                       SMILES
                     </p>
                     <p className="text-[11px] font-mono text-white/85 break-all leading-relaxed">
@@ -437,7 +545,7 @@ const SamplePanel: React.FC = () => {
               {treatment.pubchem && (
                 <div className="p-3.5 flex items-center justify-between gap-2">
                   <div>
-                    <p className="text-[10px] font-semibold text-white/45 uppercase tracking-wider mb-0.5">
+                    <p className="text-[10px] font-semibold text-white/60 uppercase tracking-wider mb-0.5">
                       PubChem
                     </p>
                     <p className="text-xs font-mono text-white/75 tabular-nums">
@@ -467,7 +575,7 @@ const SamplePanel: React.FC = () => {
                 <span className="text-[11px] font-semibold text-white/55 uppercase tracking-widest flex items-center gap-2">
                   <Database size={13} strokeWidth={2} className="text-white/50" />
                   Metadata
-                  <span className="text-[10px] font-mono tabular-nums text-white/35 normal-case tracking-normal">
+                  <span className="text-[10px] font-mono tabular-nums text-white/60 normal-case tracking-normal">
                     {metadataEntries.length}
                   </span>
                 </span>

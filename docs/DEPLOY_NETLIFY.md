@@ -162,6 +162,13 @@ Click **“Deploy site”** (or **“Trigger deploy”**). Netlify will run `npm
 
 (e.g. `https://mitospace-explorer.netlify.app`). Open it and try the app; the 4D view and semantic slider should call your Render backend.
 
+### 3.5 What the build and headers enforce
+
+- `npm run build` type-checks first (`npm run typecheck`), so a TypeScript error fails the deploy instead of shipping. CI (`.github/workflows/ci.yml`) also runs `npm run lint`.
+- `netlify.toml` sends security headers on every response, including a Content-Security-Policy. It allows scripts only from the site, Umami, Google Tag Manager and Microsoft Clarity; images, movies and API calls must use HTTPS. If you add another third-party script, or serve the API or media over plain HTTP, update the policy or the browser will block it (look for "Content Security Policy" errors in the console).
+- The site cannot be shown inside another site's iframe (`frame-ancestors 'none'`, `X-Frame-Options: DENY`). To allow an embed, for example on the lab site, set `frame-ancestors https://www.schoeneberglab.org` and remove `X-Frame-Options`.
+- The link-preview card is `public/og-image.jpg` (1200×630); `robots.txt` and `sitemap.xml` are in `public/`.
+
 ---
 
 ## You already have a Netlify site
@@ -201,7 +208,7 @@ Save the DNS changes; it can take a few minutes up to 48 hours to propagate.
 
 ### 3. Let the backend accept requests from your domain (CORS)
 
-The backend only allows certain origins. For **`https://*.netlify.app`** it’s already allowed. For a **custom domain** you must add it explicitly:
+The backend only allows certain origins: `https://mitospace.ai` and `https://www.mitospace.ai` always; local dev servers when not running on Render; and, if **`NETLIFY_SITE_NAME`** is set on Render (e.g. `mitospace`), that Netlify site's own URL plus its branch and deploy-preview URLs. Any other domain must be added explicitly:
 
 1. In **Render**: open your backend service → **Environment** → add (or edit):
    - **Key:** `CORS_ORIGINS`
@@ -210,6 +217,83 @@ The backend only allows certain origins. For **`https://*.netlify.app`** it’s 
 2. Save. Render will redeploy the service; after that, the browser will allow your custom-domain frontend to call the API.
 
 Once DNS and CORS are set, open your custom domain in the browser; it should show the same app as the Netlify URL.
+
+---
+
+## Visitor analytics
+
+| Tool | What it tells you | Turn it on |
+|------|-------------------|------------|
+| Umami | Visits, pages, referrers, countries, devices, Web Vitals (Performance), JavaScript errors (Errors), and app events (see below) | Always on (`index.html`); records only on `mitospace.ai` and `www.mitospace.ai` |
+| Google Analytics 4 | The same, plus acquisition reports, funnels and explorations | Netlify: `VITE_GA_MEASUREMENT_ID` |
+| Microsoft Clarity | Session recordings, heatmaps, rage and dead clicks | Netlify: `VITE_CLARITY_PROJECT_ID` (create a free project at clarity.microsoft.com) |
+| Visit log (this API) | The organization behind each visit (university, company, government), visitors whose ad blockers stop Umami and GA, personal-link opens, active time and what each visit did | Render: `IPAPI_KEY`, plus the webhooks below |
+
+Netlify variables are read at build time: trigger a new deploy after changing them.
+
+### App events
+
+Sent to Umami, GA4 and Clarity:
+
+| Event | Data | Tells you |
+|-------|------|-----------|
+| `explorer_ready` | `ms` | How long the map took to appear (once per page load) |
+| `map_interact` | | The visitor rotated, zoomed or panned the map (once per page load) |
+| `select_cell` | `source`, `condition`, `cell` | Which cells and conditions people open, and from where (map, strip, axis strip) |
+| `semantic_axis`, `select_feature`, `filter_conditions` | feature or condition | Which analyses people use |
+| `open_view_link` | `cell`, `feature`, `conditions` | Someone opened a shared link to a view |
+| `copy_link`, `share_link`, `copy_text` | | Sharing and citing |
+| `about_section` | `section` | How far people read the About page |
+| `cta_click` | `where` | Which "Open the explorer" button was used |
+| `outbound_click` | `host`, `path` | Clicks to the paper, code, model and lab |
+| `narrow_screen` | `reason` | Visitors on phones, upright tablets or narrow windows |
+| `app_error` | `where`, `message` | Errors, alongside Umami's Errors report |
+
+Umami alone also gets `engagement` (`active_s`, `pages`, `cells`) when a tab is hidden: the time the page was actually visible, which Umami's own visit duration cannot see. Changing the cell, feature or filters updates the URL but is not counted as a new page view.
+
+### Team visits
+
+Open `https://mitospace.ai/?internal=1` once in each browser the team uses: from then on that browser is left out of Umami, GA4, Clarity and the visit log. `?internal=0` turns tracking back on.
+
+### Personal links
+
+Give each person a link with a code, e.g. `https://mitospace.ai/?ref=vc-07`, and keep the list of who has which code yourself. Use codes, not names: links get forwarded, and Google Analytics does not allow personal data. The browser remembers the code for 90 days, so return visits are attributed too. UTM tags (`?utm_source=newsletter&utm_campaign=launch`) work as well.
+
+### Organization lookup
+
+1. Create a free account at ipapi.is (1,000 lookups a day) and copy the API key.
+2. In Render, add `IPAPI_KEY` under **Environment**.
+
+Each address is looked up at most once a day, and lookups pause if the quota runs out. Only networks registered to an organization are named: visitors on home broadband or mobile data show up as their ISP.
+
+### Alerts and a spreadsheet
+
+- **`VISIT_ALERT_WEBHOOK_URL`** (Render): a Slack incoming-webhook URL (Discord and Google Chat webhooks work too). It gets one message when a notable visit starts (a named organization, a personal link or a campaign) and a summary when the visitor leaves.
+- **`VISIT_LOG_WEBHOOK_URL`** (Render): gets every visit as JSON, `{"text": …, "visit": {…}}`. To collect them in a Google Sheet:
+  1. Create a sheet, open **Extensions → Apps Script** and paste:
+     ```js
+     function doPost(e) {
+       const visit = JSON.parse(e.postData.contents).visit;
+       const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
+       const headers = sheet.getLastColumn() ? sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0] : [];
+       Object.keys(visit).forEach((key) => { if (!headers.includes(key)) headers.push(key); });
+       sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+       sheet.appendRow(headers.map((key) => visit[key] ?? ''));
+       return ContentService.createTextOutput('ok');
+     }
+     ```
+  2. **Deploy → New deployment → Web app**, execute as **Me**, access **Anyone**, and put the web app URL in `VISIT_LOG_WEBHOOK_URL`. Keep it private: anyone with the URL can add rows.
+- Without webhooks, every visit is still one line in the Render logs (search for `visit |`).
+
+The organization, its type and domain, the personal-link code and the campaign are also attached to the visitor in the other tools:
+
+- **GA4:** under **Admin → Custom definitions**, create user-scoped dimensions named `visitor_org`, `visitor_org_type`, `visitor_org_domain`, `visitor_traffic`, `visitor_ref` and `visitor_campaign`, then break reports down by them.
+- **Umami:** they are session properties, together with `visit_number` and `returning`.
+- **Clarity:** they are custom tags, so recordings can be filtered by `org` or `ref`.
+
+### Privacy
+
+IP addresses are used only for the lookup and are never logged, stored or forwarded. Because networks are looked up and Clarity records sessions, publish a short privacy notice that names what is collected and by whom (Umami, Google, Microsoft, ipapi.is). For visitors in the EU and UK, the GA4 and Clarity cookies need consent.
 
 ---
 
@@ -232,7 +316,7 @@ Once DNS and CORS are set, open your custom domain in the browser; it should sho
   - Redeploy the Netlify site after changing `VITE_API_URL` (the value is fixed at build time).  
   - Open Render URL in the browser: `https://your-service.onrender.com/api/health` — it should return JSON.
 - **Render deploy fails:** In the Render **Logs** tab, see if the error is about missing files (e.g. `data/filtered/umap_points.npy`). Those files must be in the repo (and not ignored).  
-- **CORS errors in the browser:** The backend allows `https://*.netlify.app` by default. For a **custom domain**, set **`CORS_ORIGINS`** on Render to your frontend URL (e.g. `https://yourdomain.com`). See **Using your custom domain** above.
+- **CORS errors in the browser:** Other Netlify or Render sites are not allowed. For Netlify previews set **`NETLIFY_SITE_NAME`** on Render; for any other domain set **`CORS_ORIGINS`** to your frontend URL (e.g. `https://yourdomain.com`). See **Using your custom domain** above.
 
 ---
 

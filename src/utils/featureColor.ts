@@ -215,6 +215,9 @@ export function featureToColorByRank(
 
 // ─── Adaptive plasma (recommended) ──────────────────────────────────────
 
+/** Colour for cells with no measurement of the active feature (outside the plasma scale). */
+export const NO_MEASUREMENT_RGB = { r: 0.5, g: 0.5, b: 0.5 } as const;
+
 /**
  * Plasma color for a normalized t in [0, 1], with the gamma curve and
  * trimmed colormap range applied.
@@ -253,7 +256,7 @@ export function featureToColorPlasmaAdaptive(
   gamma: number = DEFAULT_PLASMA_GAMMA,
   contrast: number = DEFAULT_PLASMA_CONTRAST
 ): { r: number; g: number; b: number } {
-  if (value == null || !Number.isFinite(value)) return { r: 0.5, g: 0.5, b: 0.5 };
+  if (value == null || !Number.isFinite(value)) return { ...NO_MEASUREMENT_RGB };
   const range = max - min;
   if (!Number.isFinite(range) || range <= 0) return plasmaAtT(0.5, gamma, contrast);
   const tLinear = (value - min) / range;

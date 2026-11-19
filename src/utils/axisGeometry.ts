@@ -200,7 +200,7 @@ export function computeEndpointAnchors(
  * bounding box volume and sample count, so the same density helper works
  * across v1 / v3 datasets of different sizes without re-tuning.
  */
-export function estimateDensityRadius(samples: readonly Sample[]): number {
+export function estimateDensityRadius(samples: readonly Pick<Sample, 'x' | 'y' | 'z'>[]): number {
   if (samples.length === 0) return 1;
   let minX = Infinity;
   let maxX = -Infinity;

@@ -1,83 +1,88 @@
 /// <reference lib="webworker" />
 /**
- * Off-main-thread loader for the v3 point dataset.
- *
- * Fetching + JSON.parse (~20MB) + normalization runs here so the UI thread
- * stays responsive (no ~300-500ms parse hitch that would stutter the shell
- * animation). We also pre-extract a transferable Float32Array of positions so
- * the renderer can seed geometry cheaply.
+ * Dataset worker: loads the compact v3 dataset off the main thread, then stays
+ * alive to run the per-feature axis work (k-NN colour smoothing and the cursor
+ * path), which would otherwise freeze the page for a few hundred ms per switch.
  */
+import {
+  COMPACT_FORMAT,
+  compactRowHash,
+  type CompactHeader,
+  type CompactPoints,
+} from '../data/compactPoints';
+import { computeFeatureAxis } from '../utils/featureAxis';
+import type { CursorPath } from '../utils/axisCursorPath';
 import type { Sample } from '../types';
 
-interface PointsData {
-  points: Sample[];
-}
-
-const VIDEO_RE = /\.(mp4|webm|ogg|mov|m4v)(\?|$)/i;
-const isVideoUrl = (url: string) => VIDEO_RE.test(url);
-
-function normalizeV3Sample(s: Sample): Sample {
-  const imgs = s.images ?? [];
-  const vids = s.videos ?? [];
-  if (vids.length === 0 && imgs.length > 0 && imgs.every(isVideoUrl)) {
-    return { ...s, videos: imgs, images: undefined };
-  }
-  return s;
-}
-
-interface RequestMsg {
-  url: string;
-}
-
-export interface PointsLoadedMsg {
-  ok: true;
-  samples: Sample[];
-  positions: Float32Array;
-}
-
-export interface PointsErrorMsg {
-  ok: false;
-  error: string;
-}
-
-self.onmessage = async (e: MessageEvent<RequestMsg>) => {
-  const { url } = e.data;
-  try {
-    // Prefer absolute URLs from the main thread. If a relative path slips
-    // through, try resolving against the worker's own location (works for
-    // same-origin classic workers; blob workers still need an absolute URL).
-    let fetchUrl = url;
-    if (url && !/^https?:\/\//i.test(url)) {
-      try {
-        fetchUrl = new URL(url, self.location.href).href;
-      } catch {
-        fetchUrl = url;
-      }
-    }
-    const res = await fetch(fetchUrl, { cache: 'force-cache' });
-    if (!res.ok) {
-      throw new Error(`Failed to load v3 dataset (${res.status} ${res.statusText})`);
-    }
-    const data = (await res.json()) as PointsData;
-    const raw = data.points || [];
-    const samples = raw.map(normalizeV3Sample);
-
-    const positions = new Float32Array(samples.length * 3);
-    for (let i = 0; i < samples.length; i++) {
-      const s = samples[i];
-      positions[i * 3] = s.x ?? 0;
-      positions[i * 3 + 1] = s.y ?? 0;
-      positions[i * 3 + 2] = s.z ?? 0;
-    }
-
-    const msg: PointsLoadedMsg = { ok: true, samples, positions };
-    // Transfer the positions buffer to avoid a copy.
-    (self as unknown as Worker).postMessage(msg, [positions.buffer]);
-  } catch (err) {
-    const msg: PointsErrorMsg = {
-      ok: false,
-      error: err instanceof Error ? err.message : 'Failed to load dataset',
+export type DatasetWorkerRequest =
+  | { type: 'load'; url: string }
+  | {
+      type: 'axis';
+      id: number;
+      /** Feature values by embedding index (NaN = no measurement). */
+      values: Float32Array;
+      /** Embedding index of each visible cell, in display order; null = all cells. */
+      indices: Int32Array | null;
+      range: { min: number; max: number };
     };
-    (self as unknown as Worker).postMessage(msg);
+
+export type DatasetWorkerResponse =
+  | {
+      type: 'loaded';
+      ok: true;
+      header: CompactHeader;
+      xyz: Float32Array;
+      condition: Uint16Array;
+      rowHash: string;
+    }
+  | { type: 'loaded'; ok: false; error: string }
+  | { type: 'axis'; id: number; smoothed: Float32Array; cursorPath: CursorPath | null }
+  | { type: 'axis-error'; id: number; error: string };
+
+let xyz: Float32Array | null = null;
+let points: Array<Pick<Sample, 'x' | 'y' | 'z'>> = [];
+
+const post = (msg: DatasetWorkerResponse, transfer: Transferable[] = []) =>
+  (self as unknown as Worker).postMessage(msg, transfer);
+
+async function load(url: string) {
+  try {
+    // Absolute URL: blob workers (Vite production) have no base URL to resolve against.
+    const res = await fetch(new URL(url, self.location.href).href);
+    if (!res.ok) throw new Error(`Failed to load dataset (${res.status} ${res.statusText})`);
+    const data = (await res.json()) as CompactPoints;
+    if (data.format !== COMPACT_FORMAT) throw new Error(`Unexpected dataset format: ${data.format}`);
+    const { condition: cond, xyz: coords, ...header } = data;
+    const all = Float32Array.from(coords);
+    xyz = all;
+    points = Array.from({ length: data.count }, (_, i) => ({
+      x: all[i * 3],
+      y: all[i * 3 + 1],
+      z: all[i * 3 + 2],
+    }));
+    const condition = Uint16Array.from(cond);
+    const rowHash = compactRowHash(header, condition);
+    const copy = all.slice();
+    post({ type: 'loaded', ok: true, header, xyz: copy, condition, rowHash }, [copy.buffer, condition.buffer]);
+  } catch (err) {
+    post({ type: 'loaded', ok: false, error: err instanceof Error ? err.message : 'Failed to load dataset' });
   }
+}
+
+function axis(req: Extract<DatasetWorkerRequest, { type: 'axis' }>) {
+  try {
+    if (!xyz) throw new Error('dataset not loaded');
+    const { smoothed, cursorPath } = computeFeatureAxis(xyz, points, req.values, req.indices, req.range);
+    const transfer: Transferable[] = [smoothed.buffer];
+    if (cursorPath) transfer.push(cursorPath.positions.buffer, cursorPath.values.buffer);
+    post({ type: 'axis', id: req.id, smoothed, cursorPath }, transfer);
+  } catch (err) {
+    post({ type: 'axis-error', id: req.id, error: err instanceof Error ? err.message : 'axis failed' });
+  }
+}
+
+self.onmessage = (e: MessageEvent<DatasetWorkerRequest>) => {
+  const msg = e.data;
+  if (msg.type === 'load') void load(msg.url);
+  else if (msg.type === 'axis') axis(msg);
 };

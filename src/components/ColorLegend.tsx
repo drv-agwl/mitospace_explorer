@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useSample } from '../context/SampleContext';
 import type { Sample } from '../types';
+import { compareConditions, conditionLabel } from '../constants/conditions';
 
 interface ColorLegendProps {
   /** Hide when using semantic/feature coloring */
@@ -27,8 +28,11 @@ function getUniqueItems(
     }
   }
   return Array.from(map.entries())
-    .map(([label, rgb]) => ({ label, ...rgb }))
-    .sort((a, b) => a.label.localeCompare(b.label));
+    .sort(([a], [b]) => (mode === 'treatment' ? compareConditions(a, b) : a.localeCompare(b)))
+    .map(([key, rgb]) => ({
+      label: mode === 'treatment' ? conditionLabel(key) : key,
+      ...rgb,
+    }));
 }
 
 const ColorLegend: React.FC<ColorLegendProps> = ({ visible }) => {

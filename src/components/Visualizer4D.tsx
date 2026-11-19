@@ -6,14 +6,16 @@ import { useSample } from '../context/SampleContext';
 import VisualizerControls from './VisualizerControls';
 import SemanticAxisPreview from './SemanticAxisPreview';
 import DrugConditionStrip from './DrugConditionStrip';
-import ColorLegend from './ColorLegend';
+import SmoothHeight from './SmoothHeight';
+import { prefersReducedMotion } from '../utils/motion';
 import { projectOnAxis, getAxisTrajectory } from '../api/client';
-import { featureToColorPlasmaAdaptive, plasmaAtT } from '../utils/featureColor';
+import { loadFeatureAxis } from '../data/sampleData';
+import type { FeatureAxis } from '../utils/featureAxis';
+import { featureToColorPlasmaAdaptive, NO_MEASUREMENT_RGB, plasmaAtT } from '../utils/featureColor';
 import { adaptColorForDarkTheme } from '../utils/colorUtils';
 import { dropdownCloseInProgressRef } from '../utils/dropdownCloseRef';
 import { buildSampleIdToIndex } from '../utils/sampleIndexMap';
 import { computeDistancesToPolyline, buildFadeFactors } from '../utils/axisDistance';
-import { smoothFeatureValuesKnn } from '../utils/featureSmooth';
 import { estimatePlasmaParams } from '../utils/featureColorParams';
 import {
   computeQuantileBeads,
@@ -24,15 +26,20 @@ import {
   type EndpointAnchors,
 } from '../utils/axisGeometry';
 import {
-  buildSmoothCursorPath,
   buildTrajectorySnapPath,
   evaluateCursorPath,
   type CursorPath,
 } from '../utils/axisCursorPath';
-import type { AxisStyle } from '../types';
+import type { AxisStyle, Sample } from '../types';
 import { getFeatureDisplayLabel } from '../constants/features';
+import { conditionLabel } from '../constants/conditions';
+import { formatFeatureValue } from '../utils/formatFeature';
+import { trackError, trackEvent } from '../analytics';
 
 const SCALE_FACTOR = 4;
+const INTRO_SEEN_STORAGE_KEY = 'mitospace.introSeen';
+// Load time is measured once per page load; returning from About remounts this component.
+let explorerReadyReported = false;
 
 /** Default orbit distance: symmetric diagonal toward origin (v1). */
 function v1DiagonalCameraCoord(): number {
@@ -65,6 +72,85 @@ function applyV3PinnedDefaultCamera(camera: THREE.PerspectiveCamera, controls: O
 const pickWorldP = new THREE.Vector3();
 const pickViewP = new THREE.Vector3();
 const pickNdc = new THREE.Vector3();
+
+/** Colour changes on the map (condition ↔ feature, feature ↔ feature) ease over this long. */
+const COLOR_TWEEN_MS = 450;
+const easeInOutCubic = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+
+/** Eases a colour buffer to `target`, starting from what it shows now, so a retarget mid-way stays smooth. */
+function tweenColors(
+  attr: THREE.BufferAttribute,
+  target: Float32Array,
+  durationMs: number,
+  rafRef: { current: number },
+  onFrame: () => void
+): void {
+  cancelAnimationFrame(rafRef.current);
+  rafRef.current = 0;
+  const colors = attr.array as Float32Array;
+  if (durationMs <= 0) {
+    colors.set(target);
+    attr.needsUpdate = true;
+    onFrame();
+    return;
+  }
+  const from = colors.slice();
+  // Clock starts at the first frame, so work right after the click doesn't eat into the ease.
+  let start = -1;
+  const step = (now: number) => {
+    if (start < 0) start = now;
+    const t = Math.min(1, (now - start) / durationMs);
+    const e = easeInOutCubic(t);
+    for (let i = 0; i < colors.length; i++) colors[i] = from[i] + (target[i] - from[i]) * e;
+    attr.needsUpdate = true;
+    onFrame();
+    rafRef.current = t < 1 ? requestAnimationFrame(step) : 0;
+  };
+  rafRef.current = requestAnimationFrame(step);
+}
+
+/** Builds the selected-cell marker: white ring, dark halo for contrast, and the cell's dot drawn on top. */
+function createSelectionMarker(color: THREE.Color): THREE.Mesh {
+  const overlay = { transparent: true, depthTest: false, depthWrite: false, side: THREE.DoubleSide };
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(0.8, 1, 64),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, opacity: 0.95, ...overlay })
+  );
+  ring.renderOrder = 22;
+  const halo = new THREE.Mesh(
+    new THREE.RingGeometry(1, 1.2, 64),
+    new THREE.MeshBasicMaterial({ color: 0x000000, opacity: 0.55, ...overlay })
+  );
+  halo.renderOrder = 21;
+  const core = new THREE.Mesh(
+    new THREE.CircleGeometry(1, 32),
+    new THREE.MeshBasicMaterial({ color, opacity: 1, ...overlay })
+  );
+  core.renderOrder = 23;
+  ring.add(halo, core);
+  ring.userData.core = core;
+  return ring;
+}
+
+/** Sizes the marker in screen pixels around the drawn dot (same sprite maths as picking) and faces it to the camera. */
+function fitSelectionMarker(
+  marker: THREE.Object3D,
+  camera: THREE.PerspectiveCamera,
+  viewportHeightPx: number,
+  pointSize: number
+): void {
+  const h = Math.max(1, viewportHeightPx);
+  camera.updateMatrixWorld();
+  pickViewP.copy(marker.position).applyMatrix4(camera.matrixWorldInverse);
+  const viewZ = Math.max(1e-3, -pickViewP.z);
+  const worldPerPx = (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * viewZ) / h;
+  const dotRadiusPx = Math.max(2.5, (pointSize * h * 0.25) / viewZ);
+  const ringRadiusPx = Math.max(11, dotRadiusPx + 7) + (marker.userData.onTrajectory ? 4 : 0);
+  marker.scale.setScalar(ringRadiusPx * worldPerPx);
+  marker.quaternion.copy(camera.quaternion);
+  const core = marker.userData.core as THREE.Object3D | undefined;
+  core?.scale.setScalar(Math.min(0.6, (dotRadiusPx + 0.5) / ringRadiusPx));
+}
 
 /**
  * Pick the point whose drawn sprite is closest to the click (CSS pixels).
@@ -140,6 +226,42 @@ function pickFilteredPointIndexFromPointer(
   return bestIdx;
 }
 
+/** Round point sprite (white, tinted per vertex by the cloud's colours). */
+function generatePointTexture(darkMode: boolean): THREE.CanvasTexture | null {
+  const canvas = document.createElement('canvas');
+  const size = 64;
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext('2d');
+  if (!context) return null;
+
+  const centerX = size / 2;
+  const centerY = size / 2;
+  const radius = size / 2 - 2;
+  context.beginPath();
+  context.arc(centerX, centerY, radius, 0, 2 * Math.PI, false);
+
+  const gradient = context.createRadialGradient(centerX, centerY, 0, centerX, centerY, radius);
+  if (darkMode) {
+    // Crisp gradient for dark mode - retains color to edges
+    gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+    gradient.addColorStop(0.3, 'rgba(255, 255, 255, 0.95)');
+    gradient.addColorStop(0.7, 'rgba(255, 255, 255, 0.85)');
+    gradient.addColorStop(1, 'rgba(255, 255, 255, 0.45)');
+  } else {
+    gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+    gradient.addColorStop(0.2, 'rgba(255, 255, 255, 0.9)');
+    gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.8)');
+    gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+  }
+  context.fillStyle = gradient;
+  context.fill();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+  return texture;
+}
+
 const Visualizer4D: React.FC = () => {
   const {
     filteredSamples4D,
@@ -164,6 +286,7 @@ const Visualizer4D: React.FC = () => {
   const axisColorPending = Boolean(
     semanticState.advancedMode &&
       semanticState.selectedFeature &&
+      !semanticState.featureLoadFailed &&
       coloringFeature !== semanticState.selectedFeature
   );
   const pendingFeatureLabel = semanticState.selectedFeature
@@ -181,6 +304,7 @@ const Visualizer4D: React.FC = () => {
     () => buildSampleIdToIndex(samples4D),
     [samples4D]
   );
+  const filterKey = `${Array.from(selectedDrugs).sort().join(',')}|${searchQuery.trim()}`;
 
   const containerRef = useRef<HTMLDivElement>(null);
   const fullscreenContainerRef = useRef<HTMLDivElement>(null);
@@ -189,10 +313,24 @@ const Visualizer4D: React.FC = () => {
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
   const pointsRef = useRef<THREE.Points | null>(null);
+  /** One material (and point texture) for the cloud; geometry is rebuilt only when the cell count changes. */
+  const pointsMaterialRef = useRef<THREE.PointsMaterial | null>(null);
+  const pointsOpacityRef = useRef(1);
+  /** Cell list the colour buffer was last painted for. */
+  const colorsPaintedForRef = useRef<unknown>(null);
+  const colorTweenRef = useRef(0);
+  /** Schedule one frame; the scene is only drawn when something changed. */
+  const requestRenderRef = useRef<() => void>(() => {});
+  /** Filter the camera was last framed for; starts unfiltered so a shared filtered link is framed on load. */
+  const lastFilterKeyRef = useRef('|');
   const selectedPointMeshRef = useRef<THREE.Mesh | null>(null);
   const targetHighlightPosRef = useRef<THREE.Vector3 | null>(null);
+  const pointSizeRef = useRef(visualizerOptions.pointSize);
+  pointSizeRef.current = visualizerOptions.pointSize;
   /** Hover indicator ring: shows which point a click would select. */
   const hoverRingRef = useRef<THREE.Mesh | null>(null);
+  /** Condition name next to the hovered dot (written directly, no re-render). */
+  const hoverLabelRef = useRef<HTMLDivElement>(null);
   const hoverFrameQueuedRef = useRef(false);
   const lastPointerCssRef = useRef<{ x: number; y: number } | null>(null);
   const selectedSampleIdRef = useRef<string | null>(null);
@@ -224,40 +362,39 @@ const Visualizer4D: React.FC = () => {
   // Dark mode is currently fixed on; keep as a const to avoid an unused setter.
   const [isDarkMode] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  // Drug-conditions overview strip — visible on first view (important overview).
-  // Videos still lazy-load via LazyVideo (src-on-visible + concurrency cap).
-  // While semantic axis is on, `drugStripKilled` hides the strip (it conflicts
-  // with the "samples along axis" strip). Turning semantic axis off clears
-  // `drugStripKilled` so the overview can be opened again.
-  const [drugStripVisible, setDrugStripVisible] = useState(true);
-  const [drugStripKilled, setDrugStripKilled] = useState(false);
-
-  // Axis-samples strip and drug overview don't share the layout; hide drug
-  // strip whenever axis samples are shown.
-  useEffect(() => {
-    if (semanticState.axisSamplesVisible && !drugStripKilled) {
-      setDrugStripKilled(true);
-      setDrugStripVisible(false);
+  const [graphicsLost, setGraphicsLost] = useState(false);
+  // Visitors should see the condition movies right away; "Hide movies" collapses to a one-row rail.
+  const [drugStripExpanded, setDrugStripExpanded] = useState(true);
+  const [introVisible, setIntroVisible] = useState(() => {
+    try {
+      return window.localStorage?.getItem(INTRO_SEEN_STORAGE_KEY) !== '1';
+    } catch {
+      return true;
     }
-  }, [semanticState.axisSamplesVisible, drugStripKilled]);
-
-  // Leaving semantic-axis mode restores the option to open the drug overview.
-  useEffect(() => {
-    if (!semanticState.advancedMode && drugStripKilled) {
-      setDrugStripKilled(false);
+  });
+  const dismissIntro = useCallback(() => {
+    setIntroVisible(false);
+    try {
+      window.localStorage?.setItem(INTRO_SEEN_STORAGE_KEY, '1');
+    } catch {
+      // ignore (private mode, quota, etc.)
     }
-  }, [semanticState.advancedMode, drugStripKilled]);
+  }, []);
 
   const toggleHelp = () => {
-    setShowHelp(!showHelp);
+    setShowHelp((v) => !v);
   };
 
-  const getCenter = useCallback(() => {
+  const cloudCenter = React.useMemo(() => {
     const center = new THREE.Vector3();
-    filteredSamples4D.forEach((s) => center.add(new THREE.Vector3(s.x, s.y, s.z)));
-    center.divideScalar(filteredSamples4D.length);
-    return center;
+    for (const s of filteredSamples4D) {
+      center.x += s.x;
+      center.y += s.y;
+      center.z += s.z;
+    }
+    return center.divideScalar(filteredSamples4D.length);
   }, [filteredSamples4D]);
+  const getCenter = useCallback(() => cloudCenter.clone(), [cloudCenter]);
 
   const toScenePos = useCallback(
     (x: number, y: number, z: number) => {
@@ -271,76 +408,31 @@ const Visualizer4D: React.FC = () => {
     [getCenter]
   );
 
+  const disposeHighlight = useCallback(() => {
+    const mesh = selectedPointMeshRef.current;
+    if (!mesh) return;
+    mesh.removeFromParent();
+    mesh.traverse((obj) => {
+      if (!(obj instanceof THREE.Mesh)) return;
+      obj.geometry.dispose();
+      (obj.material as THREE.Material).dispose();
+    });
+    selectedPointMeshRef.current = null;
+  }, []);
+
   const createOrUpdateHighlight = useCallback(
     (position: THREE.Vector3, color: THREE.Color, onTrajectory = false) => {
       if (!sceneRef.current) return;
-      const radius = onTrajectory ? 2.6 : 1.8;
-      const prev = selectedPointMeshRef.current;
-      if (prev && sceneRef.current) {
-        sceneRef.current.remove(prev);
-      }
-      const geometry = new THREE.SphereGeometry(radius, 24, 24);
-      const material = new THREE.MeshBasicMaterial({
-        color: color,
-        transparent: true,
-        opacity: onTrajectory ? 0.95 : 0.9,
-        wireframe: true,
-      });
-      const mesh = new THREE.Mesh(geometry, material);
+      disposeHighlight();
+      const mesh = createSelectionMarker(color);
+      mesh.userData.onTrajectory = onTrajectory;
       mesh.position.copy(position);
       sceneRef.current.add(mesh);
       selectedPointMeshRef.current = mesh;
       targetHighlightPosRef.current = position.clone();
     },
-    []
+    [disposeHighlight]
   );
-
-  // Generate circular point texture for better-looking points
-  const generatePointTexture = (darkMode: boolean) => {
-    const canvas = document.createElement('canvas');
-    const size = 64;
-    canvas.width = size;
-    canvas.height = size;
-    const context = canvas.getContext('2d');
-    
-    if (!context) return null;
-    
-    const centerX = size / 2;
-    const centerY = size / 2;
-    const radius = size / 2 - 2;
-    
-    // Draw circular point
-    context.beginPath();
-    context.arc(centerX, centerY, radius, 0, 2 * Math.PI, false);
-    
-    // Create gradient - adjust for dark mode
-    const gradient = context.createRadialGradient(
-      centerX, centerY, 0,
-      centerX, centerY, radius
-    );
-    
-    if (darkMode) {
-      // Crisp gradient for dark mode - retains color to edges
-      gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
-      gradient.addColorStop(0.3, 'rgba(255, 255, 255, 0.95)');
-      gradient.addColorStop(0.7, 'rgba(255, 255, 255, 0.85)');
-      gradient.addColorStop(1, 'rgba(255, 255, 255, 0.45)');
-    } else {
-      // Original gradient for light mode
-      gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
-      gradient.addColorStop(0.2, 'rgba(255, 255, 255, 0.9)');
-      gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.8)');
-      gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
-    }
-    
-    context.fillStyle = gradient;
-    context.fill();
-    
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.needsUpdate = true;
-    
-    return texture;
-  };
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -357,6 +449,8 @@ const Visualizer4D: React.FC = () => {
     );
     
     cameraRef.current = camera;
+    // A new camera has not been framed for the current filter yet.
+    lastFilterKeyRef.current = '|';
     
     const renderer = new THREE.WebGLRenderer({ 
       antialias: true,
@@ -404,8 +498,13 @@ const Visualizer4D: React.FC = () => {
     controls.update();
     
     // Add control state monitors
+    let interacted = false;
     controls.addEventListener('start', () => {
       setIsDragging(true);
+      if (!interacted) {
+        interacted = true;
+        trackEvent('map_interact');
+      }
     });
     
     controls.addEventListener('end', () => {
@@ -465,6 +564,7 @@ const Visualizer4D: React.FC = () => {
     let frameCount = 0;
     let lastTime = performance.now();
     let rafId = 0;
+    let contextLost = false;
 
     const updateFPS = () => {
       const now = performance.now();
@@ -482,30 +582,51 @@ const Visualizer4D: React.FC = () => {
       }
     };
 
+    // Draw on demand: a frame is scheduled when something changes and keeps
+    // rescheduling only while the camera is easing (damping) or the highlight glides.
     const LERP_SPEED = 0.35;
-    const animate = () => {
+    const renderFrame = () => {
       rafId = 0;
-      if (document.hidden) return;
-      rafId = requestAnimationFrame(animate);
+      if (contextLost) return;
+      let gliding = false;
       const mesh = selectedPointMeshRef.current;
       const target = targetHighlightPosRef.current;
       if (mesh && target && mesh.position.distanceTo(target) > 0.001) {
         mesh.position.lerp(target, LERP_SPEED);
+        gliding = true;
       }
-      if (controlsRef.current) controlsRef.current.update();
-      if (rendererRef.current && cameraRef.current && sceneRef.current) {
-        rendererRef.current.render(sceneRef.current, cameraRef.current);
-      }
+      // Emits 'change' (→ another frame) while damping is still moving the camera.
+      controls.update();
+      if (mesh) fitSelectionMarker(mesh, camera, renderer.domElement.clientHeight, pointSizeRef.current);
+      renderer.render(scene, camera);
       updateFPS();
+      if (gliding) requestRender();
     };
+    const requestRender = () => {
+      if (rafId === 0 && !contextLost) rafId = requestAnimationFrame(renderFrame);
+    };
+    requestRenderRef.current = requestRender;
+    controls.addEventListener('change', requestRender);
 
-    const onVisibility = () => {
-      if (!document.hidden && rafId === 0) {
-        rafId = requestAnimationFrame(animate);
-      }
+    // The browser can drop the GPU context (driver reset, GPU pressure). Three.js restores its
+    // own state; we pause drawing, tell the user, and redraw once the context is back.
+    const onContextLost = (event: Event) => {
+      event.preventDefault();
+      contextLost = true;
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = 0;
+      setGraphicsLost(true);
+      trackError('webgl', 'context lost');
     };
-    document.addEventListener('visibilitychange', onVisibility);
-    rafId = requestAnimationFrame(animate);
+    const onContextRestored = () => {
+      contextLost = false;
+      setGraphicsLost(false);
+      requestRender();
+    };
+    renderer.domElement.addEventListener('webglcontextlost', onContextLost);
+    renderer.domElement.addEventListener('webglcontextrestored', onContextRestored);
+
+    requestRender();
     setIsLoading(false);
     
     const handleResize = () => {
@@ -515,6 +636,9 @@ const Visualizer4D: React.FC = () => {
       cameraRef.current.aspect = w / h;
       cameraRef.current.updateProjectionMatrix();
       rendererRef.current.setSize(w, h);
+      // setSize clears the canvas: draw now, before this frame is painted, so it never flashes blank.
+      if (rafId) cancelAnimationFrame(rafId);
+      renderFrame();
     };
     
     window.addEventListener('resize', handleResize);
@@ -546,13 +670,17 @@ const Visualizer4D: React.FC = () => {
     containerRef.current.addEventListener('wheel', handleWheel, { passive: false });
     
     return () => {
-      document.removeEventListener('visibilitychange', onVisibility);
       if (rafId) cancelAnimationFrame(rafId);
+      requestRenderRef.current = () => {};
       window.removeEventListener('resize', handleResize);
       resizeObserver.disconnect();
       if (containerRef.current) {
         containerRef.current.removeEventListener('wheel', handleWheel);
       }
+      controls.removeEventListener('change', requestRender);
+      controls.dispose();
+      renderer.domElement.removeEventListener('webglcontextlost', onContextLost);
+      renderer.domElement.removeEventListener('webglcontextrestored', onContextRestored);
       
       if (rendererRef.current && containerRef.current) {
         containerRef.current.removeChild(rendererRef.current.domElement);
@@ -561,13 +689,14 @@ const Visualizer4D: React.FC = () => {
       if (pointsRef.current && sceneRef.current) {
         sceneRef.current.remove(pointsRef.current);
         pointsRef.current.geometry.dispose();
-        (pointsRef.current.material as THREE.Material).dispose();
         pointsRef.current = null;
       }
-      if (selectedPointMeshRef.current && sceneRef.current) {
-        sceneRef.current.remove(selectedPointMeshRef.current);
-        selectedPointMeshRef.current = null;
+      if (pointsMaterialRef.current) {
+        pointsMaterialRef.current.map?.dispose();
+        pointsMaterialRef.current.dispose();
+        pointsMaterialRef.current = null;
       }
+      disposeHighlight();
       if (trajectoryLineRef.current && sceneRef.current) {
         sceneRef.current.remove(trajectoryLineRef.current);
         trajectoryLineRef.current.traverse((child) => {
@@ -596,8 +725,12 @@ const Visualizer4D: React.FC = () => {
         (hoverRingRef.current.material as THREE.Material).dispose();
         hoverRingRef.current = null;
       }
+      // Free the GPU context now rather than at GC, so route changes never pile up contexts.
+      renderer.dispose();
+      renderer.forceContextLoss();
+      rendererRef.current = null;
     };
-  }, []);
+  }, [disposeHighlight]);
 
   // Apply default camera when dataset version changes.
   useEffect(() => {
@@ -663,6 +796,56 @@ const Visualizer4D: React.FC = () => {
     return { gamma: p.gamma, contrast: p.contrast } as const;
   }, [useFeatureColoring, coloringFeature, featureValues]);
 
+  // Visible cells without a value for the active feature (drawn grey, outside the scale).
+  const missingFeatureCount = React.useMemo(() => {
+    if (!useFeatureColoring || !coloringFeature) return 0;
+    const fv = featureValues[coloringFeature];
+    if (!fv) return 0;
+    let n = 0;
+    for (const s of filteredSamples4D) {
+      const ei = sampleIdToEmbeddingIndex.get(s.id) ?? -1;
+      if (ei < 0 || ei >= fv.length || !Number.isFinite(fv[ei])) n++;
+    }
+    return n;
+  }, [useFeatureColoring, coloringFeature, featureValues, filteredSamples4D, sampleIdToEmbeddingIndex]);
+
+  // Smoothed colours and the cursor path are computed in the dataset worker and cached per
+  // feature + filter, so a feature switch never blocks the page.
+  const axisRange = semanticState.featureRange;
+  const featureAxisKey =
+    useFeatureColoring && coloringFeature && axisRange
+      ? `${coloringFeature}|${filterKey}|${axisRange.min}|${axisRange.max}`
+      : null;
+  const [featureAxis, setFeatureAxis] = useState<{ key: string; axis: FeatureAxis } | null>(null);
+  useEffect(() => {
+    const values = coloringFeature ? featureValues[coloringFeature] : undefined;
+    if (!featureAxisKey || !values || !axisRange) return;
+    let cancelled = false;
+    const indices =
+      filteredSamples4D.length === samples4D.length
+        ? null
+        : Int32Array.from(filteredSamples4D, (s) => sampleIdToEmbeddingIndex.get(s.id) ?? -1);
+    loadFeatureAxis(featureAxisKey, values, indices, axisRange).then(
+      (axis) => {
+        if (!cancelled) setFeatureAxis({ key: featureAxisKey, axis });
+      },
+      (err) => console.warn('[axis] feature axis failed', err)
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    featureAxisKey,
+    coloringFeature,
+    featureValues,
+    axisRange,
+    filteredSamples4D,
+    samples4D,
+    sampleIdToEmbeddingIndex,
+  ]);
+  const readyAxis = featureAxis?.key === featureAxisKey ? featureAxis.axis : null;
+  const smoothedFeatureValues = readyAxis?.smoothed ?? null;
+
   // ─── New axis-style state (A/B switch) ────────────────────────────────
   // We precompute quantile beads, endpoint anchors and a dense cursor path
   // *once per feature* from the filtered cloud; the slider then cheaply
@@ -694,7 +877,7 @@ const Visualizer4D: React.FC = () => {
    * camera moves or slider drags.
    */
   const quantileBeads = React.useMemo<AxisBead[]>(() => {
-    if (!useFeatureColoring) return [];
+    if (!useFeatureColoring || axisStyle !== 'beads') return [];
     const fname = coloringFeature;
     if (!fname) return [];
     const fv = featureValues[fname];
@@ -703,6 +886,7 @@ const Visualizer4D: React.FC = () => {
     return computeQuantileBeads(filteredSamples4D, fv, filteredEmbeddingIndexOf, fr, 7, 24);
   }, [
     useFeatureColoring,
+    axisStyle,
     coloringFeature,
     semanticState.featureRange,
     featureValues,
@@ -714,7 +898,7 @@ const Visualizer4D: React.FC = () => {
    * Endpoint anchor centroids for the `bare` style.
    */
   const endpointAnchors = React.useMemo<EndpointAnchors | null>(() => {
-    if (!useFeatureColoring) return null;
+    if (!useFeatureColoring || axisStyle !== 'bare') return null;
     const fname = coloringFeature;
     if (!fname) return null;
     const fv = featureValues[fname];
@@ -722,6 +906,7 @@ const Visualizer4D: React.FC = () => {
     return computeEndpointAnchors(filteredSamples4D, fv, filteredEmbeddingIndexOf, 0.05);
   }, [
     useFeatureColoring,
+    axisStyle,
     coloringFeature,
     featureValues,
     filteredSamples4D,
@@ -745,11 +930,8 @@ const Visualizer4D: React.FC = () => {
    */
   const cursorPath = React.useMemo<CursorPath | null>(() => {
     if (!useFeatureColoring) return null;
-    const fname = coloringFeature;
-    if (!fname) return null;
-    const fv = featureValues[fname];
     const fr = semanticState.featureRange;
-    if (!fv || !fr) return null;
+    if (!fr) return null;
 
     if (axisStyle === 'cursor-axis') {
       if (trajectoryPoints && trajectoryPoints.length >= 2) {
@@ -759,25 +941,16 @@ const Visualizer4D: React.FC = () => {
       // the local density-mode path so the cursor still works.
     }
     if (axisStyle === 'cursor' || axisStyle === 'cursor-axis') {
-      return buildSmoothCursorPath(
-        filteredSamples4D,
-        fv,
-        filteredEmbeddingIndexOf,
-        fr,
-        200,
-        64
-      );
+      return readyAxis?.cursorPath ?? null;
     }
     return null;
   }, [
     axisStyle,
     useFeatureColoring,
-    coloringFeature,
     semanticState.featureRange,
-    featureValues,
     filteredSamples4D,
-    filteredEmbeddingIndexOf,
     trajectoryPoints,
+    readyAxis,
   ]);
 
   // Fetch backend trajectory whenever Advanced Semantic + feature are set.
@@ -1572,46 +1745,46 @@ const Visualizer4D: React.FC = () => {
     return buildFadeFactors(dist, 0.5, 0.95);
   }, [trajectoryPoints, filteredSamples4D, useFeatureColoring, isCursorMode]);
 
-  /**
-   * Gentle k-NN spatial smoothing of the active feature's values across the
-   * filtered cloud. We feed the *smoothed* values into the plasma colormap so
-   * adjacent points get similar colors — much less speckle, gradient reads as
-   * a gradient. The colormap and its scaling are unchanged, so colors still
-   * mean magnitudes (no rank distortion). Recomputed only when the cloud or
-   * the feature changes; the slider doesn't pay for it.
-   */
-  const smoothedFeatureValues = React.useMemo<Float32Array | null>(() => {
-    if (!useFeatureColoring) return null;
-    const fname = coloringFeature;
-    if (!fname) return null;
-    const fvCol = featureValues[fname];
-    if (!fvCol || filteredSamples4D.length === 0) return null;
-    return smoothFeatureValuesKnn(
-      filteredSamples4D,
-      fvCol,
-      (i) => sampleIdToEmbeddingIndex.get(filteredSamples4D[i].id) ?? -1,
-      6,
-      0.35
-    );
-  }, [
-    useFeatureColoring,
-    coloringFeature,
-    featureValues,
-    filteredSamples4D,
-    sampleIdToEmbeddingIndex,
-  ]);
+  // The cloud is updated in three independent steps so that, e.g., a click (which only moves
+  // the highlight) never touches the 36k-point buffers.
 
-  // Update visualization when samples or options change; fade points when trajectory/selection is active
+  // 1. Material: point size, opacity and the round point sprite.
   useEffect(() => {
-    if (!sceneRef.current) return;
-    if (!filteredSamples4D?.length) {
+    let material = pointsMaterialRef.current;
+    if (!material) {
+      material = new THREE.PointsMaterial({
+        vertexColors: true,
+        sizeAttenuation: true,
+        transparent: true,
+        alphaTest: 0.5,
+      });
+      pointsMaterialRef.current = material;
+      if (pointsRef.current) pointsRef.current.material = material;
+    }
+    if (material.userData.dark !== isDarkMode) {
+      const previousMap = material.map;
+      material.map = generatePointTexture(isDarkMode);
+      material.userData.dark = isDarkMode;
+      previousMap?.dispose();
+      material.needsUpdate = true;
+    }
+    material.size = visualizerOptions.pointSize;
+    pointsOpacityRef.current = isDarkMode ? 1.0 : 0.9;
+    material.opacity = pointsOpacityRef.current;
+  }, [visualizerOptions.pointSize, isDarkMode]);
+
+  useEffect(() => () => cancelAnimationFrame(colorTweenRef.current), []);
+
+  // 2. Geometry: positions, rebuilt only when the visible cells change.
+  useEffect(() => {
+    const scene = sceneRef.current;
+    const material = pointsMaterialRef.current;
+    if (!scene || !material) return;
+    if (!filteredSamples4D.length) {
       prevEmbeddingCentroidRef.current = null;
-      if (pointsRef.current && sceneRef.current) {
-        sceneRef.current.remove(pointsRef.current);
+      if (pointsRef.current) {
+        scene.remove(pointsRef.current);
         pointsRef.current.geometry.dispose();
-        const mat = pointsRef.current.material;
-        if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
-        else mat.dispose();
         pointsRef.current = null;
       }
       setPointCount(0);
@@ -1620,14 +1793,7 @@ const Visualizer4D: React.FC = () => {
 
     setPointCount(filteredSamples4D.length);
 
-    const disposePoints = (pts: THREE.Points) => {
-      pts.geometry.dispose();
-      const mat = pts.material;
-      if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
-      else mat.dispose();
-    };
-
-    const center = getCenter();
+    const center = cloudCenter;
     // Re-centering the cloud in scene space when the filter changes is equivalent
     // to translating all points by (prevCenter − center) * SCALE_FACTOR; move the
     // camera + orbit target by the same vector so the framing stays stable.
@@ -1642,163 +1808,144 @@ const Visualizer4D: React.FC = () => {
 
     const n = filteredSamples4D.length;
     const positions = new Float32Array(n * 3);
-    const colors = new Float32Array(n * 3);
-    const sizes = new Float32Array(n);
-    const pointsOpacity = trajectoryActive ? 0.72 : (isDarkMode ? 1.0 : 0.9);
-    const pointsSize = visualizerOptions.pointSize;
-    const fr = semanticState.featureRange;
-    const fvCol =
-      useFeatureColoring && coloringFeature
-        ? featureValues[coloringFeature]
-        : null;
-
-    filteredSamples4D.forEach((sample, i) => {
+    for (let i = 0; i < n; i++) {
+      const sample = filteredSamples4D[i];
       positions[i * 3] = (sample.x - center.x) * SCALE_FACTOR;
       positions[i * 3 + 1] = (sample.y - center.y) * SCALE_FACTOR;
       positions[i * 3 + 2] = (sample.z - center.z) * SCALE_FACTOR;
+    }
 
-      let color: THREE.Color;
-      if (fvCol && fr && useFeatureColoring) {
-        // Prefer the spatially-smoothed value so neighboring points get
-        // similar colors (the gradient reads continuously); fall back to the
-        // raw value indexed by embedding if smoothing isn't available yet.
-        let v: number | null = null;
-        if (smoothedFeatureValues && i < smoothedFeatureValues.length) {
-          const sv = smoothedFeatureValues[i];
-          v = Number.isFinite(sv) ? sv : null;
-        }
-        if (v == null) {
-          const ei = sampleIdToEmbeddingIndex.get(sample.id) ?? -1;
-          v = ei >= 0 && ei < fvCol.length ? fvCol[ei] : null;
-        }
-        const c = featureToColorPlasmaAdaptive(v, fr.min, fr.max, plasmaParams.gamma, plasmaParams.contrast);
-        const adapted = isDarkMode ? adaptColorForDarkTheme(c.r, c.g, c.b) : c;
-        if (axisFadeFactors && i < axisFadeFactors.length) {
-          // Off-axis points are scaled by a brightness factor in [MIN_B, 1].
-          // This preserves hue (no gray-blend), just dims the points farther
-          // from the axis so the on-axis ribbon visually pops without the
-          // cloud turning desaturated.
-          const MIN_B = 0.7;
-          const f = axisFadeFactors[i];
-          const brightness = MIN_B + (1 - MIN_B) * Math.pow(f, 0.5);
-          color = new THREE.Color(
-            adapted.r * brightness,
-            adapted.g * brightness,
-            adapted.b * brightness
-          );
-        } else {
-          color = new THREE.Color(adapted.r, adapted.g, adapted.b);
-        }
-      } else if (visualizerOptions.coloringMode === 'phenotype') {
-        const cr = sample.color_phenotypic?.r ?? 0;
-        const cg = sample.color_phenotypic?.g ?? 0;
-        const cb = sample.color_phenotypic?.b ?? 0;
-        color = isDarkMode
-          ? new THREE.Color(...Object.values(adaptColorForDarkTheme(cr, cg, cb)))
-          : new THREE.Color(cr, cg, cb);
-      } else {
-        const cr = sample.color?.r ?? 0;
-        const cg = sample.color?.g ?? 0;
-        const cb = sample.color?.b ?? 0;
-        color = isDarkMode
-          ? new THREE.Color(...Object.values(adaptColorForDarkTheme(cr, cg, cb)))
-          : new THREE.Color(cr, cg, cb);
-      }
-      colors[i * 3] = color.r;
-      colors[i * 3 + 1] = color.g;
-      colors[i * 3 + 2] = color.b;
-      sizes[i] = pointsSize;
-    });
-
-    // In-place buffer update when point count is unchanged (filter membership
-    // stable) — avoids allocating a new Points + GPU resources on color-only churn.
     const existing = pointsRef.current;
-    const existingCount = existing
-      ? (existing.geometry.getAttribute('position')?.count ?? 0)
-      : 0;
-
-    if (existing && existingCount === n) {
-      const geom = existing.geometry;
-      const posAttr = geom.getAttribute('position') as THREE.BufferAttribute;
-      const colAttr = geom.getAttribute('color') as THREE.BufferAttribute;
-      const sizeAttr = geom.getAttribute('size') as THREE.BufferAttribute;
+    if (existing && existing.geometry.getAttribute('position').count === n) {
+      const posAttr = existing.geometry.getAttribute('position') as THREE.BufferAttribute;
       (posAttr.array as Float32Array).set(positions);
-      (colAttr.array as Float32Array).set(colors);
-      (sizeAttr.array as Float32Array).set(sizes);
       posAttr.needsUpdate = true;
-      colAttr.needsUpdate = true;
-      sizeAttr.needsUpdate = true;
-      const mat = existing.material as THREE.PointsMaterial;
-      mat.size = pointsSize;
-      mat.opacity = pointsOpacity;
-      mat.map = generatePointTexture(isDarkMode);
-      mat.needsUpdate = true;
+      existing.geometry.computeBoundingSphere();
       return;
     }
 
-    if (existing && sceneRef.current) {
-      sceneRef.current.remove(existing);
-      disposePoints(existing);
+    if (existing) {
+      scene.remove(existing);
+      existing.geometry.dispose();
       pointsRef.current = null;
     }
-
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
-    const material = new THREE.PointsMaterial({
-      size: pointsSize,
-      vertexColors: true,
-      sizeAttenuation: true,
-      transparent: true,
-      opacity: pointsOpacity,
-      alphaTest: 0.5,
-      map: generatePointTexture(isDarkMode),
-    });
+    geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
     const points = new THREE.Points(geometry, material);
-    sceneRef.current.add(points);
+    scene.add(points);
     pointsRef.current = points;
+    colorsPaintedForRef.current = null;
 
     // Fade the cloud in the first time it appears so it "develops in" rather
     // than popping. Subsequent rebuilds (filters/colors) render at full opacity.
     if (!pointsHaveFadedInRef.current) {
       pointsHaveFadedInRef.current = true;
+      if (!explorerReadyReported) {
+        explorerReadyReported = true;
+        // Time from opening the page to seeing the map.
+        trackEvent('explorer_ready', { ms: Math.round(performance.now()) });
+      }
       const reduceMotion =
         typeof window !== 'undefined' &&
         window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
       if (!reduceMotion) {
-        const target = pointsOpacity;
         const start = performance.now();
         const DURATION = 450;
         material.opacity = 0;
         const ramp = () => {
-          if (pointsRef.current?.material !== material) return; // replaced; stop
+          if (pointsMaterialRef.current !== material) return;
           const t = Math.min(1, (performance.now() - start) / DURATION);
-          material.opacity = target * t;
+          material.opacity = pointsOpacityRef.current * t;
+          requestRenderRef.current();
           if (t < 1) requestAnimationFrame(ramp);
         };
         requestAnimationFrame(ramp);
       }
     }
+  }, [filteredSamples4D, cloudCenter]);
+
+  // 3. Colours: condition colours, or the feature plasma once its smoothed values are ready.
+  useEffect(() => {
+    const points = pointsRef.current;
+    if (!points) return;
+    const colorAttr = points.geometry.getAttribute('color') as THREE.BufferAttribute;
+    const colors = new Float32Array(colorAttr.array.length);
+    const fr = semanticState.featureRange;
+    const fvCol = useFeatureColoring && coloringFeature ? featureValues[coloringFeature] : null;
+    const featureMode = Boolean(fvCol && fr);
+    const sameCells = colorsPaintedForRef.current === filteredSamples4D;
+    // While a feature's smoothed values are on their way keep the current colours, unless the
+    // buffer belongs to a different set of cells (then paint raw values rather than leave it blank).
+    if (featureMode && !smoothedFeatureValues && sameCells) return;
+    // Slight dim while the axis is engaged so the cursor ball reads as the focal point. Done in
+    // colour, not opacity: with alphaTest a lower opacity drops small (distant) sprites entirely.
+    const dim = trajectoryActive ? 0.72 : 1;
+
+    const n = Math.min(filteredSamples4D.length, colorAttr.count);
+    for (let i = 0; i < n; i++) {
+      const sample = filteredSamples4D[i];
+      let r: number;
+      let g: number;
+      let b: number;
+      if (featureMode) {
+        let v: number | null = null;
+        if (smoothedFeatureValues && i < smoothedFeatureValues.length) {
+          const sv = smoothedFeatureValues[i];
+          v = Number.isFinite(sv) ? sv : null;
+        } else {
+          const ei = sampleIdToEmbeddingIndex.get(sample.id) ?? -1;
+          v = ei >= 0 && ei < fvCol!.length ? fvCol![ei] : null;
+        }
+        const c = featureToColorPlasmaAdaptive(v, fr!.min, fr!.max, plasmaParams.gamma, plasmaParams.contrast);
+        const adapted = isDarkMode ? adaptColorForDarkTheme(c.r, c.g, c.b) : c;
+        // Off-axis points keep their hue but are dimmed to [MIN_B, 1] so the on-axis ribbon pops.
+        let brightness = 1;
+        if (axisFadeFactors && i < axisFadeFactors.length) {
+          const MIN_B = 0.7;
+          brightness = MIN_B + (1 - MIN_B) * Math.pow(axisFadeFactors[i], 0.5);
+        }
+        r = adapted.r * brightness;
+        g = adapted.g * brightness;
+        b = adapted.b * brightness;
+      } else {
+        const src =
+          visualizerOptions.coloringMode === 'phenotype' ? sample.color_phenotypic : sample.color;
+        const cr = src?.r ?? 0;
+        const cg = src?.g ?? 0;
+        const cb = src?.b ?? 0;
+        const adapted = isDarkMode ? adaptColorForDarkTheme(cr, cg, cb) : { r: cr, g: cg, b: cb };
+        r = adapted.r;
+        g = adapted.g;
+        b = adapted.b;
+      }
+      colors[i * 3] = r * dim;
+      colors[i * 3 + 1] = g * dim;
+      colors[i * 3 + 2] = b * dim;
+    }
+    colorsPaintedForRef.current = filteredSamples4D;
+    // A new set of cells is painted at once; the same cells ease to their new colours.
+    tweenColors(
+      colorAttr,
+      colors,
+      sameCells && !prefersReducedMotion() ? COLOR_TWEEN_MS : 0,
+      colorTweenRef,
+      () => requestRenderRef.current()
+    );
   }, [
     filteredSamples4D,
-    visualizerOptions,
+    visualizerOptions.coloringMode,
     isDarkMode,
-    semanticState.advancedMode,
     coloringFeature,
-    semanticState.projectedPosition,
     semanticState.featureRange,
     featureValues,
-    getCenter,
     useFeatureColoring,
     sampleIdToEmbeddingIndex,
-    trajectoryActive,
-    trajectoryPoints,
-    selectedSample,
     axisFadeFactors,
     smoothedFeatureValues,
     plasmaParams.gamma,
     plasmaParams.contrast,
+    trajectoryActive,
   ]);
 
   // Highlight position: projected (semantic, already in scene space from API)
@@ -1813,10 +1960,7 @@ const Visualizer4D: React.FC = () => {
         : null;
     if (!pos) {
       targetHighlightPosRef.current = null;
-      if (selectedPointMeshRef.current && sceneRef.current) {
-        sceneRef.current.remove(selectedPointMeshRef.current);
-        selectedPointMeshRef.current = null;
-      }
+      disposeHighlight();
       return;
     }
     targetHighlightPosRef.current = pos.clone();
@@ -1880,12 +2024,9 @@ const Visualizer4D: React.FC = () => {
       createOrUpdateHighlight(pos, color, onTrajectory);
     } else {
       if (!proj) selectedPointMeshRef.current.position.copy(pos);
-      const mat = selectedPointMeshRef.current.material as THREE.MeshBasicMaterial;
-      if (mat) mat.color.copy(color);
-      // Resize sphere when switching on/off trajectory (recreate with new radius)
-      const currentRadius = (selectedPointMeshRef.current.geometry as THREE.SphereGeometry).parameters.radius;
-      const wantRadius = onTrajectory ? 2.6 : 1.8;
-      if (Math.abs(currentRadius - wantRadius) > 0.01) {
+      const core = selectedPointMeshRef.current.userData.core as THREE.Mesh | undefined;
+      (core?.material as THREE.MeshBasicMaterial | undefined)?.color.copy(color);
+      if (Boolean(selectedPointMeshRef.current.userData.onTrajectory) !== onTrajectory) {
         createOrUpdateHighlight(pos, color, onTrajectory);
       }
     }
@@ -1903,14 +2044,24 @@ const Visualizer4D: React.FC = () => {
     isDarkMode,
     toScenePos,
     createOrUpdateHighlight,
+    disposeHighlight,
     trajectoryPoints,
   ]);
 
+  // Every scene mutation happens in an effect or goes through OrbitControls, so one frame
+  // after each commit (plus the controls' 'change' events) keeps the canvas current.
   useEffect(() => {
-    if (filteredSamples4D.length > 0 && !selectedSample) {
-      const defaultSample = filteredSamples4D.find((s) => s.phenotype === 'control');
-      if (defaultSample) setSelectedSample(defaultSample);
-    }
+    requestRenderRef.current();
+  });
+
+  // Preselect a control cell once per mount; after that an empty selection is the user's choice.
+  const initialSelectionDoneRef = useRef(false);
+  useEffect(() => {
+    if (initialSelectionDoneRef.current || filteredSamples4D.length === 0) return;
+    initialSelectionDoneRef.current = true;
+    if (selectedSample) return;
+    const defaultSample = filteredSamples4D.find((s) => s.phenotype === 'control');
+    if (defaultSample) setSelectedSample(defaultSample);
   }, [filteredSamples4D, selectedSample, setSelectedSample]);
 
   useEffect(() => {
@@ -2014,11 +2165,19 @@ const Visualizer4D: React.FC = () => {
     const cam = cameraRef.current;
     const pts = pointsRef.current;
     const ring = hoverRingRef.current;
+    const label = hoverLabelRef.current;
     if (!pos || !container || !cam || !pts || !ring) return;
+    const hide = () => {
+      if (label) label.style.display = 'none';
+      if (ring.visible) {
+        ring.visible = false;
+        requestRenderRef.current();
+      }
+    };
 
     // While the user is rotating/dragging, hide hover — they aren't targeting.
     if (pointerDownRef.current && pointerMovedRef.current) {
-      ring.visible = false;
+      hide();
       return;
     }
     const rect = container.getBoundingClientRect();
@@ -2034,7 +2193,7 @@ const Visualizer4D: React.FC = () => {
       visualizerOptions.pointSize
     );
     if (idx < 0) {
-      ring.visible = false;
+      hide();
       return;
     }
     ring.position.set(posAttr.getX(idx), posAttr.getY(idx), posAttr.getZ(idx));
@@ -2049,7 +2208,26 @@ const Visualizer4D: React.FC = () => {
     // Billboard toward camera so the ring always reads as a circle.
     ring.lookAt(cam.position);
     ring.visible = true;
-  }, [filteredSamples4D.length, visualizerOptions.pointSize]);
+    requestRenderRef.current();
+
+    const sample = filteredSamples4D[idx];
+    if (label && sample) {
+      let text = conditionLabel(sample.treatment.drug);
+      if (useFeatureColoring && coloringFeature) {
+        const v = featureValues[coloringFeature]?.[sampleIdToEmbeddingIndex.get(sample.id) ?? -1];
+        text += Number.isFinite(v) ? ` · ${formatFeatureValue(v)}` : ' · no measurement';
+      }
+      label.textContent = text;
+      label.style.display = 'block';
+      const x = pos.x - rect.left;
+      const y = pos.y - rect.top;
+      // Keep the label inside the canvas: flip left near the right edge, below near the top.
+      const flipX = x > rect.width - label.offsetWidth - 28;
+      const flipY = y < 40;
+      label.style.left = `${flipX ? x - label.offsetWidth - 14 : x + 14}px`;
+      label.style.top = `${flipY ? y + 18 : y - 34}px`;
+    }
+  }, [filteredSamples4D, visualizerOptions.pointSize, useFeatureColoring, coloringFeature, featureValues, sampleIdToEmbeddingIndex]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
     if (pointerDownRef.current && !pointerMovedRef.current) {
@@ -2071,10 +2249,16 @@ const Visualizer4D: React.FC = () => {
   const handlePointerLeave = useCallback(() => {
     pointerDownRef.current = null;
     lastPointerCssRef.current = null;
-    if (hoverRingRef.current) hoverRingRef.current.visible = false;
+    if (hoverLabelRef.current) hoverLabelRef.current.style.display = 'none';
+    if (hoverRingRef.current?.visible) {
+      hoverRingRef.current.visible = false;
+      requestRenderRef.current();
+    }
   }, []);
 
   const handleClick = (event: React.MouseEvent) => {
+    // Clicks on overlay buttons bubble here too; only the canvas itself picks or deselects.
+    if (event.target !== rendererRef.current?.domElement) return;
     if (!containerRef.current || !cameraRef.current || !pointsRef.current) return;
     if (isDragging || pointerMovedRef.current) {
       pointerMovedRef.current = false;
@@ -2098,8 +2282,14 @@ const Visualizer4D: React.FC = () => {
     );
 
     if (bestIdx >= 0) {
+      if (introVisible) dismissIntro();
       setSelectedPointIndex(bestIdx);
       setSelectedSample(filteredSamples4D[bestIdx]);
+      trackEvent('select_cell', {
+        source: 'map',
+        condition: filteredSamples4D[bestIdx].treatment.drug,
+        cell: filteredSamples4D[bestIdx].id,
+      });
         setSemanticState((s) => ({ ...s, projectedPosition: null, projectedConfidence: null }));
     } else if (dropdownCloseInProgressRef.current) {
       dropdownCloseInProgressRef.current = false;
@@ -2124,32 +2314,147 @@ const Visualizer4D: React.FC = () => {
     controlsRef.current.update();
   }, [datasetVersion]);
 
-  const toggleFullscreen = useCallback(() => {
-    const el = fullscreenContainerRef.current as HTMLElement & { webkitRequestFullscreen?: () => void };
-    if (!el) return;
-    const doc = document as Document & { webkitFullscreenElement?: Element };
-    if (!doc.fullscreenElement && !doc.webkitFullscreenElement) {
-      el.requestFullscreen?.() ?? el.webkitRequestFullscreen?.();
-      setIsFullscreen(true);
-    } else {
-      document.exitFullscreen?.() ?? (document as Document & { webkitExitFullscreen?: () => void }).webkitExitFullscreen?.();
-      setIsFullscreen(false);
-    }
+  /** Zoom buttons: scale the distance to the orbit centre, within the controls' limits. */
+  const zoomBy = useCallback((factor: number) => {
+    const cam = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!cam || !controls) return;
+    const offset = cam.position.clone().sub(controls.target);
+    const distance = THREE.MathUtils.clamp(offset.length() * factor, controls.minDistance, controls.maxDistance);
+    cam.position.copy(controls.target).add(offset.setLength(distance));
+    controls.update();
   }, []);
 
+  const toggleFullscreen = useCallback(() => {
+    const doc = document as Document & {
+      webkitFullscreenElement?: Element;
+      webkitExitFullscreen?: () => void;
+    };
+    if (doc.fullscreenElement || doc.webkitFullscreenElement) {
+      if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
+      else doc.webkitExitFullscreen?.();
+      return;
+    }
+    // Fullscreen the atlas and the sample panel together so a selected cell stays visible.
+    const el = (fullscreenContainerRef.current?.closest('[data-fullscreen-root]') ??
+      fullscreenContainerRef.current) as (HTMLElement & { webkitRequestFullscreen?: () => void }) | null;
+    if (!el) return;
+    if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
+    else el.webkitRequestFullscreen?.();
+  }, []);
+
+  // The icon follows the browser's actual state (requests can be refused or exited with Esc).
   useEffect(() => {
     const onFullscreenChange = () => {
       const doc = document as Document & { webkitFullscreenElement?: Element };
       setIsFullscreen(!!(doc.fullscreenElement ?? doc.webkitFullscreenElement));
     };
     document.addEventListener('fullscreenchange', onFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', onFullscreenChange);
+    };
   }, []);
+
+  // Frame the visible cells when the condition filter changes; clearing it restores the default view.
+  useEffect(() => {
+    if (lastFilterKeyRef.current === filterKey) return;
+    lastFilterKeyRef.current = filterKey;
+    const cam = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!cam || !controls || filteredSamples4D.length === 0) return;
+    if (selectedDrugs.size === 0 && !searchQuery.trim()) {
+      handleResetView();
+      return;
+    }
+    // The cloud is drawn centred on the visible cells' centroid, so frame a sphere at the origin.
+    const center = getCenter();
+    const dists = filteredSamples4D
+      .map((s) => Math.hypot(s.x - center.x, s.y - center.y, s.z - center.z) * SCALE_FACTOR)
+      .sort((a, b) => a - b);
+    // 99.5th percentile keeps sparse tails in frame while ignoring the odd far outlier.
+    const radius = Math.max(1, dists[Math.floor((dists.length - 1) * 0.995)]);
+    const halfFov = THREE.MathUtils.degToRad(cam.fov) / 2;
+    const halfFovX = Math.atan(Math.tan(halfFov) * cam.aspect);
+    const distance = THREE.MathUtils.clamp(
+      (radius / Math.sin(Math.min(halfFov, halfFovX))) * 1.1,
+      controls.minDistance,
+      controls.maxDistance
+    );
+    const dir = cam.position.clone().sub(controls.target).normalize();
+    controls.target.set(0, 0, 0);
+    cam.position.copy(dir.multiplyScalar(distance));
+    controls.update();
+  }, [filterKey, filteredSamples4D, selectedDrugs, searchQuery, getCenter, handleResetView]);
+
+  const visibleSampleIds = React.useMemo(
+    () =>
+      filteredSamples4D.length === samples4D.length
+        ? null
+        : new Set(filteredSamples4D.map((s) => s.id)),
+    [filteredSamples4D, samples4D]
+  );
+
+  // The axis strip keeps showing the last feature whose values and range are ready, so turning
+  // the axis on or switching features never leaves the strip slot empty for a moment.
+  const [axisStrip, setAxisStrip] = useState<{
+    feature: string;
+    range: NonNullable<typeof semanticState.featureRange>;
+    values: number[];
+  } | null>(null);
+  const stripFeature = semanticState.selectedFeature;
+  const stripRange = semanticState.featureRange;
+  const stripValues = stripFeature ? featureValues[stripFeature] : undefined;
+  const stripReady = Boolean(
+    stripFeature && stripRange && semanticState.featureRangeFeature === stripFeature && stripValues
+  );
+  useEffect(() => {
+    if (!semanticState.advancedMode) setAxisStrip(null);
+    else if (stripReady) setAxisStrip({ feature: stripFeature!, range: stripRange!, values: stripValues! });
+  }, [semanticState.advancedMode, stripReady, stripFeature, stripRange, stripValues]);
+  const showAxisStrip = Boolean(semanticState.advancedMode && semanticState.axisSamplesVisible && axisStrip);
+  const showConditionStrip =
+    samples4D.length > 0 && (!semanticState.advancedMode || (semanticState.axisSamplesVisible && !axisStrip));
+
+  // Only show "Mapping …" if it takes longer than a blink, so quick switches don't flash it.
+  const mappingPending = (axisColorPending || (useFeatureColoring && !smoothedFeatureValues)) && !isLoading;
+  const [showMappingPill, setShowMappingPill] = useState(false);
+  useEffect(() => {
+    if (!mappingPending) {
+      setShowMappingPill(false);
+      return;
+    }
+    const id = window.setTimeout(() => setShowMappingPill(true), 250);
+    return () => window.clearTimeout(id);
+  }, [mappingPending]);
+
+  const selectFromStrip = useCallback(
+    (source: 'strip' | 'axis_strip') => (sample: Sample) => {
+      setSelectedSample(sample);
+      trackEvent('select_cell', { source, condition: sample.treatment.drug, cell: sample.id });
+    },
+    [setSelectedSample]
+  );
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      // Leave browser shortcuts (Cmd/Ctrl+F, Cmd/Ctrl+R, …) alone.
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       const target = e.target as HTMLElement;
       if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return;
+      if (e.key === 'Escape' && showHelp) {
+        // Closing the overlay should not also deselect (global Esc handler).
+        e.preventDefault();
+        e.stopPropagation();
+        setShowHelp(false);
+        return;
+      }
+      if (e.key === '?') {
+        e.preventDefault();
+        setShowHelp((v) => !v);
+        return;
+      }
       if (e.key === 'r' || e.key === 'R') {
         e.preventDefault();
         handleResetView();
@@ -2159,17 +2464,13 @@ const Visualizer4D: React.FC = () => {
         toggleFullscreen();
       }
     };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [handleResetView, toggleFullscreen]);
+    // Capture phase so closing the help overlay wins over the global Esc handler.
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
+  }, [handleResetView, toggleFullscreen, showHelp]);
 
   return (
     <div ref={fullscreenContainerRef} className={`${isDarkMode ? 'bg-black' : 'bg-white'} h-full flex flex-col overflow-hidden`}>
-      {/* Mobile Warning */}
-      <div className={`lg:hidden shrink-0 ${isDarkMode ? 'bg-amber-500/10 border-amber-500/30 text-amber-200' : 'bg-amber-50 border-amber-200 text-amber-800'} border-l-4 px-4 py-3`} role="alert">
-        <p className="font-medium text-sm">Desktop recommended for best experience</p>
-      </div>
-
       {/* Sticky toolbar - stays visible when scrolling visualization pane */}
       <div
         className={`shrink-0 px-6 py-2.5 border-b ${isDarkMode ? 'bg-black/90 border-white/[0.08]' : 'bg-white border-gray-200'}`}
@@ -2180,44 +2481,43 @@ const Visualizer4D: React.FC = () => {
           type="4d"
           onSemanticSliderChange={handleSemanticSliderChange}
           dark={isDarkMode}
-          drugOverviewStripAvailable={!drugStripKilled && samples4D.length > 0}
-          drugOverviewStripVisible={drugStripVisible}
-          onDrugOverviewStripToggle={() => setDrugStripVisible((v) => !v)}
         />
       </div>
 
-      {/* Drug-conditions overview strip. Hidden while axis samples are visible
-          (see `drugStripKilled`); available again after semantic axis is off. */}
-      {drugStripVisible && !semanticState.axisSamplesVisible && samples4D.length > 0 && (
-        <DrugConditionStrip
-          samples={samples4D}
-          onClose={() => setDrugStripVisible(false)}
-          onSelectSample={setSelectedSample}
-        />
-      )}
-
-      {/* Axis samples preview */}
-      {semanticState.axisSamplesVisible &&
-        semanticState.selectedFeature &&
-        semanticState.featureRange &&
-        featureValues[semanticState.selectedFeature] && (
+      {/* Condition rail / movie strip; the cells-along-axis strip replaces it in semantic-axis mode. */}
+      <SmoothHeight className="shrink-0">
+        {showConditionStrip && (
+          <DrugConditionStrip
+            samples={filteredSamples4D}
+            expanded={drugStripExpanded}
+            onToggleExpanded={() => setDrugStripExpanded((v) => !v)}
+            onSelectSample={selectFromStrip('strip')}
+          />
+        )}
+        {showAxisStrip && axisStrip && (
           <SemanticAxisPreview
-            featureRange={semanticState.featureRange}
-            featureValues={featureValues[semanticState.selectedFeature]}
-            selectedFeature={semanticState.selectedFeature}
+            featureRange={axisStrip.range}
+            featureValues={axisStrip.values}
+            selectedFeature={axisStrip.feature}
+            pending={axisStrip.feature !== semanticState.selectedFeature}
             samples={samples4D}
+            visibleSampleIds={visibleSampleIds}
             apiEmbeddingCount={apiEmbeddingCount}
             datasetVersion={datasetVersion}
             onClose={() =>
               setSemanticState((s) => ({ ...s, axisSamplesVisible: false }))
             }
-            onSelectSample={setSelectedSample}
+            onSelectSample={selectFromStrip('axis_strip')}
           />
         )}
+      </SmoothHeight>
 
       <div
         ref={containerRef}
         className="flex-1 min-h-0 relative overflow-hidden"
+        role="region"
+        aria-label="Cell map"
+        aria-describedby="cell-map-help"
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
@@ -2229,14 +2529,46 @@ const Visualizer4D: React.FC = () => {
             : 'linear-gradient(to bottom, #e5e5e5 0%, #f0f0f0 30%, #f0f0f0 70%, #f5f5f5 100%)',
         }}
       >
+        <p id="cell-map-help" className="sr-only">
+          3D map of single cells, one point per cell. Drag to rotate, scroll to zoom, click a point to
+          open that cell. To choose a cell with the keyboard, use the strip of conditions above the map.
+        </p>
         {isLoading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-ink-900/50">
-            <div className="w-10 h-10 border-2 border-mito-500 border-t-transparent rounded-full animate-spin" />
+          <div className="absolute inset-0 flex items-center justify-center bg-black/40">
+            <div className="w-9 h-9 border-2 border-white/20 border-t-white/80 rounded-full animate-spin motion-reduce:animate-none" />
           </div>
         )}
 
-        {axisColorPending && !isLoading && (
-          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 pointer-events-none">
+        <div
+          ref={hoverLabelRef}
+          className="pointer-events-none absolute z-10 hidden whitespace-nowrap rounded-md border border-white/15 bg-black/80 px-2 py-1 text-[11px] font-medium text-white/90 shadow-elevated backdrop-blur-sm"
+          aria-hidden="true"
+        />
+
+        {introVisible && !isLoading && (
+          <div
+            className="absolute top-4 left-4 z-10 max-w-sm rounded-xl border border-white/10 bg-black/80 backdrop-blur-sm px-4 py-3 shadow-elevated"
+            role="note"
+          >
+            <p className="text-sm text-white/90 leading-relaxed">
+              Each dot is one cell&apos;s 4D mitochondrial movie. Cells with similar mitochondrial shape and
+              motion sit close together.
+            </p>
+            <p className="mt-1.5 text-xs text-white/55">
+              Drag to rotate · Scroll to zoom · Click a dot to watch its movie
+            </p>
+            <button
+              type="button"
+              onClick={dismissIntro}
+              className="mt-3 h-8 px-3 rounded-lg text-xs font-medium bg-white text-black hover:bg-white/90 transition-colors"
+            >
+              Got it
+            </button>
+          </div>
+        )}
+
+        {mappingPending && showMappingPill && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 pointer-events-none animate-fade-in">
             <div
               className="flex items-center gap-2.5 rounded-full border border-white/15 bg-black/75 backdrop-blur-md px-3.5 py-1.5 shadow-[0_8px_24px_rgba(0,0,0,0.45)]"
               role="status"
@@ -2249,6 +2581,24 @@ const Visualizer4D: React.FC = () => {
               <span className="text-xs font-medium text-white/90 tracking-wide">
                 Mapping {pendingFeatureLabel || 'feature'}…
               </span>
+            </div>
+          </div>
+        )}
+
+        {graphicsLost && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center p-6 bg-black/70" role="alert">
+            <div className="max-w-sm text-center rounded-2xl border border-white/10 bg-black/80 px-6 py-5 shadow-elevated">
+              <p className="text-sm font-medium text-white/90">The 3D view was interrupted</p>
+              <p className="mt-1 text-xs text-white/55">
+                The browser paused graphics on this page. It usually comes back on its own in a moment.
+              </p>
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="mt-4 h-9 px-4 rounded-lg text-sm font-medium bg-white text-black hover:bg-white/90 transition-colors"
+              >
+                Reload page
+              </button>
             </div>
           </div>
         )}
@@ -2278,41 +2628,31 @@ const Visualizer4D: React.FC = () => {
             onClick={handleResetView}
             className="bg-white/10 hover:bg-white/15 text-white/90 p-2.5 rounded-xl w-10 h-10 flex items-center justify-center transition-colors border border-white/10"
             title="Reset view (R)"
+            aria-label="Reset view"
           >
             <Home size={18} strokeWidth={2} />
           </button>
           <button
-            onClick={() => {
-              if (cameraRef.current) {
-                const currentPos = cameraRef.current.position.clone();
-                const direction = new THREE.Vector3(0, 0, 0).sub(currentPos).normalize();
-                cameraRef.current.position.addScaledVector(direction, 5);
-                if (controlsRef.current) controlsRef.current.update();
-              }
-            }}
+            onClick={() => zoomBy(0.8)}
             className="bg-white/10 hover:bg-white/15 text-white/90 p-2.5 rounded-xl w-10 h-10 flex items-center justify-center transition-colors border border-white/10"
             title="Zoom in"
+            aria-label="Zoom in"
           >
             <ZoomIn size={18} strokeWidth={2} />
           </button>
           <button
-            onClick={() => {
-              if (cameraRef.current) {
-                const currentPos = cameraRef.current.position.clone();
-                const direction = new THREE.Vector3(0, 0, 0).sub(currentPos).normalize();
-                cameraRef.current.position.addScaledVector(direction, -5);
-                if (controlsRef.current) controlsRef.current.update();
-              }
-            }}
+            onClick={() => zoomBy(1.25)}
             className="bg-white/10 hover:bg-white/15 text-white/90 p-2.5 rounded-xl w-10 h-10 flex items-center justify-center transition-colors border border-white/10"
             title="Zoom out"
+            aria-label="Zoom out"
           >
             <ZoomOut size={18} strokeWidth={2} />
           </button>
           <button
             onClick={toggleFullscreen}
             className="bg-white/10 hover:bg-white/15 text-white/90 p-2.5 rounded-xl w-10 h-10 flex items-center justify-center transition-colors border border-white/10"
-            title="Fullscreen (F) — hide browser UI"
+            title={isFullscreen ? 'Exit full screen (F)' : 'Full screen (F)'}
+            aria-label={isFullscreen ? 'Exit full screen' : 'Full screen'}
           >
             {isFullscreen ? <Minimize2 size={18} strokeWidth={2} /> : <Maximize2 size={18} strokeWidth={2} />}
           </button>
@@ -2320,6 +2660,8 @@ const Visualizer4D: React.FC = () => {
             onClick={() => setShowGrid(visualizerOptions.showGrid === false)}
             className={`p-2.5 rounded-xl w-10 h-10 flex items-center justify-center transition-colors border ${visualizerOptions.showGrid !== false ? 'bg-white/15 text-white border-white/20' : 'bg-white/10 hover:bg-white/15 text-white/90 border-white/10'}`}
             title={visualizerOptions.showGrid !== false ? 'Hide grid' : 'Show grid'}
+            aria-label="Grid"
+            aria-pressed={visualizerOptions.showGrid !== false}
           >
             <Grid3X3 size={18} strokeWidth={2} />
           </button>
@@ -2327,44 +2669,90 @@ const Visualizer4D: React.FC = () => {
             onClick={toggleHelp}
             className="bg-white/10 hover:bg-white/15 text-white/90 p-2.5 rounded-xl w-10 h-10 flex items-center justify-center transition-colors border border-white/10"
             title="Controls (?)"
+            aria-label="Controls and shortcuts"
           >
             <HelpCircle size={18} strokeWidth={2} />
           </button>
         </div>
         
-        {/* Bottom-left: treatment legend (only when not in semantic mode —
-            the plasma slider in the toolbar doubles as the gradient legend)
-            + perf status. */}
+        {/* Bottom-left: no-measurement key (semantic mode) + cell count. The condition rail
+            above the canvas is the drug legend. */}
         <div className="absolute bottom-4 left-4 flex flex-col gap-2">
-          <ColorLegend visible={!useFeatureColoring} />
+          {useFeatureColoring && missingFeatureCount > 0 && (
+            <div
+              className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium backdrop-blur-sm border border-white/10 ${isDarkMode ? 'bg-black/70 text-white/80' : 'bg-white/90 text-gray-700'}`}
+              title="These cells have no value for this feature. They are drawn gray and left out of the color scale, the slider range and the cells along the axis."
+            >
+              <span
+                className="w-2.5 h-2.5 rounded-full shrink-0"
+                style={{
+                  backgroundColor: `rgb(${NO_MEASUREMENT_RGB.r * 255}, ${NO_MEASUREMENT_RGB.g * 255}, ${NO_MEASUREMENT_RGB.b * 255})`,
+                }}
+                aria-hidden="true"
+              />
+              <span>No measurement · {missingFeatureCount.toLocaleString()} cells</span>
+            </div>
+          )}
           <div className={`px-3 py-2 rounded-xl text-xs font-medium backdrop-blur-sm border border-white/10 ${isDarkMode ? 'bg-black/70 text-white/80' : 'bg-white/90 text-gray-700'}`}>
             <div className="flex items-center gap-2">
-              <span ref={fpsDotRef} className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-              <span ref={fpsTextRef}>0 FPS</span>
-              <span>· {pointCount.toLocaleString()} points</span>
+              {import.meta.env.DEV && (
+                <>
+                  <span ref={fpsDotRef} className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                  <span ref={fpsTextRef}>0 FPS</span>
+                  <span aria-hidden="true">·</span>
+                </>
+              )}
+              <span>{pointCount.toLocaleString()} cells</span>
             </div>
           </div>
         </div>
         
         {/* Help overlay */}
         {showHelp && (
-          <div className="absolute inset-0 bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm" onClick={toggleHelp}>
-            <div className="bg-[#0f0f0f] border border-white/10 rounded-2xl shadow-elevated p-6 w-full max-w-md animate-fade-in" onClick={e => e.stopPropagation()}>
-              <h3 className="text-lg font-semibold text-white mb-4">Controls</h3>
-              <div className="space-y-3 text-sm text-white/70">
-                <div className="flex justify-between"><span className="font-medium text-white/90">Left drag</span> Rotate</div>
-                <div className="flex justify-between"><span className="font-medium text-white/90">Middle / Right drag</span> Pan</div>
-                <div className="flex justify-between"><span className="font-medium text-white/90">Scroll / Pinch</span> Zoom</div>
-                <div className="flex justify-between"><span className="font-medium text-white/90">Click</span> Select point</div>
-                <div className="flex justify-between"><span className="font-medium text-white/90">Click empty</span> Deselect</div>
-                <div className="border-t border-white/10 mt-4 pt-4 space-y-1.5">
-                  <p className="text-white/50 text-xs font-medium uppercase tracking-wider">Shortcuts</p>
-                  <div className="flex justify-between"><span className="font-medium text-white/90">F</span> Fullscreen (hide browser)</div>
-                  <div className="flex justify-between"><span className="font-medium text-white/90">R</span> Reset view</div>
-                  <div className="flex justify-between"><span className="font-medium text-white/90">Esc</span> Close panel</div>
-                </div>
+          <div className="fixed inset-0 z-[60] overflow-y-auto bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm" onClick={toggleHelp}>
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="map-help-title"
+              className="bg-[#0f0f0f] border border-white/10 rounded-2xl shadow-elevated p-6 w-full max-w-md animate-fade-in"
+              onClick={e => e.stopPropagation()}
+            >
+              <h3 id="map-help-title" className="text-lg font-semibold text-white mb-4">Controls</h3>
+              <dl className="space-y-3 text-sm text-white/70">
+                {[
+                  ['Drag', 'Rotate'],
+                  ['Right-drag or Shift-drag', 'Pan'],
+                  ['Scroll or pinch', 'Zoom'],
+                  ['Click a dot', 'Open that cell'],
+                  ['Click empty space', 'Clear the selection'],
+                ].map(([action, effect]) => (
+                  <div key={action} className="flex justify-between gap-4">
+                    <dt className="font-medium text-white/90">{action}</dt>
+                    <dd>{effect}</dd>
+                  </div>
+                ))}
+              </dl>
+              <div className="border-t border-white/10 mt-4 pt-4">
+                <p className="text-white/60 text-xs font-medium uppercase tracking-wider mb-2.5">Shortcuts</p>
+                <dl className="space-y-2 text-sm text-white/70">
+                  {[
+                    ['F', 'Full screen'],
+                    ['R', 'Reset view'],
+                    ['Esc', 'Clear the selection'],
+                    ['?', 'Show or hide this panel'],
+                  ].map(([key, effect]) => (
+                    <div key={key} className="flex items-center justify-between gap-4">
+                      <dt>
+                        <kbd className="inline-flex min-w-[28px] h-6 items-center justify-center rounded-md border border-white/15 bg-white/[0.06] px-1.5 font-sans text-xs font-medium text-white/90">
+                          {key}
+                        </kbd>
+                      </dt>
+                      <dd>{effect}</dd>
+                    </div>
+                  ))}
+                </dl>
               </div>
-              <button className="btn-primary mt-6 w-full" onClick={toggleHelp}>Done</button>
+              <button autoFocus className="btn-primary mt-6 w-full" onClick={toggleHelp}>Done</button>
             </div>
           </div>
         )}

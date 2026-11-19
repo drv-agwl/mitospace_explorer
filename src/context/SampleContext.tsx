@@ -1,6 +1,11 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef, ReactNode } from 'react';
+import { useLocation } from 'react-router-dom';
 import { Sample, ColoringMode, VisualizerOptions, RenderingMode, LabelVisibility, PerformanceMode, SemanticState, AxisStyle, DatasetVersion } from '../types';
-import { loadSamples4DV3 } from '../data/sampleData';
+import { getDatasetRowHash, loadSamples4DV3 } from '../data/sampleData';
+import type { ApiHealth } from '../api/client';
+import { trackError, trackEvent } from '../analytics';
+import { compareConditions } from '../constants/conditions';
+import { getFeatureGroups } from '../constants/features';
 
 // Persist the user's preferred 3D axis representation across reloads so the
 // A/B comparison sticks. Default = 'cursor' (no axis geometry; a smooth
@@ -40,6 +45,8 @@ interface SampleContextType {
   datasetLoading: boolean;
   /** Set when the v3 fetch fails. */
   datasetError: string | null;
+  /** Start loading the dataset (called by the explorer route; About never downloads it). */
+  requestDataset: () => void;
   setDatasetVersion: (v: DatasetVersion) => void;
   selectedSample: Sample | null;
   selectedPointIndex: number | null;
@@ -53,6 +60,10 @@ interface SampleContextType {
   /** Max valid embedding index from API (0 to apiEmbeddingCount - 1). */
   apiEmbeddingCount: number | null;
   setApiEmbeddingCount: (n: number | null) => void;
+  /** True when the API's rows are not in this dataset's order (feature values would be misaligned). */
+  apiRowOrderMismatch: boolean;
+  /** Record a health response: point count and row-order check. */
+  reportApiHealth: (health: ApiHealth) => void;
   setSelectedSample: (sample: Sample | null) => void;
   setSelectedPointIndex: (index: number | null) => void;
   setSearchQuery: (query: string) => void;
@@ -91,7 +102,7 @@ const defaultOptions: VisualizerOptions = {
 
 const SampleContext = createContext<SampleContextType | null>(null);
 
-// Persisted key kept for migration; public UI no longer offers v1 (see `DatasetToggle.tsx`).
+// Persisted key kept for migration; the public UI no longer offers v1.
 const DATASET_STORAGE_KEY = 'mitospace.datasetVersion';
 
 export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
@@ -124,6 +135,17 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   }, [semanticState.axisStyle]);
   const [featureValues, setFeatureValuesState] = useState<Record<string, number[]>>({});
   const [apiEmbeddingCount, setApiEmbeddingCount] = useState<number | null>(null);
+  const [apiRowOrderMismatch, setApiRowOrderMismatch] = useState(false);
+  const reportApiHealth = useCallback((health: ApiHealth) => {
+    setApiEmbeddingCount(health.point_count ?? health.embedding_count ?? null);
+    const ours = getDatasetRowHash();
+    const mismatch = Boolean(health.row_order && ours && health.row_order !== ours);
+    setApiRowOrderMismatch(mismatch);
+    if (!mismatch) return;
+    console.warn('[api] row order differs from this dataset; semantic axis disabled', health.row_order, ours);
+    trackEvent('api_dataset_mismatch', { api: health.row_order ?? '', app: ours ?? '' });
+    setSemanticState((s) => (s.advancedMode ? { ...s, advancedMode: false, selectedFeature: null } : s));
+  }, []);
   const setFeatureValues = useCallback((feature: string, values: number[]) => {
     setFeatureValuesState(prev => ({ ...prev, [feature]: values }));
   }, []);
@@ -133,8 +155,11 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [datasetLoading, setDatasetLoading] = useState(true);
   const [datasetError, setDatasetError] = useState<string | null>(null);
   const [loadGeneration, setLoadGeneration] = useState(0);
+  const [datasetRequested, setDatasetRequested] = useState(false);
+  const requestDataset = useCallback(() => setDatasetRequested(true), []);
 
   useEffect(() => {
+    if (!datasetRequested) return;
     let cancelled = false;
     setDatasetLoading(true);
     setDatasetError(null);
@@ -146,6 +171,7 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       })
       .catch((err) => {
         console.error('[dataset] failed to load v3 samples', err);
+        trackError('dataset', err);
         if (!cancelled) {
           setDatasetError(err instanceof Error ? err.message : 'Failed to load dataset');
         }
@@ -156,14 +182,14 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     return () => {
       cancelled = true;
     };
-  }, [loadGeneration]);
+  }, [loadGeneration, datasetRequested]);
 
   const retryDatasetLoad = useCallback(() => {
     setLoadGeneration((g) => g + 1);
   }, []);
 
   // Kept for API callers / future toggles; UI is locked to v3.
-  const setDatasetVersion = useCallback((_v: DatasetVersion) => {
+  const setDatasetVersion = useCallback(() => {
     try {
       window.localStorage?.setItem(DATASET_STORAGE_KEY, 'v3');
     } catch {
@@ -210,7 +236,7 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const availableDrugs = useMemo(() => {
     const drugs = new Set<string>();
     samples4D.forEach((s) => drugs.add(s.treatment.drug));
-    return Array.from(drugs).sort((a, b) => a.localeCompare(b));
+    return Array.from(drugs).sort(compareConditions);
   }, [samples4D]);
 
   const toggleDrugFilter = useCallback((drug: string) => {
@@ -223,15 +249,18 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       }
       return next;
     });
+    trackEvent('filter_conditions', { action: 'toggle', condition: drug });
   }, []);
 
   const selectAllDrugFilter = useCallback(() => {
     setSelectedDrugs(new Set(availableDrugs));
+    trackEvent('filter_conditions', { action: 'all' });
   }, [availableDrugs]);
 
   const clearDrugFilter = useCallback(() => {
     setSelectedDrugs(new Set());
     setSearchQuery('');
+    trackEvent('filter_conditions', { action: 'clear' });
   }, []);
 
   const filterSamples = useCallback((samples: Sample[]): Sample[] => {
@@ -277,12 +306,66 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
   useEffect(() => {
     if (!selectedSample) return;
-    const inFiltered = filteredSamples4D.some(s => s.id === selectedSample.id);
-    if (!inFiltered) {
-      setSelectedSample(null);
-      setSelectedPointIndex(null);
-    }
+    if (filteredSamples4D.some((s) => s.id === selectedSample.id)) return;
+    // The filter hid the selected cell: show the first cell of the first visible condition instead.
+    const firstCondition = Array.from(new Set(filteredSamples4D.map((s) => s.treatment.drug))).sort(
+      compareConditions
+    )[0];
+    setSelectedSample(filteredSamples4D.find((s) => s.treatment.drug === firstCondition) ?? null);
+    setSelectedPointIndex(null);
   }, [filteredSamples4D, selectedSample, setSelectedSample, setSelectedPointIndex]);
+
+  // Restore a shared view (?cell=…&feature=…&conditions=…) once the dataset is in.
+  const urlStateAppliedRef = useRef(false);
+  useEffect(() => {
+    if (urlStateAppliedRef.current || samples4D.length === 0) return;
+    urlStateAppliedRef.current = true;
+    const params = new URLSearchParams(window.location.search);
+    const conditions = (params.get('conditions') ?? '').split(',').filter((c) => availableDrugs.includes(c));
+    if (conditions.length) setSelectedDrugs(new Set(conditions));
+    const cell = samples4D.find((s) => s.id === params.get('cell'));
+    if (cell) setSelectedSample(cell);
+    const feature = params.get('feature');
+    const knownFeature = getFeatureGroups(datasetVersion).some((g) =>
+      g.features.some((f) => f.apiName === feature)
+    );
+    if (feature && knownFeature) {
+      setSemanticState((s) => ({ ...s, advancedMode: true, selectedFeature: feature, axisSamplesVisible: true }));
+    }
+    const navigation = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
+    if ((cell || conditions.length || knownFeature) && navigation?.type !== 'reload') {
+      trackEvent('open_view_link', {
+        cell: cell?.id,
+        feature: knownFeature ? (feature ?? undefined) : undefined,
+        conditions: conditions.length || undefined,
+      });
+    }
+  }, [samples4D, availableDrugs, datasetVersion]);
+
+  // Mirror the view into the URL; replaceState keeps history and page-view analytics quiet.
+  const location = useLocation();
+  useEffect(() => {
+    if (!urlStateAppliedRef.current || location.pathname !== '/') return;
+    const params = new URLSearchParams(window.location.search);
+    const put = (key: string, value: string | null | undefined) => {
+      if (value) params.set(key, value);
+      else params.delete(key);
+    };
+    put('cell', selectedSample?.id);
+    put('feature', semanticState.advancedMode ? semanticState.selectedFeature : null);
+    put('conditions', Array.from(selectedDrugs).sort(compareConditions).join(','));
+    const qs = params.toString().replace(/%2C/gi, ',');
+    const next = `${location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`;
+    if (next !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
+      window.history.replaceState(window.history.state, '', next);
+    }
+  }, [
+    location.pathname,
+    selectedSample?.id,
+    semanticState.advancedMode,
+    semanticState.selectedFeature,
+    selectedDrugs,
+  ]);
 
   return (
     <SampleContext.Provider
@@ -291,6 +374,7 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         datasetVersion,
         datasetLoading,
         datasetError,
+        requestDataset,
         setDatasetVersion,
         selectedSample,
         selectedPointIndex,
@@ -315,6 +399,8 @@ export const SampleProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         setFeatureValues,
         apiEmbeddingCount,
         setApiEmbeddingCount,
+        apiRowOrderMismatch,
+        reportApiHealth,
         filteredSamples4D,
         selectedDrugs,
         availableDrugs,

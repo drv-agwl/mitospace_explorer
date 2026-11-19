@@ -18,8 +18,8 @@ export interface Sample {
   };
   treatment: {
     drug: string;
-    dose: string;
-    time: string;
+    dose?: string;
+    time?: string;
     smiles?: string;
     pubchem?: string;
   };
@@ -63,9 +63,17 @@ export interface SemanticState {
   projectedPosition: { x: number; y: number; z: number } | null;
   /** 1 = on manifold, <1 when extrapolating (for confidence indicator) */
   projectedConfidence: number | null;
-  featureRange: { min: number; max: number } | null;
+  featureRange: {
+    min: number;
+    max: number;
+    /** Percentiles of measured cells that `min` / `max` sit at. */
+    lowPercentile?: number;
+    highPercentile?: number;
+  } | null;
   /** Feature name that `featureRange` was computed for (avoids cross-feature flashes). */
   featureRangeFeature?: string | null;
+  /** True when the selected feature's values could not be loaded (API down / timed out). */
+  featureLoadFailed?: boolean;
   /** Show 5 samples uniformly spread along the axis */
   axisSamplesVisible?: boolean;
   /** Active 3D representation of the semantic axis. */

@@ -10,23 +10,26 @@ Multi-version support: every endpoint accepts an optional `?version=v1|v3` query
 param (or `version` field in POST bodies). Both datasets are loaded once at
 startup and held in memory by `dataset_registry`.
 """
+import hashlib
 import json
 import logging
 import os
+import re
 import sys
 import uuid
 from pathlib import Path
 from typing import List, Optional
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from dotenv import load_dotenv
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
+from starlette.concurrency import run_in_threadpool
 
 # Chat system imports - handle both package and direct execution
 try:
@@ -39,6 +42,7 @@ try:
     from . import chat_extras
     from . import agent as chat_agent
     from . import agent_tools
+    from . import visits
     from .query_handler import load_data, classify_query, compute_statistics
     from .llm_client import (
         build_system_prompt,
@@ -47,7 +51,7 @@ try:
         get_llm_client,
         is_llm_available,
     )
-    from .dataset_registry import Dataset, load_v1, load_v3, register, feature_bounds
+    from .dataset_registry import Dataset, load_v1, load_v3, register, feature_bounds, feature_clip
 except ImportError:
     # Fall back to absolute imports (for when run from server/ directory)
     import groundedness
@@ -58,6 +62,7 @@ except ImportError:
     import chat_extras
     import agent as chat_agent
     import agent_tools
+    import visits
     from query_handler import load_data, classify_query, compute_statistics
     from llm_client import (
         build_system_prompt,
@@ -66,7 +71,7 @@ except ImportError:
         get_llm_client,
         is_llm_available,
     )
-    from dataset_registry import Dataset, load_v1, load_v3, register, feature_bounds
+    from dataset_registry import Dataset, load_v1, load_v3, register, feature_bounds, feature_clip
 
 # Load environment variables
 load_dotenv()
@@ -126,11 +131,16 @@ VALID_VERSIONS = ("v1", "v3")
 
 
 def _resolve_version(version):
-    """Return a valid version string, defaulting to v3 for new requests."""
+    """Return the requested dataset version (v3 when omitted); unknown versions are a client error."""
     v = (version or "").lower().strip()
+    if not v:
+        return "v3"
     if v in VALID_VERSIONS:
         return v
-    return "v3"
+    raise HTTPException(
+        status_code=400,
+        detail=f"Unknown dataset version '{version}'. Use one of: {', '.join(VALID_VERSIONS)}.",
+    )
 
 
 def _get_dataset(version):
@@ -191,7 +201,19 @@ def _resolve_feature_key(ds: Dataset, feature_name: str) -> Optional[str]:
 _chat_rate_limit = os.environ.get("CHAT_RATE_LIMIT", "20/minute")
 limiter = Limiter(key_func=get_remote_address, default_limits=[])
 
-app = FastAPI(title="MitoSpace Explorer API")
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip() in {"1", "true", "True", "yes"}
+
+
+# Interactive docs list every endpoint and model; serve them only when asked (local dev).
+_docs_enabled = _env_flag("ENABLE_DOCS")
+app = FastAPI(
+    title="MitoSpace Explorer API",
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
+)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -199,33 +221,105 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 @app.get("/")
 def root():
     """Render/other platforms often probe `/` — return OK instead of 404."""
-    return {
-        "ok": True,
-        "service": "mitospace-explorer-api",
-        "health": "/api/health",
-        "docs": "/docs",
-    }
+    info = {"ok": True, "service": "mitospace-explorer-api", "health": "/api/health"}
+    if _docs_enabled:
+        info["docs"] = "/docs"
+    return info
 
 
 @app.head("/")
 def root_head():
     return Response(status_code=200)
-_cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
-if os.environ.get("CORS_ORIGINS"):
-    _cors_origins.extend(s.strip() for s in os.environ["CORS_ORIGINS"].split(",") if s.strip())
-# Localhost + Netlify + Render (HTTPS) deploys unless overridden via env
-_cors_origin_regex = (
-    r"http://(localhost|127\.0\.0\.1)(:\d+)?$"
-    r"|https://[^.]+\.netlify\.app$"
-    r"|https://[^.]+\.onrender\.com$"
-)
+
+
+# Read-only data responses only change on redeploy: cache briefly, then revalidate by ETag (304, no body).
+DATA_CACHE_CONTROL = "public, max-age=300"
+
+
+def _cacheable(request: Request, body: bytes, media_type: str) -> Response:
+    etag = f'W/"{hashlib.sha1(body).hexdigest()[:20]}"'
+    headers = {"Cache-Control": DATA_CACHE_CONTROL, "ETag": etag}
+    if etag in (t.strip() for t in request.headers.get("if-none-match", "").split(",")):
+        return Response(status_code=304, headers=headers)
+    return Response(content=body, media_type=media_type, headers=headers)
+
+
+def _json_bytes(payload) -> bytes:
+    return json.dumps(payload, separators=(",", ":"), allow_nan=False).encode()
+
+
+# The largest legitimate body (a chat turn with history) is a few KB.
+MAX_BODY_BYTES = 64 * 1024
+
+
+class _BodyTooLarge(HTTPException):
+    # An HTTPException, so FastAPI re-raises it instead of turning it into a 400 parse error.
+    def __init__(self):
+        super().__init__(status_code=413, detail="Request body too large")
+
+
+class BodySizeLimitMiddleware:
+    """Reject request bodies over `max_bytes` before anything parses them (declared or streamed)."""
+
+    def __init__(self, app, max_bytes: int):
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        declared = dict(scope.get("headers") or []).get(b"content-length")
+        if declared is not None and (not declared.isdigit() or int(declared) > self.max_bytes):
+            await self._reject(scope, receive, send)
+            return
+
+        received = 0
+
+        async def limited_receive():
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.max_bytes:
+                    raise _BodyTooLarge()
+            return message
+
+        try:
+            await self.app(scope, limited_receive, send)
+        except _BodyTooLarge:
+            await self._reject(scope, receive, send)
+
+    @staticmethod
+    async def _reject(scope, receive, send):
+        await JSONResponse({"detail": "Request body too large"}, status_code=413)(scope, receive, send)
+
+
+# Added before CORS so a 413 still carries CORS headers.
+app.add_middleware(BodySizeLimitMiddleware, max_bytes=MAX_BODY_BYTES)
+
+# Browsers may read API responses only on the production site (plus local dev servers and,
+# when NETLIFY_SITE_NAME is set, that site's branch and preview deploys). No cookies are used.
+def _cors_settings(env) -> tuple[list[str], Optional[str]]:
+    origins = ["https://mitospace.ai", "https://www.mitospace.ai"]
+    origins += [s.strip() for s in env.get("CORS_ORIGINS", "").split(",") if s.strip()]
+    patterns = []
+    if not env.get("RENDER"):
+        patterns.append(r"http://(localhost|127\.0\.0\.1)(:\d+)?")
+    site = env.get("NETLIFY_SITE_NAME", "").strip().lower()
+    if site:
+        patterns.append(rf"https://([a-z0-9-]+--)?{re.escape(site)}\.netlify\.app")
+    return origins, (f"^(?:{'|'.join(patterns)})$" if patterns else None)
+
+
+_cors_origins, _cors_origin_regex = _cors_settings(os.environ)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_origin_regex=_cors_origin_regex,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "HEAD", "POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
 )
 
 def _project_spatial(
@@ -253,7 +347,7 @@ def _project_spatial(
     if sigma < 1e-12:
         sigma = 1.0
     w = np.exp(-0.5 * ((f - target_value) / sigma) ** 2)
-    w = w * valid.astype(np.float64)
+    w = np.where(valid, w, 0.0)
     w_sum = np.sum(w)
     if w_sum < 1e-20:
         idx = np.nanargmin(np.abs(f - target_value))
@@ -267,7 +361,7 @@ def _project_spatial(
     x = float(np.dot(w, ds.umap_points[:, 0]))
     y = float(np.dot(w, ds.umap_points[:, 1]))
     z = float(np.dot(w, ds.umap_points[:, 2]))
-    pred = float(np.dot(w, f))
+    pred = float(np.dot(w, np.where(valid, f, 0.0)))
     return (x, y, z, pred)
 
 
@@ -285,12 +379,12 @@ def startup():
         print("[startup] skipping v1 (set LOAD_V1=1 to enable)")
 
     # ── Load v3 (slim parquet) ──
-    try:
-        v3 = load_v3(V3_PARQUET)
-        register(v3)
-        print(f"[startup] v3 loaded: umap={'yes' if v3.umap_points is not None else 'no'}  axis_features={list(v3.feature_umap_model.keys())}")
-    except Exception as e:
-        print(f"[startup] v3 load failed: {e}")
+    # Without v3 every data endpoint fails, so refuse to start: the host keeps the previous deploy.
+    v3 = load_v3(V3_PARQUET)
+    if not v3.loaded:
+        raise RuntimeError(f"v3 dataset did not load from {V3_PARQUET}; see the log lines above")
+    register(v3)
+    print(f"[startup] v3 loaded: umap=yes  axis_features={list(v3.feature_umap_model.keys())}  row_order={v3.row_hash}")
 
     # Chat is hidden in the UI and re-reads the same parquet + a 20MB JSON,
     # which OOMs a 512Mi Render instance. Opt in with ENABLE_CHAT=1.
@@ -337,11 +431,11 @@ def startup():
 class ProjectRequest(BaseModel):
     pointIndex: int
     targetValue: float
-    feature: str = "Fragment Length"
+    feature: str = Field("Fragment Length", max_length=100)
     # "spatial" = kernel-weighted centroid in 3D. "axis" = global UMAP-space traversal aligned with feature.
-    method: str = "axis"
+    method: str = Field("axis", max_length=16)
     # Dataset version: "v1" (legacy CSV) or "v3" (parquet). Defaults to v3.
-    version: Optional[str] = None
+    version: Optional[str] = Field(None, max_length=8)
     # Optional: frontend sends its scene center and scale so we return coords ready for Three.js
     centerX: Optional[float] = None
     centerY: Optional[float] = None
@@ -406,6 +500,7 @@ def project(req: ProjectRequest):
 
 @app.get("/api/axis-trajectory")
 def axis_trajectory(
+    request: Request,
     feature: str = "Fragment Length",
     num_points: int = 80,
     version: Optional[str] = Query(default=None),
@@ -463,11 +558,16 @@ def axis_trajectory(
             {"x": float(coords[i, 0]), "y": float(coords[i, 1]), "z": float(coords[i, 2])}
             for i in range(len(coords))
         ]
-    return {"points": points, "featureMin": f_min, "featureMax": f_max}
+    return _cacheable(
+        request,
+        _json_bytes({"points": points, "featureMin": f_min, "featureMax": f_max}),
+        "application/json",
+    )
 
 
 @app.get("/api/feature-stats")
 def feature_stats(
+    request: Request,
     feature: str = "Fragment Length",
     version: Optional[str] = Query(default=None),
 ):
@@ -479,17 +579,27 @@ def feature_stats(
             detail=f"Feature '{feature}' not loaded for {ds.version}",
         )
     arr = ds.feature_values[feat]
-    valid = arr[~np.isnan(arr)]
-    if len(valid) == 0:
-        return {"min": 0.0, "max": 1.0}
-    f_min, f_max = feature_bounds(arr, feature=feat)
-    return {"min": f_min, "max": f_max}
+    missing = int(np.isnan(arr).sum())
+    if missing == len(arr):
+        stats = {"min": 0.0, "max": 1.0, "lowPercentile": 0.0, "highPercentile": 100.0, "missing": missing}
+    else:
+        f_min, f_max, lo_pct, hi_pct = feature_clip(arr, feature=feat)
+        stats = {
+            "min": f_min,
+            "max": f_max,
+            "lowPercentile": lo_pct,
+            "highPercentile": hi_pct,
+            "missing": missing,
+        }
+    return _cacheable(request, _json_bytes(stats), "application/json")
 
 
 @app.get("/api/features/{feature_name}")
 def get_feature_values(
+    request: Request,
     feature_name: str,
     version: Optional[str] = Query(default=None),
+    fmt: Optional[str] = Query(default=None, alias="format"),
 ):
     ds = _require_api_dataset(version)
     key = _resolve_feature_key(ds, feature_name)
@@ -498,31 +608,61 @@ def get_feature_values(
             status_code=404,
             detail=f"Feature '{feature_name}' not loaded for {ds.version}",
         )
-    return {"values": ds.feature_values[key].tolist()}
+    arr = ds.feature_values[key]
+    if fmt == "f32":
+        # Little-endian float32 per cell, NaN = no measurement (~144 KB instead of ~700 KB of JSON).
+        return _cacheable(request, np.asarray(arr, dtype="<f4").tobytes(), "application/octet-stream")
+    # JSON has no NaN: unmeasured cells are sent as null.
+    return _cacheable(
+        request,
+        _json_bytes({"values": [None if v != v else v for v in arr.tolist()]}),
+        "application/json",
+    )
 
 
 @app.get("/api/health")
 def health(version: Optional[str] = Query(default=None)):
-    v = _resolve_version(version)
-    registered = v in dataset_registry.versions()
     ds = _get_dataset(version)
     n = len(ds.umap_points) if ds.umap_points is not None else 0
     return {
+        "status": "ok" if ds.loaded else "unavailable",
         "version": ds.version,
-        "requested_version": v,
-        "version_registered": registered,
-        "dataset_loaded": ds.loaded,
-        "available_versions": dataset_registry.versions(),
-        "umap_points_loaded": ds.umap_points is not None,
         "point_count": n,
-        "embedding_count": n,
-        "features": list(ds.feature_values.keys()),
-        "axes": list(ds.feature_umap_model.keys()),
-        "chat_available": is_llm_available() and bool(query_handler.available_versions()),
-        "chat_versions": query_handler.available_versions(),
-        "llm_model": getattr(get_llm_client(), "model", None) if is_llm_available() else None,
-        "chat_cache": chat_extras.chat_response_cache.stats(),
+        # Hash of the per-row condition order; the app compares it with its own dataset.
+        "row_order": ds.row_hash,
     }
+
+
+@app.get("/api/ready")
+def ready():
+    """Readiness for the host's health check: 200 only once the v3 data is in memory."""
+    if not dataset_registry.get("v3").loaded:
+        return JSONResponse({"ready": False}, status_code=503)
+    return {"ready": True}
+
+
+# Visit log (visits.py). The limit is per address and generous: a campus or office shares one.
+_visit_rate_limit = os.environ.get("VISIT_RATE_LIMIT", "120/minute")
+
+
+def _visitor_ip(request: Request) -> Optional[str]:
+    return visits.client_ip(request.headers, request.client.host if request.client else None)
+
+
+@app.post("/api/visit")
+@limiter.limit(_visit_rate_limit, key_func=lambda request: _visitor_ip(request) or "unknown")
+async def visit(request: Request, background: BackgroundTasks):
+    """Visit beacon. The body is JSON sent as text/plain, so browsers skip the CORS preflight."""
+    try:
+        beacon = visits.VisitIn.model_validate_json(await request.body())
+    except ValidationError:
+        raise HTTPException(status_code=422, detail="Invalid visit beacon")
+    reply, deliveries = await run_in_threadpool(
+        visits.record_visit, beacon, _visitor_ip(request), request.headers.get("user-agent", ""), os.environ
+    )
+    for url, payload in deliveries:
+        background.add_task(visits.send_webhook, url, payload)
+    return JSONResponse(reply, headers={"Cache-Control": "no-store"})
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -548,16 +688,16 @@ MAX_HISTORY_TURNS = 12  # ~6 exchanges; keeps prompt cheap and focused
 
 class HistoryMessage(BaseModel):
     role: str = Field(..., pattern="^(user|assistant|system)$")
-    content: str
-    query_type: Optional[str] = None
+    content: str = Field(..., max_length=8_000)
+    query_type: Optional[str] = Field(None, max_length=64)
 
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=MAX_CHAT_MESSAGE_CHARS)
-    history: List[HistoryMessage] = Field(default_factory=list)
+    history: List[HistoryMessage] = Field(default_factory=list, max_length=50)
     # Which dataset version the user is exploring (v1 | v3). Backend picks the
-    # matching chat data; defaults to v3 when missing or unknown.
-    version: Optional[str] = None
+    # matching chat data; defaults to v3 when missing.
+    version: Optional[str] = Field(None, max_length=8)
 
 
 class ChatResponse(BaseModel):
@@ -936,7 +1076,7 @@ async def chat(request: Request, req: ChatRequest):
     if query_handler.available_versions() == []:
         raise HTTPException(status_code=503, detail="Chat dataset not loaded.")
 
-    selected_version = query_handler.use_version((req.version or "v3").lower())
+    selected_version = query_handler.use_version(_resolve_version(req.version))
     message = req.message.strip()
     history = _sanitize_history(req.history)
     recent_user_msgs = [m.content for m in history if m.role == "user"] + [message]

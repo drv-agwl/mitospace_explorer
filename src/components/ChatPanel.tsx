@@ -11,7 +11,7 @@ import {
   Check,
   AlertCircle,
 } from 'lucide-react';
-import { ChatRequestError, sendChatMessage } from '../api/client';
+import { ChatRequestError, sendChatMessage, type ChatData } from '../api/client';
 import { useSample } from '../context/SampleContext';
 
 interface ChatMessage {
@@ -19,7 +19,7 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
-  data?: any;
+  data?: ChatData;
   /** Where this answer came from: agent (tool-using LLM), llm (legacy), fallback (deterministic). */
   source?: 'agent' | 'llm' | 'fallback';
   /** True when the backend verified every number in `content` against stats. */

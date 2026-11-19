@@ -50,3 +50,13 @@ const MitoSpaceLogo: React.FC<MitoSpaceLogoProps> = ({ size = 24, variant = 'dar
 };
 
 export default MitoSpaceLogo;
+
+/** Logo tile and product name as in the header, for loading and error screens. */
+export const BrandMark: React.FC = () => (
+  <div className="flex items-center gap-3">
+    <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-white text-black">
+      <MitoSpaceLogo size={20} variant="dark" />
+    </div>
+    <span className="text-lg font-semibold text-white tracking-tight">MitoSpace Explorer</span>
+  </div>
+);

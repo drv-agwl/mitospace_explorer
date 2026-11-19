@@ -27,6 +27,7 @@ Schema (per point — kept stable for backward compatibility):
 Run:
   python scripts/build_v3_points_json.py
   python scripts/enrich_v3_points.py    # add SMILES / PubChem
+  node scripts/compact_v3_points.mjs    # the ~1 MB file the explorer actually loads
 """
 from __future__ import annotations
 

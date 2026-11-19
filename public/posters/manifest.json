@@ -54,5 +54,33 @@
     "p5350": "/posters/tbhp.webp",
     "p26956": "/posters/tiron.webp",
     "p14951": "/posters/valinomycin.webp"
+  },
+  "clipById": {
+    "p25810": "/strip/antimycina.mp4",
+    "p33161": "/strip/azide.mp4",
+    "p16288": "/strip/cccp.mp4",
+    "p28383": "/strip/cisplatin.mp4",
+    "p24325": "/strip/colchicine.mp4",
+    "p0": "/strip/control.mp4",
+    "p19835": "/strip/cytochalasind.mp4",
+    "p13608": "/strip/dnp.mp4",
+    "p6606": "/strip/h2o2.mp4",
+    "p21067": "/strip/lantrunculinb.mp4",
+    "p10908": "/strip/lonidamine.mp4",
+    "p21836": "/strip/mdivi1.mp4",
+    "p3957": "/strip/mfi8.mp4",
+    "p17386": "/strip/mitomycinc.mp4",
+    "p8127": "/strip/mitoq.mp4",
+    "p2827": "/strip/myls22.mp4",
+    "p30896": "/strip/nigericin.mp4",
+    "p23018": "/strip/nocodazole.mp4",
+    "p12087": "/strip/oligomycin.mp4",
+    "p1480": "/strip/p110.mp4",
+    "p34429": "/strip/paraquat.mp4",
+    "p9515": "/strip/resveratrol.mp4",
+    "p29465": "/strip/rotenone.mp4",
+    "p5350": "/strip/tbhp.mp4",
+    "p26956": "/strip/tiron.mp4",
+    "p14951": "/strip/valinomycin.mp4"
   }
 }

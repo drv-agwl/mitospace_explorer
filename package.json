@@ -5,10 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "typecheck": "tsc -p tsconfig.app.json && tsc -p tsconfig.node.json",
+    "build": "npm run typecheck && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "gen:posters": "node scripts/gen_posters.mjs"
+    "gen:posters": "node scripts/gen_posters.mjs",
+    "data:compact": "node scripts/compact_v3_points.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.344.0",

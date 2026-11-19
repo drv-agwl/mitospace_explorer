@@ -49,6 +49,8 @@
 import type { Sample } from '../types';
 import { estimateDensityRadius } from './axisGeometry';
 
+type Point3 = Pick<Sample, 'x' | 'y' | 'z'>;
+
 export interface CursorPath {
   /** Flat XYZ buffer, length = resolution * 3. RAW UMAP coordinates. */
   positions: Float32Array;
@@ -76,8 +78,8 @@ interface Entry {
 }
 
 function buildSortedEntries(
-  samples: readonly Sample[],
-  featureValues: readonly number[],
+  samples: readonly Point3[],
+  featureValues: ArrayLike<number>,
   embeddingIndexOf: (sampleIdx: number) => number
 ): Entry[] {
   const out: Entry[] = [];
@@ -102,14 +104,15 @@ function buildSortedEntries(
 
 interface Grid {
   cellSize: number;
-  buckets: Map<string, number[]>;
+  buckets: Map<number, number[]>;
 }
 
-function gridKey(i: number, j: number, k: number): string {
-  return `${i},${j},${k}`;
+// Exact for |index| < 2^15 (the cloud spans a few hundred cells at most).
+function gridKey(i: number, j: number, k: number): number {
+  return ((i + 0x8000) * 0x10000 + (j + 0x8000)) * 0x10000 + (k + 0x8000);
 }
 
-function bucketKeyFor(s: Sample, cellSize: number): string {
+function bucketKeyFor(s: Point3, cellSize: number): number {
   return gridKey(
     Math.floor(s.x / cellSize),
     Math.floor(s.y / cellSize),
@@ -117,8 +120,8 @@ function bucketKeyFor(s: Sample, cellSize: number): string {
   );
 }
 
-function buildGrid(samples: readonly Sample[], cellSize: number): Grid {
-  const buckets = new Map<string, number[]>();
+function buildGrid(samples: readonly Point3[], cellSize: number): Grid {
+  const buckets = new Map<number, number[]>();
   for (let n = 0; n < samples.length; n++) {
     const key = bucketKeyFor(samples[n], cellSize);
     const arr = buckets.get(key);
@@ -130,7 +133,7 @@ function buildGrid(samples: readonly Sample[], cellSize: number): Grid {
 
 function countNeighborsAt(
   grid: Grid,
-  samples: readonly Sample[],
+  samples: readonly Point3[],
   pos: { x: number; y: number; z: number },
   radius: number
 ): number {
@@ -165,8 +168,8 @@ function countNeighborsAt(
  * dominant cluster of cells with feature values near each target value.
  */
 export function buildSmoothCursorPath(
-  samples: readonly Sample[],
-  featureValues: readonly number[],
+  samples: readonly Point3[],
+  featureValues: ArrayLike<number>,
   embeddingIndexOf: (sampleIdx: number) => number,
   featureRange: { min: number; max: number },
   resolution: number = 200,
@@ -191,6 +194,9 @@ export function buildSmoothCursorPath(
   const densityRadius = estimateDensityRadius(samples);
   const densityGrid = buildGrid(samples, densityRadius);
   const clusterCellSize = densityRadius * 3.0;
+  // Neighbouring slider rows share most candidates; count each cell's neighbours once.
+  const densityOf = new Int32Array(samples.length).fill(-1);
+  const candidateKeys = new Float64Array(effK);
 
   const positions = new Float32Array(resolution * 3);
   const values = new Float32Array(resolution);
@@ -221,12 +227,12 @@ export function buildSmoothCursorPath(
     }
 
     // Group candidates by coarse cluster bucket; find the dominant one.
-    const bucketCounts = new Map<string, number>();
-    let dominantKey = '';
+    const bucketCounts = new Map<number, number>();
+    let dominantKey = -1;
     let dominantCount = -1;
     for (let j = start; j < end; j++) {
-      const s = samples[entries[j].i];
-      const key = bucketKeyFor(s, clusterCellSize);
+      const key = bucketKeyFor(samples[entries[j].i], clusterCellSize);
+      candidateKeys[j - start] = key;
       const next = (bucketCounts.get(key) ?? 0) + 1;
       bucketCounts.set(key, next);
       if (next > dominantCount) {
@@ -241,13 +247,16 @@ export function buildSmoothCursorPath(
     let bestIdx = -1;
     let bestDensity = -1;
     for (let j = start; j < end; j++) {
-      const s = samples[entries[j].i];
-      const key = bucketKeyFor(s, clusterCellSize);
-      if (key !== dominantKey) continue;
-      const d = countNeighborsAt(densityGrid, samples, s, densityRadius);
+      if (candidateKeys[j - start] !== dominantKey) continue;
+      const idx = entries[j].i;
+      let d = densityOf[idx];
+      if (d < 0) {
+        d = countNeighborsAt(densityGrid, samples, samples[idx], densityRadius);
+        densityOf[idx] = d;
+      }
       if (d > bestDensity) {
         bestDensity = d;
-        bestIdx = entries[j].i;
+        bestIdx = idx;
       }
     }
     if (bestIdx < 0) {

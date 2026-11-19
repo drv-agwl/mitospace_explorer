@@ -1,22 +1,27 @@
-import React, { useCallback, useMemo, useState } from 'react';
-import { Video, X, Play, Pause } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Video, ChevronUp, Play, Pause } from 'lucide-react';
 import type { Sample } from '../types';
 import { selectDrugRepresentatives } from '../utils/drugStripSamples';
 import { usePosterManifest } from '../utils/posterManifest';
+import { conditionLabel } from '../constants/conditions';
+import { prefersReducedMotion } from '../utils/motion';
 import LazyVideo from './LazyVideo';
 
 interface DrugConditionStripProps {
   /** Pool of samples to draw one representative per drug from. */
   samples: Sample[];
-  /** Called when the user dismisses the strip via the X button. */
-  onClose: () => void;
-  /** Called when the user clicks a card. */
+  /** false = one-row rail of condition chips; true = one movie per condition. */
+  expanded: boolean;
+  onToggleExpanded: () => void;
+  /** Called when the user clicks a card or chip. */
   onSelectSample?: (sample: Sample) => void;
 }
 
 const PILL_BASE =
   'inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg text-xs font-medium border transition-all duration-150 shrink-0';
 const PILL_ACTIVE = 'bg-white/[0.12] border-white/[0.22] text-white';
+const PILL_IDLE =
+  'bg-white/[0.04] border-white/[0.08] text-white/85 hover:bg-white/[0.08] hover:border-white/[0.14]';
 
 function treatmentAccentCss(sample: Sample): string {
   const { r, g, b } = sample.color;
@@ -26,9 +31,17 @@ function treatmentAccentCss(sample: Sample): string {
   return `rgb(${rr}, ${gg}, ${bb})`;
 }
 
+/** Let a plain mouse wheel scroll a horizontal row. */
+function scrollSideways(e: React.WheelEvent<HTMLDivElement>) {
+  if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY;
+}
+
+const EDGE_FADE_PX = 40;
+
 const DrugConditionStrip: React.FC<DrugConditionStripProps> = ({
   samples,
-  onClose,
+  expanded,
+  onToggleExpanded,
   onSelectSample,
 }) => {
   const cards = useMemo(() => selectDrugRepresentatives(samples), [samples]);
@@ -38,7 +51,27 @@ const DrugConditionStrip: React.FC<DrugConditionStripProps> = ({
   const videoCount = cards.filter((c) => c.sample.videos?.[videoIndex]).length;
   const hasVideos = videoCount > 0;
 
-  const [isPlaying, setIsPlaying] = useState(true);
+  const [isPlaying, setIsPlaying] = useState(() => !prefersReducedMotion());
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Fade whichever edge has more cards beyond it.
+  const [edges, setEdges] = useState({ start: true, end: true });
+  const updateEdges = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const start = el.scrollLeft <= 2;
+    const end = el.scrollLeft + el.clientWidth >= el.scrollWidth - 2;
+    setEdges((prev) => (prev.start === start && prev.end === end ? prev : { start, end }));
+  }, []);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    updateEdges();
+    const observer = new ResizeObserver(updateEdges);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [updateEdges, expanded, cards.length]);
+  const edgeMask = `linear-gradient(to right, ${edges.start ? 'black' : 'transparent'} 0, black ${EDGE_FADE_PX}px, black calc(100% - ${EDGE_FADE_PX}px), ${edges.end ? 'black' : 'transparent'} 100%)`;
 
   const togglePlayPause = useCallback(() => {
     setIsPlaying((prev) => !prev);
@@ -46,15 +79,59 @@ const DrugConditionStrip: React.FC<DrugConditionStripProps> = ({
 
   if (cards.length === 0) return null;
 
+  if (!expanded) {
+    return (
+      <div className="shrink-0 h-11 border-b border-white/[0.08] bg-black/95 flex items-center gap-3 px-6 animate-fade-in-soft">
+        <p className="text-[11px] font-semibold text-white/60 uppercase tracking-wider shrink-0">
+          Conditions
+          <span className="ml-1.5 tabular-nums text-white/60">{cards.length}</span>
+        </p>
+        <div
+          className="flex-1 min-w-0 flex items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [mask-image:linear-gradient(to_right,black_calc(100%-32px),transparent)]"
+          onWheel={scrollSideways}
+        >
+          {cards.map(({ drug, sample }) => (
+            <button
+              key={drug}
+              type="button"
+              onClick={() => onSelectSample?.(sample)}
+              title={`Show a ${conditionLabel(drug)} cell`}
+              className="shrink-0 inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full text-[11px] font-medium text-white/80 bg-white/[0.04] border border-white/[0.08] hover:bg-white/[0.08] hover:text-white transition-colors"
+            >
+              <span
+                className="w-2 h-2 rounded-full shrink-0"
+                style={{ background: treatmentAccentCss(sample) }}
+                aria-hidden="true"
+              />
+              {conditionLabel(drug)}
+            </button>
+          ))}
+        </div>
+        {hasVideos && (
+          <button
+            type="button"
+            onClick={onToggleExpanded}
+            aria-expanded={false}
+            title="Show one representative movie per condition"
+            className={`${PILL_BASE} ${PILL_IDLE}`}
+          >
+            <Video size={12} />
+            <span>Show movies</span>
+          </button>
+        )}
+      </div>
+    );
+  }
+
   return (
-    <div className="shrink-0 border-b border-white/[0.08] bg-black/95 backdrop-blur-sm">
+    <div className="shrink-0 border-b border-white/[0.08] bg-black/95 backdrop-blur-sm animate-fade-in-soft">
       <div className="flex items-center justify-between px-6 pt-3 pb-2 gap-4">
         <div className="flex items-baseline gap-2 min-w-0">
           <p className="text-xs font-semibold text-white/85 uppercase tracking-wider truncate">
             Drug conditions
           </p>
-          <p className="text-[11px] text-white/40 tabular-nums shrink-0">
-            {cards.length} condition{cards.length === 1 ? '' : 's'} · live overview
+          <p className="text-[11px] text-white/60 tabular-nums shrink-0">
+            {cards.length} condition{cards.length === 1 ? '' : 's'} · one representative cell each
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -70,23 +147,30 @@ const DrugConditionStrip: React.FC<DrugConditionStripProps> = ({
             </button>
           )}
           <button
-            onClick={onClose}
-            className="inline-flex items-center justify-center w-8 h-8 rounded-lg text-white/55 hover:text-white hover:bg-white/[0.08] border border-transparent hover:border-white/[0.14] transition-colors"
-            title="Hide drug-conditions strip"
-            aria-label="Hide drug-conditions strip"
+            onClick={onToggleExpanded}
+            aria-expanded
+            className={`${PILL_BASE} ${PILL_IDLE}`}
+            title="Collapse to the condition list"
           >
-            <X size={14} />
+            <ChevronUp size={12} />
+            <span>Hide movies</span>
           </button>
         </div>
       </div>
 
-      <div className="px-6 pb-4 flex gap-2.5 overflow-x-auto">
+      <div
+        ref={scrollRef}
+        onScroll={updateEdges}
+        onWheel={scrollSideways}
+        className="px-6 pb-4 flex gap-2.5 overflow-x-auto scrollbar-thin"
+        style={{ maskImage: edgeMask, WebkitMaskImage: edgeMask }}
+      >
         {cards.map(({ drug, sample }) => (
           <button
             key={drug}
             type="button"
             onClick={() => onSelectSample?.(sample)}
-            title={drug}
+            title={conditionLabel(drug)}
             className="shrink-0 w-[112px] rounded-xl overflow-hidden border border-white/[0.08] bg-white/[0.03] group hover:border-white/25 hover:ring-1 hover:ring-white/20 transition-all text-left focus:outline-none focus:ring-1 focus:ring-white/30"
           >
             <div
@@ -96,19 +180,25 @@ const DrugConditionStrip: React.FC<DrugConditionStripProps> = ({
             />
             <div className="aspect-square relative bg-white/[0.04]">
               {sample.videos?.[videoIndex] ? (
-                <LazyVideo
-                  src={sample.videos[videoIndex]}
-                  poster={posters?.byDrug[drug] ?? posters?.byId[String(sample.id)]}
-                  posterPriority
-                  alt={drug}
-                  shouldPlay={isPlaying}
-                  unloadWhenHidden={false}
-                  className="w-full h-full pointer-events-none"
-                />
+                // Wait for the manifest so the tile never starts the 1.3 MB original instead of its clip.
+                posters && (
+                  <LazyVideo
+                    src={posters.clipById?.[String(sample.id)] ?? sample.videos[videoIndex]}
+                    poster={posters.byDrug[drug] ?? posters.byId[String(sample.id)]}
+                    posterPriority
+                    alt={conditionLabel(drug)}
+                    shouldPlay={isPlaying}
+                    unloadWhenHidden={false}
+                    // Tiles about three cards past either edge are already playing in phase when scrolled in.
+                    rootRef={scrollRef}
+                    rootMargin="0px 360px"
+                    className="w-full h-full pointer-events-none"
+                  />
+                )
               ) : sample.images?.[0] ? (
                 <img
                   src={sample.images[0]}
-                  alt={drug}
+                  alt={conditionLabel(drug)}
                   loading="lazy"
                   decoding="async"
                   className="w-full h-full object-cover"
@@ -121,8 +211,13 @@ const DrugConditionStrip: React.FC<DrugConditionStripProps> = ({
                 </div>
               )}
             </div>
-            <div className="px-2 py-1.5">
-              <p className="text-[11px] font-medium text-white/90 truncate">{drug}</p>
+            <div className="px-2 py-1.5 flex items-center gap-1 min-w-0">
+              <span
+                className="w-1.5 h-1.5 rounded-full shrink-0"
+                style={{ background: treatmentAccentCss(sample) }}
+                aria-hidden="true"
+              />
+              <p className="text-[11px] font-medium text-white/90 truncate">{conditionLabel(drug)}</p>
             </div>
           </button>
         ))}

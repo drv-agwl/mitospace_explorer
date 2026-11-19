@@ -2,6 +2,34 @@
   command = "npm run build"
   publish = "dist"
 
+# Security headers for every response. The policy allows: our own files; Umami, Google Analytics
+# (when VITE_GA_MEASUREMENT_ID is set) and Microsoft Clarity (when VITE_CLARITY_PROJECT_ID is set)
+# scripts; Google Fonts; images, movies and API calls over HTTPS (media is on S3 and the API host is
+# set at build time). Inline styles are needed by the instant app shell in index.html. The site may
+# not be framed by other sites.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Content-Security-Policy = "default-src 'self'; script-src 'self' https://cloud.umami.is https://www.googletagmanager.com https://*.clarity.ms; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; media-src 'self' blob: https:; connect-src 'self' https:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+
+# Vite names everything in /assets by content hash (JS, CSS and the dataset), so a
+# returning visitor never re-downloads or revalidates them; a deploy changes the names.
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+# Missing hashed assets must 404, not fall through to index.html (breaks stale tabs after a deploy).
+# Existing files are still served: rules without force only apply when no file matches.
+[[redirects]]
+  from = "/assets/*"
+  to = "/404.html"
+  status = 404
+
 [[redirects]]
   from = "/*"
   to = "/index.html"

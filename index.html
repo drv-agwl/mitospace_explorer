@@ -2,7 +2,9 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="MitoSpace Explorer — Interactive visualization of mitochondrial phenotypes from LLSM time-lapse microscopy" />
     <title>MitoSpace Explorer</title>
@@ -14,23 +16,28 @@
     <meta property="og:title" content="MitoSpace Explorer — Mitochondrial phenotype atlas" />
     <meta property="og:description" content="Explore an interactive 3D atlas of mitochondrial phenotypes from LLSM time-lapse microscopy across 25+ drug conditions." />
     <meta property="og:url" content="https://mitospace.ai/" />
-    <meta property="og:image" content="https://mitospace.ai/posters/control.webp" />
-    <meta property="og:image:alt" content="A mitochondrial network movie frame from the MitoSpace atlas" />
+    <meta property="og:image" content="https://mitospace.ai/og-image.jpg" />
+    <meta property="og:image:type" content="image/jpeg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="MitoSpace Explorer: a grid of single-cell mitochondrial movie frames under different drugs" />
 
     <!-- Twitter / X -->
-    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="MitoSpace Explorer — Mitochondrial phenotype atlas" />
     <meta name="twitter:description" content="Explore an interactive 3D atlas of mitochondrial phenotypes from LLSM time-lapse microscopy across 25+ drug conditions." />
-    <meta name="twitter:image" content="https://mitospace.ai/posters/control.webp" />
+    <meta name="twitter:image" content="https://mitospace.ai/og-image.jpg" />
+    <meta name="twitter:image:alt" content="MitoSpace Explorer: a grid of single-cell mitochondrial movie frames under different drugs" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap" rel="stylesheet">
-    <script defer src="https://cloud.umami.is/script.js" data-website-id="beba6a19-eda0-4df5-8c27-a825838e5001"></script>
+    <script defer src="https://cloud.umami.is/script.js" data-website-id="beba6a19-eda0-4df5-8c27-a825838e5001" data-domains="mitospace.ai,www.mitospace.ai" data-performance="true" data-errors="true" data-before-send="mitospaceUmamiBeforeSend"></script>
     <style>
       /* Instant app-shell — renders before the JS bundle executes so users see
          real chrome (<100ms) instead of a blank page or full-screen spinner.
          React replaces #root children on mount. */
       html, body { margin: 0; background: #000; }
+      #app-shell, #app-shell * { box-sizing: border-box; }
       #app-shell {
         position: fixed;
         inset: 0;
@@ -43,7 +50,7 @@
         z-index: 0;
       }
       #app-shell .sk-header {
-        height: 56px;
+        height: 69px;
         flex-shrink: 0;
         border-bottom: 1px solid rgba(255,255,255,0.08);
         display: flex;
@@ -51,33 +58,40 @@
         padding: 0 24px;
         gap: 12px;
       }
-      #app-shell .sk-brand {
-        font-size: 13px;
-        font-weight: 700;
-        letter-spacing: 0.2em;
-        text-transform: uppercase;
-        color: rgba(255,255,255,0.9);
-      }
+      #app-shell .sk-logo { width: 36px; height: 36px; display: block; }
+      #app-shell .sk-title { display: block; font-size: 18px; line-height: 28px; font-weight: 600; letter-spacing: -0.01em; }
+      #app-shell .sk-sub { display: block; font-size: 12px; line-height: 16px; letter-spacing: 0.025em; color: rgba(255,255,255,0.6); }
       #app-shell .sk-toolbar {
-        height: 49px;
+        height: 57px;
         flex-shrink: 0;
         border-bottom: 1px solid rgba(255,255,255,0.08);
         display: flex;
         align-items: center;
-        gap: 10px;
+        gap: 8px;
         padding: 0 24px;
       }
+      #app-shell .sk-strip {
+        height: 212px;
+        flex-shrink: 0;
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+        padding: 12px 24px 0;
+        overflow: hidden;
+      }
+      #app-shell .sk-strip-head { height: 32px; display: flex; align-items: center; justify-content: space-between; }
+      #app-shell .sk-cards { display: flex; gap: 10px; margin-top: 9px; }
+      #app-shell .sk-card { width: 112px; height: 143px; flex-shrink: 0; border-radius: 16px; }
       #app-shell .sk-body { flex: 1; display: flex; min-height: 0; }
+      #app-shell .sk-left { flex: 1; min-width: 0; display: flex; flex-direction: column; }
       #app-shell .sk-canvas {
         flex: 1;
-        min-width: 0;
+        min-height: 0;
         background: linear-gradient(to bottom, #171717 0%, #1a1a1a 30%, #1a1a1a 70%, #1e1e1e 100%);
         display: flex;
         align-items: center;
         justify-content: center;
       }
       #app-shell .sk-panel {
-        width: 400px;
+        width: 340px;
         flex-shrink: 0;
         border-left: 1px solid rgba(255,255,255,0.08);
         padding: 20px 24px;
@@ -85,12 +99,20 @@
         flex-direction: column;
         gap: 14px;
       }
+      @media (min-width: 1280px) { #app-shell .sk-panel { width: 400px; } }
+      #app-shell .sk-movie { aspect-ratio: 1; border-radius: 16px; }
+      #app-shell .sk-footer { height: 45px; flex-shrink: 0; border-top: 1px solid rgba(255,255,255,0.08); }
+      #app-shell .sk-narrow { display: none; }
+      @media (max-width: 1023px) {
+        #app-shell .sk-body, #app-shell .sk-footer { display: none; }
+        #app-shell .sk-narrow { flex: 1; display: flex; align-items: center; justify-content: center; }
+      }
       #app-shell .sk-box {
         background: rgba(255,255,255,0.05);
         border: 1px solid rgba(255,255,255,0.06);
         border-radius: 10px;
       }
-      #app-shell .sk-pill { height: 32px; width: 96px; border-radius: 8px; }
+      #app-shell .sk-pill { height: 36px; width: 96px; border-radius: 8px; }
       #app-shell .sk-line { height: 12px; border-radius: 6px; }
       #app-shell .sk-spinner {
         width: 34px; height: 34px; border-radius: 9999px;
@@ -111,27 +133,51 @@
     <div id="root">
       <div id="app-shell" aria-hidden="true">
         <div class="sk-header">
-          <span class="sk-brand">MitoSpace</span>
-          <div class="sk-line sk-box sk-shimmer" style="width:120px;"></div>
-        </div>
-        <div class="sk-toolbar">
-          <div class="sk-pill sk-box sk-shimmer"></div>
-          <div class="sk-pill sk-box sk-shimmer" style="width:120px;"></div>
-          <div class="sk-pill sk-box sk-shimmer" style="width:80px;"></div>
+          <img class="sk-logo" src="/favicon.svg" width="36" height="36" alt="" />
+          <div>
+            <span class="sk-title">MitoSpace Explorer</span>
+            <span class="sk-sub">Mitochondrial phenotype atlas</span>
+          </div>
         </div>
         <div class="sk-body">
-          <div class="sk-canvas">
-            <div class="sk-spinner"></div>
+          <div class="sk-left">
+            <div class="sk-toolbar">
+              <div class="sk-pill sk-box sk-shimmer" style="width:180px;"></div>
+              <div class="sk-pill sk-box sk-shimmer" style="width:138px;"></div>
+              <div style="flex:1;"></div>
+              <div class="sk-pill sk-box sk-shimmer" style="width:180px;"></div>
+            </div>
+            <div class="sk-strip">
+              <div class="sk-strip-head">
+                <div class="sk-line sk-box sk-shimmer" style="width:220px;"></div>
+                <div class="sk-line sk-box sk-shimmer" style="width:180px; height:32px; border-radius:8px;"></div>
+              </div>
+              <div class="sk-cards">
+                <div class="sk-card sk-box sk-shimmer"></div><div class="sk-card sk-box sk-shimmer"></div><div class="sk-card sk-box sk-shimmer"></div><div class="sk-card sk-box sk-shimmer"></div>
+                <div class="sk-card sk-box sk-shimmer"></div><div class="sk-card sk-box sk-shimmer"></div><div class="sk-card sk-box sk-shimmer"></div><div class="sk-card sk-box sk-shimmer"></div>
+                <div class="sk-card sk-box sk-shimmer"></div><div class="sk-card sk-box sk-shimmer"></div><div class="sk-card sk-box sk-shimmer"></div><div class="sk-card sk-box sk-shimmer"></div>
+                <div class="sk-card sk-box sk-shimmer"></div><div class="sk-card sk-box sk-shimmer"></div><div class="sk-card sk-box sk-shimmer"></div><div class="sk-card sk-box sk-shimmer"></div>
+              </div>
+            </div>
+            <div class="sk-canvas">
+              <div class="sk-spinner"></div>
+            </div>
           </div>
           <div class="sk-panel">
-            <div class="sk-box sk-shimmer" style="height:200px;"></div>
-            <div class="sk-line sk-box sk-shimmer" style="width:70%;"></div>
-            <div class="sk-line sk-box sk-shimmer" style="width:90%;"></div>
-            <div class="sk-line sk-box sk-shimmer" style="width:55%;"></div>
+            <div class="sk-box sk-shimmer" style="height:158px; border-radius:16px;"></div>
+            <div class="sk-line sk-box sk-shimmer" style="width:110px; margin-top:12px;"></div>
+            <div class="sk-movie sk-box sk-shimmer"></div>
           </div>
         </div>
+        <div class="sk-footer"></div>
+        <div class="sk-narrow"><div class="sk-spinner"></div></div>
       </div>
     </div>
+    <noscript>
+      <div style="position:fixed;inset:0;z-index:1;display:flex;align-items:center;justify-content:center;padding:24px;background:#000;color:#fff;font-family:'DM Sans',system-ui,sans-serif;text-align:center;">
+        MitoSpace Explorer needs JavaScript. Please enable it and reload the page.
+      </div>
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -66,7 +66,7 @@ export const RESEARCH_LINKS = {
     href: 'https://www.cell.com/cell/fulltext/S0092-8674(26)01001-9',
     label: 'Paper',
     hint: 'Cell',
-    description: 'Read the manuscript in Cell.',
+    description: 'The full study, with methods and results.',
   },
   github: {
     href: 'https://github.com/schoeneberglab/MitoSpace4D',
@@ -78,7 +78,7 @@ export const RESEARCH_LINKS = {
     href: 'https://huggingface.co/schoeneberglab/mitospace',
     label: 'Model',
     hint: 'Hugging Face',
-    description: 'Weights, model card, and usage.',
+    description: 'Weights, model card and usage notes.',
   },
 } as const;
 
@@ -108,9 +108,9 @@ const extLinkProps = {
   rel: 'noopener noreferrer',
 } as const;
 
-/** Header cluster — sized to the About/Lab text, not a 16px afterthought. */
+/** Header cluster — sized to the About/Lab text, not a 16px afterthought. Hidden on phones (links are in the footer). */
 export const HeaderResearchNav: React.FC = () => (
-  <div className="flex items-center gap-1 pl-3 ml-1 border-l border-white/[0.12]">
+  <div className="hidden sm:flex items-center gap-1 pl-3 ml-1 border-l border-white/[0.12]">
     {LINK_ORDER.map((key) => {
       const link = RESEARCH_LINKS[key];
       const Icon = ICONS[key];

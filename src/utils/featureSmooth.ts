@@ -1,44 +1,27 @@
 /**
  * Gentle k-NN value smoothing for per-sample feature values in 3-D UMAP space.
  *
- * Each output value is a blend of the sample's own raw value and the mean of
- * its k nearest neighbors:
- *
  *     v_displayed = (1 - blend) * v_own + blend * mean(v_neighbors)
  *
- * Goal: soften the speckle of feature-color rendering on UMAP without
- * distorting the colormap itself. Magnitudes still drive colors — we only
- * average each cell's reading a little with its spatial neighborhood, the
- * same kind of denoising you'd see in any 3-D scalar-field visualization.
+ * Softens the speckle of feature colouring without distorting the colormap:
+ * magnitudes still drive colours, each cell is only averaged a little with its
+ * spatial neighbourhood. Cells without a value stay NaN.
  *
- * Implementation: 3-D grid hash for k-nearest selection. Cost is roughly
- * O(N · candidates_per_cell) which lands at ~30–80 ms for 30 k samples,
- * memoize this on (sample set, feature) so it only runs on axis change.
+ * Exact k-NN on a uniform grid sized so occupied cells hold a few points, with
+ * the search widened ring by ring until no closer point can exist (~40 ms for
+ * the 36k v3 cells). Runs in the dataset worker; pure so it can also run on the
+ * main thread as a fallback.
  */
-
-interface SamplePos {
-  x: number;
-  y: number;
-  z: number;
-}
-
-type ValueArray = Float32Array | Float64Array | readonly number[];
-
 export function smoothFeatureValuesKnn(
-  samples: readonly SamplePos[],
-  values: ValueArray,
-  sampleIndexInValues: (i: number) => number,
+  xyz: Float32Array,
+  values: Float32Array,
   k: number = 6,
   blend: number = 0.35
 ): Float32Array {
-  const n = samples.length;
-  const out = new Float32Array(n);
-  if (n === 0 || k <= 0 || blend <= 0) {
-    for (let i = 0; i < n; i++) out[i] = values[sampleIndexInValues(i)] as number;
-    return out;
-  }
+  const n = values.length;
+  const out = new Float32Array(values);
+  if (n < 2 || k <= 0 || blend <= 0) return out;
 
-  // Bounding box (skip non-finite samples defensively).
   let xMin = Infinity;
   let yMin = Infinity;
   let zMin = Infinity;
@@ -46,125 +29,153 @@ export function smoothFeatureValuesKnn(
   let yMax = -Infinity;
   let zMax = -Infinity;
   for (let i = 0; i < n; i++) {
-    const s = samples[i];
-    if (s.x < xMin) xMin = s.x;
-    if (s.y < yMin) yMin = s.y;
-    if (s.z < zMin) zMin = s.z;
-    if (s.x > xMax) xMax = s.x;
-    if (s.y > yMax) yMax = s.y;
-    if (s.z > zMax) zMax = s.z;
+    const x = xyz[i * 3];
+    const y = xyz[i * 3 + 1];
+    const z = xyz[i * 3 + 2];
+    if (x < xMin) xMin = x;
+    if (y < yMin) yMin = y;
+    if (z < zMin) zMin = z;
+    if (x > xMax) xMax = x;
+    if (y > yMax) yMax = y;
+    if (z > zMax) zMax = z;
   }
   const dx = Math.max(1e-6, xMax - xMin);
   const dy = Math.max(1e-6, yMax - yMin);
   const dz = Math.max(1e-6, zMax - zMin);
 
-  // Cell size targets ~4 samples per cell on average so a 3³ neighborhood
-  // gives roughly ~100 candidates — plenty for k = 6, cheap to scan.
-  const targetCells = Math.max(8, n / 4);
-  const cellSize = Math.cbrt((dx * dy * dz) / targetCells);
-  const inv = 1 / cellSize;
-
-  const grid = new Map<number, number[]>();
-  // Pack 3-D cell coords into a single integer key for fast hashing.
-  // Bits: 21 per axis → indices in [0, 2^21) → enough for 2M cells per axis.
-  const cellKey = (ix: number, iy: number, iz: number): number =>
-    (((ix + 0x100000) & 0x1fffff) << 42) +
-    (((iy + 0x100000) & 0x1fffff) << 21) +
-    ((iz + 0x100000) & 0x1fffff);
-
-  for (let i = 0; i < n; i++) {
-    const s = samples[i];
-    const ix = Math.floor((s.x - xMin) * inv);
-    const iy = Math.floor((s.y - yMin) * inv);
-    const iz = Math.floor((s.z - zMin) * inv);
-    const key = cellKey(ix, iy, iz);
-    let bucket = grid.get(key);
-    if (!bucket) {
-      bucket = [];
-      grid.set(key, bucket);
+  // UMAP clouds are clustered, so a bounding-box cell size leaves dense cells
+  // with hundreds of points. Shrink until occupied cells hold ~3.
+  let cellSize = Math.cbrt((dx * dy * dz) / n);
+  for (let pass = 0; pass < 3; pass++) {
+    const occupied = new Set<number>();
+    const inv = 1 / cellSize;
+    const ny = Math.floor(dy * inv) + 1;
+    const nz = Math.floor(dz * inv) + 1;
+    for (let i = 0; i < n; i++) {
+      const ix = Math.floor((xyz[i * 3] - xMin) * inv);
+      const iy = Math.floor((xyz[i * 3 + 1] - yMin) * inv);
+      const iz = Math.floor((xyz[i * 3 + 2] - zMin) * inv);
+      occupied.add((ix * ny + iy) * nz + iz);
     }
-    bucket.push(i);
+    const perCell = n / occupied.size;
+    if (perCell < 4) break;
+    cellSize *= Math.cbrt(3 / perCell);
   }
+  // Keep the grid allocation bounded for degenerate inputs.
+  cellSize = Math.max(cellSize, Math.cbrt((dx * dy * dz) / 4e6));
 
-  // Reusable per-point k-set buffers (small-k linear maintenance is faster
-  // than a heap at k = 6).
-  const kDist = new Float64Array(k);
-  const kIdx = new Int32Array(k);
+  const inv = 1 / cellSize;
+  const nx = Math.floor(dx * inv) + 1;
+  const ny = Math.floor(dy * inv) + 1;
+  const nz = Math.floor(dz * inv) + 1;
+  const cellCount = nx * ny * nz;
+
+  // Counting sort: cell c owns order[start[c] .. start[c + 1]).
+  const cx = new Int32Array(n);
+  const cy = new Int32Array(n);
+  const cz = new Int32Array(n);
+  const start = new Int32Array(cellCount + 1);
+  for (let i = 0; i < n; i++) {
+    cx[i] = Math.min(nx - 1, Math.floor((xyz[i * 3] - xMin) * inv));
+    cy[i] = Math.min(ny - 1, Math.floor((xyz[i * 3 + 1] - yMin) * inv));
+    cz[i] = Math.min(nz - 1, Math.floor((xyz[i * 3 + 2] - zMin) * inv));
+    start[(cx[i] * ny + cy[i]) * nz + cz[i] + 1]++;
+  }
+  for (let c = 0; c < cellCount; c++) start[c + 1] += start[c];
+  const fill = start.slice(0, cellCount);
+  const order = new Int32Array(n);
+  for (let i = 0; i < n; i++) order[fill[(cx[i] * ny + cy[i]) * nz + cz[i]]++] = i;
+
+  const kk = Math.min(k, n - 1);
+  const kDist = new Float64Array(kk);
+  const kIdx = new Int32Array(kk);
+  const maxRing = Math.max(nx, ny, nz);
 
   for (let i = 0; i < n; i++) {
-    const s = samples[i];
-    const ownIdx = sampleIndexInValues(i);
-    const ownVal = values[ownIdx] as number;
-    if (!Number.isFinite(ownVal)) {
-      out[i] = ownVal;
-      continue;
-    }
-
-    const cx = Math.floor((s.x - xMin) * inv);
-    const cy = Math.floor((s.y - yMin) * inv);
-    const cz = Math.floor((s.z - zMin) * inv);
+    const own = values[i];
+    if (!Number.isFinite(own)) continue;
+    const px = xyz[i * 3];
+    const py = xyz[i * 3 + 1];
+    const pz = xyz[i * 3 + 2];
+    const ix = cx[i];
+    const iy = cy[i];
+    const iz = cz[i];
+    // Distance from the point to the nearest face of its own cell.
+    const inset = Math.max(
+      0,
+      Math.min(
+        px - (xMin + ix * cellSize),
+        xMin + (ix + 1) * cellSize - px,
+        py - (yMin + iy * cellSize),
+        yMin + (iy + 1) * cellSize - py,
+        pz - (zMin + iz * cellSize),
+        zMin + (iz + 1) * cellSize - pz
+      )
+    );
 
     let kept = 0;
     let maxD = -Infinity;
-    let maxIdx = -1;
-
-    for (let oz = -1; oz <= 1; oz++) {
-      for (let oy = -1; oy <= 1; oy++) {
-        for (let ox = -1; ox <= 1; ox++) {
-          const bucket = grid.get(cellKey(cx + ox, cy + oy, cz + oz));
-          if (!bucket) continue;
-          for (let bi = 0; bi < bucket.length; bi++) {
-            const j = bucket[bi];
-            if (j === i) continue;
-            const sj = samples[j];
-            const ddx = sj.x - s.x;
-            const ddy = sj.y - s.y;
-            const ddz = sj.z - s.z;
-            const d2 = ddx * ddx + ddy * ddy + ddz * ddz;
-            if (kept < k) {
-              kDist[kept] = d2;
-              kIdx[kept] = j;
-              if (d2 > maxD) {
-                maxD = d2;
-                maxIdx = kept;
-              }
-              kept++;
-            } else if (d2 < maxD) {
-              kDist[maxIdx] = d2;
-              kIdx[maxIdx] = j;
-              maxD = -Infinity;
-              for (let kk = 0; kk < k; kk++) {
-                if (kDist[kk] > maxD) {
-                  maxD = kDist[kk];
-                  maxIdx = kk;
+    let maxSlot = -1;
+    for (let r = 0; r <= maxRing; r++) {
+      const x0 = Math.max(0, ix - r);
+      const x1 = Math.min(nx - 1, ix + r);
+      const y0 = Math.max(0, iy - r);
+      const y1 = Math.min(ny - 1, iy + r);
+      const z0 = Math.max(0, iz - r);
+      const z1 = Math.min(nz - 1, iz + r);
+      for (let ox = x0; ox <= x1; ox++) {
+        const edgeX = ox === ix - r || ox === ix + r;
+        for (let oy = y0; oy <= y1; oy++) {
+          const edgeXY = edgeX || oy === iy - r || oy === iy + r;
+          for (let oz = z0; oz <= z1; oz++) {
+            // Only the shell of ring r; inner cells were scanned already.
+            if (!edgeXY && oz !== iz - r && oz !== iz + r) continue;
+            const cell = (ox * ny + oy) * nz + oz;
+            for (let b = start[cell]; b < start[cell + 1]; b++) {
+              const j = order[b];
+              if (j === i) continue;
+              const ddx = xyz[j * 3] - px;
+              const ddy = xyz[j * 3 + 1] - py;
+              const ddz = xyz[j * 3 + 2] - pz;
+              const d2 = ddx * ddx + ddy * ddy + ddz * ddz;
+              if (kept < kk) {
+                kDist[kept] = d2;
+                kIdx[kept] = j;
+                if (d2 > maxD) {
+                  maxD = d2;
+                  maxSlot = kept;
+                }
+                kept++;
+              } else if (d2 < maxD) {
+                kDist[maxSlot] = d2;
+                kIdx[maxSlot] = j;
+                maxD = -Infinity;
+                for (let s = 0; s < kk; s++) {
+                  if (kDist[s] > maxD) {
+                    maxD = kDist[s];
+                    maxSlot = s;
+                  }
                 }
               }
             }
           }
         }
       }
-    }
-
-    if (kept === 0) {
-      out[i] = ownVal;
-      continue;
+      // Anything outside rings 0..r is at least this far away.
+      const reach = r * cellSize + inset;
+      if (kept === kk && maxD <= reach * reach) break;
     }
 
     let sum = 0;
     let count = 0;
-    for (let kk = 0; kk < kept; kk++) {
-      const v = values[sampleIndexInValues(kIdx[kk])] as number;
+    for (let s = 0; s < kept; s++) {
+      const v = values[kIdx[s]];
       if (Number.isFinite(v)) {
         sum += v;
         count++;
       }
     }
-    if (count === 0) {
-      out[i] = ownVal;
-      continue;
-    }
-    const mean = sum / count;
-    out[i] = (1 - blend) * ownVal + blend * mean;
+    if (count > 0) out[i] = (1 - blend) * own + blend * (sum / count);
   }
 
   return out;

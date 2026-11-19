@@ -1,4 +1,5 @@
 import type { Sample } from '../types';
+import { compareConditions } from '../constants/conditions';
 
 export interface DrugCard {
   drug: string;
@@ -7,7 +8,7 @@ export interface DrugCard {
 
 /**
  * Pick one representative sample per drug for the overview strip.
- * Preference: has video > has image > anything. Sorted by drug name.
+ * Preference: has video > has image > anything. Control first, then by display name.
  */
 export function selectDrugRepresentatives(samples: Sample[]): DrugCard[] {
   const byDrug = new Map<string, Sample>();
@@ -35,7 +36,7 @@ export function selectDrugRepresentatives(samples: Sample[]): DrugCard[] {
   }
   return Array.from(byDrug.entries())
     .map(([drug, sample]) => ({ drug, sample }))
-    .sort((a, b) => a.drug.localeCompare(b.drug));
+    .sort((a, b) => compareConditions(a.drug, b.drug));
 }
 
 export function drugStripVideoUrls(samples: Sample[], videoIndex = 0): string[] {

@@ -5,12 +5,11 @@ import { getFeatureDisplayLabel } from '../constants/features';
 import { formatFeatureValue } from '../utils/formatFeature';
 import { featureToColorPlasmaAdaptive } from '../utils/featureColor';
 import { estimatePlasmaParams } from '../utils/featureColorParams';
-import {
-  isAxisStripExcludedDrug,
-  isAxisStripExcludedSampleId,
-} from '../constants/axisSampleExclusions';
+import { isAxisStripExcludedSampleId } from '../constants/axisSampleExclusions';
 import LazyVideo from './LazyVideo';
 import { usePosterManifest } from '../utils/posterManifest';
+import { conditionLabel } from '../constants/conditions';
+import { prefersReducedMotion } from '../utils/motion';
 
 // Baseline number of axis samples — used until the strip's width is measured
 // and on small viewports. The adaptive count below grows past this on wider
@@ -22,20 +21,18 @@ const MAX_AXIS_SAMPLES = 17;
 // Target horizontal budget per card (incl. its share of the gap). The strip
 // tries to fit as many cards as possible at this density before the cap.
 const AXIS_TARGET_CARD_PX = 160;
+// Narrowest card and the gap between cards (matches `min-w-[96px]` and `gap-3`).
+const AXIS_CARD_MIN_PX = 96;
+const AXIS_CARD_GAP_PX = 12;
 
-// Drugs to deprioritize in semantic axis preview (will only use if no alternatives)
-const DEPRIORITIZED_DRUGS = ['Oligomycin', 'DNP'];
+// 256 px faststart copies of the cell movies (scripts/build_movie_tier.mjs), once uploaded.
+const MOVIE_PREVIEW_BASE = (import.meta.env.VITE_MOVIE_PREVIEW_BASE as string | undefined)?.replace(/\/+$/, '');
+const previewMovieUrl = (url: string) =>
+  MOVIE_PREVIEW_BASE ? `${MOVIE_PREVIEW_BASE}/${url.split('/').pop()}` : url;
 
-function isSoftDeprioritizedDrug(drug: string): boolean {
-  return DEPRIORITIZED_DRUGS.some((d) => drug.toLowerCase().includes(d.toLowerCase()));
-}
-
-function isHardAxisStripExcluded(samples: Sample[], i: number): boolean {
+function isAxisStripExcluded(samples: Sample[], i: number): boolean {
   const s = samples[i];
-  if (!s) return true;
-  if (isAxisStripExcludedSampleId(s.id)) return true;
-  const drug = s.treatment?.drug || '';
-  return isAxisStripExcludedDrug(drug);
+  return !s || isAxisStripExcludedSampleId(s.id);
 }
 
 function findNearestSampleIndex(
@@ -56,66 +53,48 @@ function findNearestSampleIndex(
   return nearest;
 }
 
-function indicesByIncreasingDistance(
-  target: number,
-  featureValues: number[],
-  limit: number,
-  usedIndices: Set<number>
-): number[] {
-  const scored: { i: number; d: number }[] = [];
-  for (let i = 0; i < limit; i++) {
-    if (usedIndices.has(i)) continue;
-    const v = featureValues[i];
-    if (!Number.isFinite(v)) continue;
-    scored.push({ i, d: Math.abs(v - target) });
-  }
-  scored.sort((a, b) => (a.d === b.d ? a.i - b.i : a.d - b.d));
-  return scored.map((x) => x.i);
-}
-
 function pickUnusedIndexForTarget(
   target: number,
   featureValues: number[],
   samples: Sample[],
   limit: number,
-  usedIndices: Set<number>
+  usedIndices: Set<number>,
+  isVisible: (i: number) => boolean
 ): number {
-  const ranked = indicesByIncreasingDistance(target, featureValues, limit, usedIndices);
-
-  const tryPick = (predicate: (i: number) => boolean): number => {
-    for (const i of ranked) {
-      if (predicate(i)) return i;
+  // Nearest unused cell by value (lowest index on ties), preferring cells whose movie is not excluded.
+  let clean = -1;
+  let cleanD = Infinity;
+  let any = -1;
+  let anyD = Infinity;
+  for (let i = 0; i < limit; i++) {
+    const v = featureValues[i];
+    if (!Number.isFinite(v) || usedIndices.has(i) || !isVisible(i)) continue;
+    const d = Math.abs(v - target);
+    if (d < anyD) {
+      anyD = d;
+      any = i;
     }
-    return -1;
-  };
+    if (d < cleanD && !isAxisStripExcluded(samples, i)) {
+      cleanD = d;
+      clean = i;
+    }
+  }
+  if (clean >= 0) return clean;
+  if (any >= 0) return any;
 
-  // Prefer: not hard-excluded, not soft-deprioritized
-  let pick = tryPick(
-    (i) => !isHardAxisStripExcluded(samples, i) && !isSoftDeprioritizedDrug(samples[i]?.treatment?.drug || '')
-  );
-  if (pick >= 0) return pick;
-
-  // Then: not hard-excluded (allows oligomycin / DNP when they are closest)
-  pick = tryPick((i) => !isHardAxisStripExcluded(samples, i));
-  if (pick >= 0) return pick;
-
-  // Then: any unused index by distance
-  pick = tryPick(() => true);
-  if (pick >= 0) return pick;
-
-  // Last resort: allow re-using an index (duplicate thumbnail)
+  // Last resort: allow re-using an index (duplicate thumbnail); -1 when no visible cell is measured.
   let best = Infinity;
   let nearest = -1;
   for (let i = 0; i < limit; i++) {
     const v = featureValues[i];
-    if (!Number.isFinite(v)) continue;
+    if (!Number.isFinite(v) || !isVisible(i)) continue;
     const d = Math.abs(v - target);
     if (d < best) {
       best = d;
       nearest = i;
     }
   }
-  return nearest >= 0 ? nearest : 0;
+  return nearest;
 }
 
 function getAxisSamples(
@@ -123,7 +102,8 @@ function getAxisSamples(
   featureValues: number[],
   samples: Sample[],
   count: number,
-  maxIndex: number
+  maxIndex: number,
+  visibleIds: ReadonlySet<string> | null
 ): Array<{ sample: Sample; index: number; value: number }> {
   const range = featureRange.max - featureRange.min;
   const targets = Array.from({ length: count }, (_, i) =>
@@ -132,25 +112,27 @@ function getAxisSamples(
   const limit = Math.min(featureValues.length, samples.length, maxIndex);
   if (limit === 0) return [];
 
+  const isVisible = (i: number) => !visibleIds || visibleIds.has(samples[i]?.id);
   const usedIndices = new Set<number>();
-
-  return targets.map((target) => {
-    const nearest = pickUnusedIndexForTarget(target, featureValues, samples, limit, usedIndices);
+  const picked: Array<{ sample: Sample; index: number; value: number }> = [];
+  for (const target of targets) {
+    const nearest = pickUnusedIndexForTarget(target, featureValues, samples, limit, usedIndices, isVisible);
+    if (nearest < 0) break;
     usedIndices.add(nearest);
-
-    return {
-      sample: samples[nearest],
-      index: nearest,
-      value: featureValues[nearest] ?? target,
-    };
-  });
+    picked.push({ sample: samples[nearest], index: nearest, value: featureValues[nearest] });
+  }
+  return picked;
 }
 
 interface SemanticAxisPreviewProps {
   featureRange: { min: number; max: number };
   featureValues: number[];
   selectedFeature: string;
+  /** True while the next feature loads; the cards shown are still the previous feature's. */
+  pending?: boolean;
   samples: Sample[];
+  /** Ids of cells left by the condition filter; null when nothing is filtered. */
+  visibleSampleIds?: ReadonlySet<string> | null;
   apiEmbeddingCount: number | null;
   datasetVersion: DatasetVersion;
   onClose: () => void;
@@ -173,7 +155,9 @@ const SemanticAxisPreview: React.FC<SemanticAxisPreviewProps> = ({
   featureRange,
   featureValues,
   selectedFeature,
+  pending = false,
   samples,
+  visibleSampleIds = null,
   apiEmbeddingCount,
   datasetVersion,
   onClose,
@@ -206,14 +190,16 @@ const SemanticAxisPreview: React.FC<SemanticAxisPreviewProps> = ({
     if (containerWidth <= 0) return MIN_AXIS_SAMPLES;
     // contentRect already excludes our `px-6`, so don't subtract again.
     const avail = Math.max(containerWidth, 200);
-    const ideal = Math.round(avail / AXIS_TARGET_CARD_PX);
-    return Math.max(MIN_AXIS_SAMPLES, Math.min(MAX_AXIS_SAMPLES, ideal));
+    const ideal = Math.max(MIN_AXIS_SAMPLES, Math.round(avail / AXIS_TARGET_CARD_PX));
+    // Never more cards than fit, so the high end of the axis is always on screen.
+    const fit = Math.floor((avail + AXIS_CARD_GAP_PX) / (AXIS_CARD_MIN_PX + AXIS_CARD_GAP_PX));
+    return Math.max(3, Math.min(MAX_AXIS_SAMPLES, fit, ideal));
   }, [containerWidth]);
 
   const axisSamples = useMemo(() => {
     const max = apiEmbeddingCount ?? featureValues.length;
-    return getAxisSamples(featureRange, featureValues, samples, targetSampleCount, max);
-  }, [featureRange, featureValues, samples, apiEmbeddingCount, targetSampleCount]);
+    return getAxisSamples(featureRange, featureValues, samples, targetSampleCount, max, visibleSampleIds);
+  }, [featureRange, featureValues, samples, apiEmbeddingCount, targetSampleCount, visibleSampleIds]);
 
   // Plasma parameters and per-sample colors (kept in lockstep with the canvas /
   // legend so cards visually align with the 3D scene's coloring).
@@ -250,25 +236,41 @@ const SemanticAxisPreview: React.FC<SemanticAxisPreviewProps> = ({
   const hasVideos = videoCount > 0;
 
   // Strip-level play intent; LazyVideo loads/plays only visible cards (capped).
-  const [isPlaying, setIsPlaying] = useState(true);
+  const [isPlaying, setIsPlaying] = useState(() => !prefersReducedMotion());
   const posters = usePosterManifest();
 
   const togglePlayPause = useCallback(() => {
     setIsPlaying((prev) => !prev);
   }, []);
 
-  if (axisSamples.length === 0) return null;
+  if (axisSamples.length === 0) {
+    return (
+      <div className="shrink-0 border-b border-white/[0.08] bg-black/95 backdrop-blur-sm flex items-center justify-between gap-4 px-6 py-3">
+        <p className="text-xs text-white/60">
+          None of the visible cells has a {getFeatureDisplayLabel(selectedFeature, datasetVersion)} measurement.
+        </p>
+        <button
+          onClick={onClose}
+          className="inline-flex items-center justify-center w-8 h-8 rounded-lg text-white/55 hover:text-white hover:bg-white/[0.08] border border-transparent hover:border-white/[0.14] transition-colors"
+          title="Close"
+          aria-label="Close cells along the axis"
+        >
+          <X size={14} />
+        </button>
+      </div>
+    );
+  }
 
   return (
-    <div className="shrink-0 border-b border-white/[0.08] bg-black/95 backdrop-blur-sm">
-      {/* ─── Header ─────────────────────────────────────────────────────── */}
+    <div className="shrink-0 border-b border-white/[0.08] bg-black/95 backdrop-blur-sm animate-fade-in-soft">
+      {/* ─── Header ───────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-6 pt-3 pb-2 gap-4">
         <div className="flex items-baseline gap-2 min-w-0">
           <p className="text-xs font-semibold text-white/85 uppercase tracking-wider truncate">
-            Samples along {getFeatureDisplayLabel(selectedFeature, datasetVersion)}
+            Cells along {getFeatureDisplayLabel(selectedFeature, datasetVersion)}
           </p>
-          <p className="text-[11px] text-white/40 tabular-nums shrink-0">
-            {axisSamples.length} samples · low → high
+          <p className="text-[11px] text-white/60 tabular-nums shrink-0" aria-live="polite">
+            {pending ? 'Loading…' : `${axisSamples.length} cells · low → high`}
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -287,7 +289,7 @@ const SemanticAxisPreview: React.FC<SemanticAxisPreviewProps> = ({
             onClick={onClose}
             className="inline-flex items-center justify-center w-8 h-8 rounded-lg text-white/55 hover:text-white hover:bg-white/[0.08] border border-transparent hover:border-white/[0.14] transition-colors"
             title="Close"
-            aria-label="Close samples-along-axis panel"
+            aria-label="Close cells along the axis"
           >
             <X size={14} />
           </button>
@@ -300,14 +302,18 @@ const SemanticAxisPreview: React.FC<SemanticAxisPreviewProps> = ({
           3px plasma accent (below) still ties each card to its value. */}
 
       {/* ─── Cards ──────────────────────────────────────────────────────── */}
-      <div ref={cardsRef} className="px-6 pb-4 flex gap-3 overflow-x-auto">
+      <div
+        ref={cardsRef}
+        className={`px-6 pb-4 flex gap-3 overflow-x-auto transition-opacity duration-200 ${pending ? 'opacity-40' : 'opacity-100'}`}
+        aria-busy={pending}
+      >
         {axisSamples.map(({ sample, value }, i) => (
           <button
             key={sample.id + i}
             type="button"
             onClick={() => onSelectSample?.(sample)}
-            title={`${sample.treatment.drug} · ${formatFeatureValue(value)}`}
-            className="flex-1 min-w-[110px] max-w-[180px] rounded-xl overflow-hidden border border-white/[0.08] bg-white/[0.03] group hover:border-white/25 hover:ring-1 hover:ring-white/20 transition-all text-left focus:outline-none focus:ring-1 focus:ring-white/30"
+            title={`${conditionLabel(sample.treatment.drug)} · ${formatFeatureValue(value)}`}
+            className="flex-1 min-w-[96px] max-w-[160px] rounded-xl overflow-hidden border border-white/[0.08] bg-white/[0.03] group hover:border-white/25 hover:ring-1 hover:ring-white/20 transition-all text-left focus:outline-none focus:ring-1 focus:ring-white/30 animate-fade-in-soft"
           >
             {/* Plasma color accent — links the card to its gradient position. */}
             <div
@@ -315,12 +321,12 @@ const SemanticAxisPreview: React.FC<SemanticAxisPreviewProps> = ({
               style={{ background: sampleColorsCss[i] }}
               aria-hidden="true"
             />
-            <div className="aspect-video relative bg-white/[0.04]">
+            <div className="aspect-square relative bg-white/[0.04]">
               {sample.videos?.[videoIndex] ? (
                 <LazyVideo
-                  src={sample.videos[videoIndex]}
+                  src={previewMovieUrl(sample.videos[videoIndex])}
                   poster={posters?.byId[String(sample.id)] ?? posters?.byDrug[sample.treatment.drug]}
-                  alt={sample.treatment.drug}
+                  alt={conditionLabel(sample.treatment.drug)}
                   shouldPlay={isPlaying}
                   unloadWhenHidden={false}
                   className="w-full h-full pointer-events-none"
@@ -341,12 +347,12 @@ const SemanticAxisPreview: React.FC<SemanticAxisPreviewProps> = ({
                 </div>
               )}
             </div>
-            <div className="px-2.5 py-2 flex items-center justify-between gap-2">
-              <p className="text-[11px] font-medium text-white/90 truncate min-w-0">
-                {sample.treatment.drug}
+            <div className="px-2.5 py-1.5 flex flex-col gap-0.5 min-w-0">
+              <p className="text-[11px] font-medium text-white/90 truncate">
+                {conditionLabel(sample.treatment.drug)}
               </p>
               <span
-                className="text-[10px] font-mono tabular-nums text-white/65 shrink-0 px-1.5 py-0.5 rounded bg-white/[0.05] border border-white/[0.06]"
+                className="text-[10px] font-mono tabular-nums text-white/60 truncate"
                 title={`${getFeatureDisplayLabel(selectedFeature, datasetVersion)} value`}
               >
                 {formatFeatureValue(value)}

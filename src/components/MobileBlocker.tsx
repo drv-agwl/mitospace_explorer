@@ -1,60 +1,194 @@
 import React, { useEffect, useState } from 'react';
-import { Monitor } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { ArrowUpRight, Check, ChevronRight, Expand, Link2, Share } from 'lucide-react';
+import Header from './Header';
+import Footer from './Footer';
+import ExplorerPreview from './ExplorerPreview';
 import MitoSpaceLogo from './MitoSpaceLogo';
+import { GitHubIcon, HuggingFaceIcon, PaperIcon, RESEARCH_LINKS } from './ResearchLinks';
+import { trackEvent } from '../analytics';
 
 /** Minimum CSS pixel width for the full explorer layout (toolbar + 3D pane). */
 const MIN_VIEWPORT_WIDTH_PX = 1024;
 
-/** Squished mito in a mail slot, purely decorative. */
-function NarrowViewportMascot({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 220 130"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-hidden
-    >
-      {/* Side rails = narrow browser */}
-      <rect x="12" y="8" width="10" height="114" rx="3" className="fill-white/15" />
-      <rect x="198" y="8" width="10" height="114" rx="3" className="fill-white/15" />
-      {/* “Cristae” squiggle squeezed in the middle */}
-      <ellipse
-        cx="110"
-        cy="65"
-        rx="72"
-        ry="28"
-        fill="none"
-        className="stroke-sky-400/90"
-        strokeWidth="2.5"
-      />
-      <path
-        d="M52 65c18-12 36-12 58 0s40 12 58 0"
-        fill="none"
-        className="stroke-sky-300/70"
-        strokeWidth="2"
-        strokeLinecap="round"
-      />
-      <path
-        d="M60 72c14 10 30 10 50 0s36-10 50 0"
-        fill="none"
-        className="stroke-cyan-500/50"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-      />
-      {/* Dramatic sweat dot */}
-      <circle cx="154" cy="38" r="4" className="fill-amber-300/90" />
-    </svg>
-  );
+const isTooNarrow = () => typeof window !== 'undefined' && window.innerWidth < MIN_VIEWPORT_WIDTH_PX;
+
+/** Why the explorer can't open here: a narrow desktop window, a tablet held upright, or a phone. */
+type NarrowReason = 'window' | 'rotate' | 'device';
+
+function narrowReason(): NarrowReason {
+  if (window.matchMedia?.('(pointer: fine)').matches) return 'window';
+  const longSide = Math.max(window.screen?.width ?? 0, window.screen?.height ?? 0);
+  return longSide >= MIN_VIEWPORT_WIDTH_PX ? 'rotate' : 'device';
 }
 
-const MobileBlocker: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [viewportTooNarrow, setViewportTooNarrow] = useState(false);
+const PITCH =
+  'MitoSpace Explorer is a browser-based atlas of mitochondrial phenotypes under drug perturbation, built from high-resolution 4D lattice light-sheet microscopy data.';
+
+const MESSAGE: Record<NarrowReason, { title: string; body: string }> = {
+  device: {
+    title: 'The explorer needs a bigger screen',
+    body: `${PITCH} It needs a screen at least 1,024 px wide, so open it on a laptop or desktop.`,
+  },
+  rotate: {
+    title: 'Turn your tablet sideways',
+    body: `${PITCH} It needs a screen at least 1,024 px wide, which your tablet has in landscape.`,
+  },
+  window: {
+    title: 'Make this window a little wider',
+    body: `${PITCH} It needs at least 1,024 px of width, and opens on its own as soon as there is room.`,
+  },
+};
+
+const PRIMARY_BUTTON =
+  'inline-flex items-center justify-center gap-2 h-11 px-5 rounded-xl text-sm font-semibold bg-white text-black hover:bg-gray-100 transition-colors';
+const SECONDARY_BUTTON =
+  'inline-flex items-center justify-center gap-2 h-11 px-5 rounded-xl text-sm font-medium border border-white/[0.14] bg-white/[0.06] text-white hover:bg-white/[0.1] transition-colors';
+
+/** Native share sheet where available (phones), otherwise copies the link. */
+const ShareLinkButton: React.FC<{ className: string }> = ({ className }) => {
+  const [copied, setCopied] = useState(false);
+  const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+  const onClick = async () => {
+    const url = window.location.href;
+    try {
+      if (canShare) {
+        await navigator.share({ title: 'MitoSpace Explorer', text: 'Interactive atlas of mitochondrial phenotypes', url });
+        trackEvent('share_link', { via: 'share_sheet' });
+        return;
+      }
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      trackEvent('share_link', { via: 'copy' });
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Share sheet dismissed or clipboard unavailable.
+    }
+  };
+  return (
+    <button type="button" onClick={onClick} className={className}>
+      {copied ? <Check size={16} /> : canShare ? <Share size={16} /> : <Link2 size={16} />}
+      {copied ? 'Link copied' : canShare ? 'Send the link to yourself' : 'Copy the link'}
+    </button>
+  );
+};
+
+/** Full screen only helps when the display itself is wide enough for the explorer. */
+const canGoFullScreen = () =>
+  typeof document !== 'undefined' &&
+  document.fullscreenEnabled &&
+  (window.screen?.width ?? 0) >= MIN_VIEWPORT_WIDTH_PX;
+
+/** Full screen widens a narrow desktop window to the whole display, which opens the explorer. */
+const FullScreenButton: React.FC = () => {
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        trackEvent('narrow_fullscreen');
+        document.documentElement.requestFullscreen().catch(() => {});
+      }}
+      className={PRIMARY_BUTTON}
+    >
+      <Expand size={16} />
+      Go full screen
+    </button>
+  );
+};
+
+const MORE_LINKS = [
+  { ...RESEARCH_LINKS.paper, Icon: PaperIcon },
+  { ...RESEARCH_LINKS.github, Icon: GitHubIcon },
+  { ...RESEARCH_LINKS.huggingface, Icon: HuggingFaceIcon },
+] as const;
+
+/** What a phone, tablet or narrow window shows instead of the 3D explorer. */
+const NarrowScreenLanding: React.FC = () => {
+  const [reason] = useState(narrowReason);
+  const { title, body } = MESSAGE[reason];
+  const cta =
+    reason === 'device' ? (
+      <ShareLinkButton className={PRIMARY_BUTTON} />
+    ) : reason === 'rotate' ? (
+      <ShareLinkButton className={SECONDARY_BUTTON} />
+    ) : canGoFullScreen() ? (
+      <FullScreenButton />
+    ) : null;
 
   useEffect(() => {
-    const check = () => {
-      setViewportTooNarrow(window.innerWidth < MIN_VIEWPORT_WIDTH_PX);
-    };
+    trackEvent('narrow_screen', { reason });
+  }, [reason]);
+
+  return (
+    <div className="min-h-screen flex flex-col bg-black text-white">
+      <Header />
+      <main className="flex-grow px-6 pt-10 pb-16 sm:pt-16">
+        <div className="mx-auto w-full max-w-xl">
+          <p className="inline-flex items-center gap-2 rounded-full border border-white/[0.12] bg-white/[0.04] px-3 py-1 text-xs text-white/70">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" aria-hidden="true" />
+            Your window got a little… punctate :(
+          </p>
+          <h2 className="mt-4 text-[30px] sm:text-4xl font-semibold tracking-tight leading-[1.12]">{title}</h2>
+          <p className="mt-4 text-base text-white/70 leading-relaxed">{body}</p>
+
+          {cta && <div className="mt-7 flex flex-wrap gap-3">{cta}</div>}
+
+          <ExplorerPreview priority className="mt-10" />
+
+          <section className="mt-12" aria-labelledby="narrow-more">
+            <h3 id="narrow-more" className="text-sm font-semibold text-white">
+              In the meantime
+            </h3>
+            <p className="mt-1 text-sm text-white/60">These all work on this screen.</p>
+            <nav
+              className="mt-4 overflow-hidden rounded-2xl border border-white/[0.1] bg-white/[0.03] divide-y divide-white/[0.08]"
+              aria-label="Learn more"
+            >
+              <Link to="/about" className="flex items-center gap-3 px-4 py-3.5 hover:bg-white/[0.04] transition-colors">
+                <span className="flex items-center justify-center w-6 h-6 rounded-md bg-white text-black shrink-0">
+                  <MitoSpaceLogo size={14} variant="dark" />
+                </span>
+                <span className="flex-1 min-w-0">
+                  <span className="block text-sm font-medium text-white">About MitoSpace</span>
+                  <span className="block text-xs text-white/55">How the atlas was made, and the team behind it</span>
+                </span>
+                <ChevronRight size={16} className="text-white/40 shrink-0" />
+              </Link>
+              {MORE_LINKS.map(({ href, label, hint, description, Icon }) => (
+                <a
+                  key={href}
+                  href={href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-3 px-4 py-3.5 hover:bg-white/[0.04] transition-colors"
+                >
+                  <span className="flex items-center justify-center w-6 h-6 text-white/85 shrink-0">
+                    <Icon size={18} />
+                  </span>
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-sm font-medium text-white">
+                      {label} <span className="font-normal text-white/50">· {hint}</span>
+                    </span>
+                    <span className="block text-xs text-white/55">{description}</span>
+                  </span>
+                  <ArrowUpRight size={16} className="text-white/40 shrink-0" />
+                </a>
+              ))}
+            </nav>
+          </section>
+        </div>
+      </main>
+      <Footer />
+    </div>
+  );
+};
+
+const MobileBlocker: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  // Read the width before the first render so a narrow window never mounts the explorer (or its download).
+  const [viewportTooNarrow, setViewportTooNarrow] = useState(isTooNarrow);
+
+  useEffect(() => {
+    const check = () => setViewportTooNarrow(isTooNarrow());
     check();
     window.addEventListener('resize', check);
     return () => window.removeEventListener('resize', check);
@@ -64,62 +198,7 @@ const MobileBlocker: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     return <>{children}</>;
   }
 
-  return (
-    <div className="fixed inset-0 bg-gradient-to-br from-black via-gray-900 to-black flex items-center justify-center p-6 overflow-hidden">
-      <div className="absolute inset-0 opacity-10 pointer-events-none">
-        <div className="absolute top-1/4 left-1/4 w-64 h-64 bg-blue-500 rounded-full filter blur-3xl animate-pulse" />
-        <div
-          className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-purple-500 rounded-full filter blur-3xl animate-pulse"
-          style={{ animationDelay: '1s' }}
-        />
-      </div>
-
-      <div className="relative max-w-md w-full">
-        <div className="flex justify-center mb-6">
-          <div className="w-20 h-20 bg-white/10 backdrop-blur-sm rounded-2xl border border-white/20 flex items-center justify-center shadow-2xl">
-            <MitoSpaceLogo variant="dark" className="w-14 h-14" />
-          </div>
-        </div>
-
-        <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl p-8 shadow-2xl">
-          <div className="text-center mb-6">
-            <div className="inline-flex items-center justify-center w-[200px] h-[100px] mb-4">
-              <NarrowViewportMascot className="w-[200px] h-[100px] text-white" />
-            </div>
-            <h1 className="text-2xl font-bold text-white mb-2 leading-snug">
-              Your window got a little... punctate :(
-            </h1>
-            <p className="text-white/65 text-sm leading-relaxed">
-              The 3D explorer needs at least{' '}
-              <span className="text-white/90 font-medium tabular-nums">{MIN_VIEWPORT_WIDTH_PX}px</span>{' '}
-              of horizontal space. Widen the window, go full screen, or try a larger display.
-            </p>
-          </div>
-
-          <div className="bg-white/5 rounded-2xl p-6 mb-6 border border-white/10">
-            <div className="flex items-start gap-4">
-              <div className="flex-shrink-0">
-                <div className="w-12 h-12 bg-blue-500/20 rounded-xl flex items-center justify-center">
-                  <Monitor className="w-6 h-6 text-blue-400" strokeWidth={2} aria-hidden />
-                </div>
-              </div>
-              <div>
-                <h2 className="text-white font-semibold mb-1">Give it some space</h2>
-                <p className="text-white/55 text-sm leading-relaxed">
-                  A wide tablet in landscape may work, but a skinny desktop window probably won’t.
-                  Your page will load normally once there’s enough room.
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <p className="text-center mt-8 text-white/35 text-xs">
-          Tip: if you’re on a tablet, landscape often clears the bar without summoning IT.
-        </p>
-      </div>
-    </div>
-  );
+  return <NarrowScreenLanding />;
 };
 
 export default MobileBlocker;

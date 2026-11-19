@@ -55,6 +55,8 @@ const FeatureSelect: React.FC<FeatureSelectProps> = ({
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
+        // Closing the list should not also deselect the cell (global Esc handler on window).
+        e.stopPropagation();
         close();
         return;
       }
@@ -134,7 +136,7 @@ const FeatureSelect: React.FC<FeatureSelectProps> = ({
               ? 'border-white/30 bg-white/10 text-white ring-1 ring-white/20'
               : loading
                 ? 'border-white/25 bg-white/[0.08] text-white'
-                : 'border-white/15 bg-white/5 text-white hover:bg-white/8 hover:border-white/25'
+                : 'border-white/15 bg-white/5 text-white hover:bg-white/[0.08] hover:border-white/25'
           }
         `}
       >
@@ -158,9 +160,9 @@ const FeatureSelect: React.FC<FeatureSelectProps> = ({
         <div
           ref={listRef}
           role="listbox"
-          className="absolute top-full left-0 mt-1.5 z-50 min-w-[240px] max-h-[280px] overflow-y-auto
+          className="absolute top-full left-0 mt-1.5 z-50 min-w-[240px] max-h-[calc(100vh-160px)] overflow-y-auto
             rounded-xl border border-white/[0.12] bg-black/95 backdrop-blur-md shadow-elevated
-            py-2 scrollbar-thin animate-slide-up origin-top"
+            py-1.5 scrollbar-thin animate-slide-up origin-top"
         >
           <button
             type="button"
@@ -173,17 +175,17 @@ const FeatureSelect: React.FC<FeatureSelectProps> = ({
             }}
             onMouseEnter={() => setFocusedIndex(-1)}
             className={`
-              w-full flex items-center justify-between gap-2 px-3 py-2.5 text-left text-sm
-              transition-colors border-b border-white/[0.08] mb-2
-              ${!value ? 'bg-white/12 text-white' : 'text-white/70 hover:bg-white/8'}
+              w-full flex items-center justify-between gap-2 px-3 py-2 text-left text-sm
+              transition-colors border-b border-white/[0.08] mb-1.5
+              ${!value ? 'bg-white/[0.12] text-white' : 'text-white/70 hover:bg-white/[0.08]'}
             `}
           >
             <span className="text-white/60">{placeholder}</span>
             {!value && <Check size={14} className="shrink-0 text-mito-400" strokeWidth={2.5} />}
           </button>
           {groups.map((grp) => (
-            <div key={grp.category} className="mb-3 last:mb-0">
-              <div className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-white/50">
+            <div key={grp.category} className="mb-1.5">
+              <div className="px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-white/50">
                 {grp.category}
               </div>
               <div className="space-y-0.5">
@@ -207,10 +209,10 @@ const FeatureSelect: React.FC<FeatureSelectProps> = ({
                       }}
                       onMouseEnter={() => setFocusedIndex(flatIdx)}
                       className={`
-                        w-full flex items-center justify-between gap-2 px-3 py-2.5 text-left text-sm
+                        w-full flex items-center justify-between gap-2 px-3 py-1.5 text-left text-sm
                         transition-colors
-                        ${isSelected ? 'bg-white/12 text-white' : 'text-white/90 hover:bg-white/8'}
-                        ${isFocused && !isSelected ? 'bg-white/6' : ''}
+                        ${isSelected ? 'bg-white/[0.12] text-white' : 'text-white/90 hover:bg-white/[0.08]'}
+                        ${isFocused && !isSelected ? 'bg-white/[0.06]' : ''}
                       `}
                     >
                       <span className="font-medium">{opt.label}</span>
@@ -218,12 +220,10 @@ const FeatureSelect: React.FC<FeatureSelectProps> = ({
                     </button>
                   );
                 })}
-                <div className="px-3 py-2 text-xs italic text-white/40">
-                  More coming soon
-                </div>
               </div>
             </div>
           ))}
+          <div className="px-3 pt-1 pb-0.5 text-xs italic text-white/60">More features coming soon</div>
         </div>
       )}
     </div>

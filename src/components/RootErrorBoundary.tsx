@@ -1,4 +1,7 @@
 import React from 'react';
+import { trackError } from '../analytics';
+import { BrandMark } from './MitoSpaceLogo';
+import { RESEARCH_LINKS } from './ResearchLinks';
 
 interface Props {
   children: React.ReactNode;
@@ -22,17 +25,8 @@ class RootErrorBoundary extends React.Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
-    // Surface for debugging + any analytics/monitoring hooks.
     console.error('[RootErrorBoundary] Uncaught error:', error, info?.componentStack);
-    try {
-      // Umami (loaded in index.html) — best-effort custom event, non-blocking.
-      (window as unknown as { umami?: { track?: (e: string, d?: unknown) => void } }).umami?.track?.(
-        'app_error',
-        { message: error?.message?.slice(0, 200) }
-      );
-    } catch {
-      /* ignore */
-    }
+    trackError('render', error);
   }
 
   private handleReload = () => {
@@ -47,16 +41,25 @@ class RootErrorBoundary extends React.Component<Props, State> {
     if (!this.state.hasError) return this.props.children;
 
     return (
-      <div className="h-screen w-screen flex flex-col items-center justify-center bg-black text-white px-6 text-center gap-4">
-        <p className="text-sm font-semibold tracking-[0.2em] uppercase text-white/90">MitoSpace</p>
+      <div className="h-screen w-screen flex flex-col items-center justify-center bg-black text-white px-6 text-center gap-6">
+        <BrandMark />
         <div className="flex flex-col items-center gap-2 max-w-md">
           <h1 className="text-xl font-semibold">Something went wrong</h1>
-          <p className="text-sm text-white/60">
+          <p className="text-sm text-white/65">
             The explorer hit an unexpected error. Reloading usually fixes it. If it keeps
-            happening, please let us know.
+            happening,{' '}
+            <a
+              href={`${RESEARCH_LINKS.github.href}/issues`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline underline-offset-2 hover:text-white"
+            >
+              please report it on GitHub
+            </a>
+            .
           </p>
           {this.state.error?.message && (
-            <p className="mt-1 text-xs font-mono text-white/35 break-words max-w-full">
+            <p className="mt-1 text-xs font-mono text-white/45 break-words max-w-full">
               {this.state.error.message}
             </p>
           )}

@@ -10,9 +10,30 @@ import type { DatasetVersion } from '../types';
 
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:8000';
 
+// Long enough for a cold-starting backend, short enough that an outage surfaces as an error.
+const REQUEST_TIMEOUT_MS = 30_000;
+
+function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  return fetch(url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
 function withVersion(params: URLSearchParams, version?: DatasetVersion): URLSearchParams {
   if (version) params.set('version', version);
   return params;
+}
+
+// Read-only payloads are fetched once per session (the warm-up and the feature switch share them).
+const sessionCache = new Map<string, Promise<unknown>>();
+
+function once<T>(key: string, load: () => Promise<T>): Promise<T> {
+  const hit = sessionCache.get(key) as Promise<T> | undefined;
+  if (hit) return hit;
+  const request = load();
+  sessionCache.set(key, request);
+  request.catch(() => sessionCache.delete(key));
+  return request;
 }
 
 export interface ProjectResponse {
@@ -27,6 +48,11 @@ export interface ProjectResponse {
 export interface FeatureStats {
   min: number;
   max: number;
+  /** Percentiles of measured cells that `min` / `max` sit at. */
+  lowPercentile?: number;
+  highPercentile?: number;
+  /** Cells with no measurement for this feature. */
+  missing?: number;
 }
 
 export interface ProjectOptions {
@@ -61,7 +87,7 @@ export async function projectOnAxis(
     body.scaleFactor = options.scaleFactor;
   }
   const url = `${API_BASE}/api/project`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -111,14 +137,16 @@ export async function getAxisTrajectory(
     params.set('scale_factor', String(options.scaleFactor));
   }
   const url = `${API_BASE}/api/axis-trajectory?${params.toString()}`;
-  const res = await fetch(url);
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Axis trajectory failed: ${res.status} ${text}`);
-  }
-  const data = await res.json();
-  const points = Array.isArray(data.points) ? data.points : [];
-  return { points, featureMin: data.featureMin, featureMax: data.featureMax };
+  return once(url, async () => {
+    const res = await fetchWithTimeout(url);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Axis trajectory failed: ${res.status} ${text}`);
+    }
+    const data = await res.json();
+    const points = Array.isArray(data.points) ? data.points : [];
+    return { points, featureMin: data.featureMin, featureMax: data.featureMax };
+  });
 }
 
 export async function getFeatureStats(
@@ -127,9 +155,11 @@ export async function getFeatureStats(
 ): Promise<FeatureStats> {
   const params = withVersion(new URLSearchParams({ feature }), version);
   const url = `${API_BASE}/api/feature-stats?${params.toString()}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Feature stats failed: ${res.status}`);
-  return res.json();
+  return once(url, async () => {
+    const res = await fetchWithTimeout(url);
+    if (!res.ok) throw new Error(`Feature stats failed: ${res.status}`);
+    return res.json();
+  });
 }
 
 export async function getFeatureValues(
@@ -138,36 +168,83 @@ export async function getFeatureValues(
 ): Promise<number[]> {
   // v1 column names have spaces; backend accepts both spaces and underscores.
   const name = featureName.replace(/\s+/g, '_');
-  const params = withVersion(new URLSearchParams(), version);
-  const qs = params.toString();
-  const url = `${API_BASE}/api/features/${encodeURIComponent(name)}${qs ? `?${qs}` : ''}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Feature values failed: ${res.status}`);
-  const data = await res.json();
-  return data.values ?? [];
+  const params = withVersion(new URLSearchParams({ format: 'f32' }), version);
+  const url = `${API_BASE}/api/features/${encodeURIComponent(name)}?${params.toString()}`;
+  return once(url, async () => {
+    const res = await fetchWithTimeout(url);
+    if (!res.ok) throw new Error(`Feature values failed: ${res.status}`);
+    // float32 per cell, NaN = no measurement; older backends ignore `format` and send JSON.
+    if (!(res.headers.get('content-type') ?? '').includes('json')) {
+      return Array.from(new Float32Array(await res.arrayBuffer()));
+    }
+    const data = await res.json();
+    // Unmeasured cells arrive as null; NaN keeps them out of every numeric path.
+    return ((data.values ?? []) as Array<number | null>).map((v) => v ?? NaN);
+  });
 }
 
-export async function healthCheck(version?: DatasetVersion): Promise<{
+export interface ApiHealth {
+  status?: string;
   version?: string;
-  available_versions?: string[];
-  embeddings_loaded?: boolean;
-  umap_points_loaded: boolean;
-  umap_reducer_loaded?: boolean;
-  embedding_count: number;
-  features: string[];
-  axes: string[];
-  chat_available?: boolean;
-}> {
+  point_count?: number;
+  /** Older backends report the point count under this name. */
+  embedding_count?: number;
+  /** Hash of the API's per-row condition order (see `rowOrderHash`). */
+  row_order?: string | null;
+}
+
+export async function healthCheck(version?: DatasetVersion): Promise<ApiHealth> {
   const params = withVersion(new URLSearchParams(), version);
   const qs = params.toString();
-  const res = await fetch(`${API_BASE}/api/health${qs ? `?${qs}` : ''}`);
+  const res = await fetchWithTimeout(`${API_BASE}/api/health${qs ? `?${qs}` : ''}`);
   if (!res.ok) throw new Error(`Health check failed: ${res.status}`);
   return res.json();
 }
 
+/** What the visit log knows about this visitor's network (never the IP address). */
+export interface VisitInfo {
+  org?: string;
+  org_type?: string;
+  org_domain?: string;
+  /** 'bot' | 'vpn' | 'datacenter' when the visit is probably not a person on their own network. */
+  traffic?: string;
+}
+
+const VISIT_URL = `${API_BASE}/api/visit`;
+// text/plain keeps the cross-origin POST a simple request: no CORS preflight, and sendBeacon allows it.
+const VISIT_HEADERS = { 'Content-Type': 'text/plain' };
+
+export async function postVisit(payload: object): Promise<VisitInfo | null> {
+  try {
+    const res = await fetch(VISIT_URL, {
+      method: 'POST',
+      headers: VISIT_HEADERS,
+      body: JSON.stringify(payload),
+      keepalive: true,
+    });
+    return res.ok ? ((await res.json()) as VisitInfo) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** For the page being hidden or closed: the request outlives the page. */
+export function beaconVisit(payload: object): void {
+  const body = JSON.stringify(payload);
+  try {
+    if (navigator.sendBeacon?.(VISIT_URL, new Blob([body], { type: 'text/plain' }))) return;
+  } catch {
+    // Fall back to a keepalive fetch below.
+  }
+  void fetch(VISIT_URL, { method: 'POST', headers: VISIT_HEADERS, body, keepalive: true }).catch(() => {});
+}
+
+/** Structured payload behind a chat answer (tool results, stats). */
+export type ChatData = Record<string, unknown> & { query_type?: string };
+
 export interface ChatResponse {
   answer: string;
-  data?: any;
+  data?: ChatData;
   query_type?: string;
   request_id?: string;
   /** True iff every number in `answer` is verified against backend stats. */
